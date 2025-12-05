@@ -2,8 +2,8 @@
 name = "libbitsub"
 version = "0.0.1"
 edition = "2024"
-authors = ["Akari Contributors"]
-license = "MIT"
+authors = ["altqx"]
+license = "GPL-3.0"
 description = "High-performance WASM renderer for graphical subtitles (PGS and VobSub)"
 repository = "https://github.com/altqx/akari"
 keywords = ["pgs", "vobsub", "subtitle", "wasm", "rendering"]

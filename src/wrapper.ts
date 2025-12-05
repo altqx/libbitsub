@@ -159,8 +159,20 @@ export class PgsParser {
             if (!comp) continue;
 
             const rgba = comp.getRgba();
+            const expectedLength = comp.width * comp.height * 4;
+            
+            // Validate buffer size
+            if (rgba.length !== expectedLength || comp.width === 0 || comp.height === 0) {
+                console.warn(`Invalid composition data: expected ${expectedLength} bytes, got ${rgba.length}, size=${comp.width}x${comp.height}`);
+                continue;
+            }
+
+            // Copy to new Uint8ClampedArray to ensure proper buffer ownership
+            const clampedData = new Uint8ClampedArray(rgba.length);
+            clampedData.set(rgba);
+            
             const imageData = new ImageData(
-                new Uint8ClampedArray(rgba),
+                clampedData,
                 comp.width,
                 comp.height
             );
@@ -275,8 +287,24 @@ export class VobSubParserLowLevel {
      */
     private convertFrame(frame: VobSubFrame): SubtitleData {
         const rgba = frame.getRgba();
+        const expectedLength = frame.width * frame.height * 4;
+        
+        // Validate buffer size
+        if (rgba.length !== expectedLength || frame.width === 0 || frame.height === 0) {
+            console.warn(`Invalid VobSub frame: expected ${expectedLength} bytes, got ${rgba.length}, size=${frame.width}x${frame.height}`);
+            return {
+                width: frame.screenWidth,
+                height: frame.screenHeight,
+                compositionData: [],
+            };
+        }
+        
+        // Copy to new Uint8ClampedArray to ensure proper buffer ownership
+        const clampedData = new Uint8ClampedArray(rgba.length);
+        clampedData.set(rgba);
+        
         const imageData = new ImageData(
-            new Uint8ClampedArray(rgba),
+            clampedData,
             frame.width,
             frame.height
         );
@@ -415,10 +443,15 @@ export class UnifiedSubtitleParser {
             const rgba = result.getCompositionRgba(i);
             const width = result.getCompositionWidth(i);
             const height = result.getCompositionHeight(i);
+            const expectedLength = width * height * 4;
 
-            if (width > 0 && height > 0) {
+            if (width > 0 && height > 0 && rgba.length === expectedLength) {
+                // Copy to new Uint8ClampedArray to ensure proper buffer ownership
+                const clampedData = new Uint8ClampedArray(rgba.length);
+                clampedData.set(rgba);
+                
                 const imageData = new ImageData(
-                    new Uint8ClampedArray(rgba),
+                    clampedData,
                     width,
                     height
                 );
@@ -428,6 +461,8 @@ export class UnifiedSubtitleParser {
                     x: result.getCompositionX(i),
                     y: result.getCompositionY(i),
                 });
+            } else if (width > 0 && height > 0) {
+                console.warn(`Invalid unified result: expected ${expectedLength} bytes, got ${rgba.length}, size=${width}x${height}`);
             }
         }
 
@@ -522,9 +557,17 @@ abstract class BaseVideoSubtitleRenderer {
         this.canvas.style.pointerEvents = 'none';
         this.canvas.style.width = '100%';
         this.canvas.style.height = '100%';
+        this.canvas.style.zIndex = '10';  // Ensure canvas is above video
         
-        // Insert canvas after video
-        this.video.parentElement?.appendChild(this.canvas);
+        // Insert canvas after video - ensure parent has relative positioning
+        const parent = this.video.parentElement;
+        if (parent) {
+            const computedStyle = window.getComputedStyle(parent);
+            if (computedStyle.position === 'static') {
+                parent.style.position = 'relative';
+            }
+            parent.appendChild(this.canvas);
+        }
         
         this.ctx = this.canvas.getContext('2d');
         this.updateCanvasSize();
@@ -532,6 +575,14 @@ abstract class BaseVideoSubtitleRenderer {
         // Handle resize
         this.resizeObserver = new ResizeObserver(() => this.updateCanvasSize());
         this.resizeObserver.observe(this.video);
+        
+        // Update size when video metadata loads (in case dimensions weren't available yet)
+        this.video.addEventListener('loadedmetadata', () => this.updateCanvasSize());
+        
+        // Re-render on seek
+        this.video.addEventListener('seeked', () => {
+            this.lastRenderedTime = -1;
+        });
     }
 
     /**
@@ -541,8 +592,12 @@ abstract class BaseVideoSubtitleRenderer {
         if (!this.canvas) return;
         
         const rect = this.video.getBoundingClientRect();
-        this.canvas.width = rect.width * window.devicePixelRatio;
-        this.canvas.height = rect.height * window.devicePixelRatio;
+        // Use video dimensions if available, fallback to intrinsic size
+        const width = rect.width > 0 ? rect.width : (this.video.videoWidth || 1920);
+        const height = rect.height > 0 ? rect.height : (this.video.videoHeight || 1080);
+        
+        this.canvas.width = width * window.devicePixelRatio;
+        this.canvas.height = height * window.devicePixelRatio;
         
         // Clear and re-render on resize
         this.lastRenderedTime = -1;
@@ -565,11 +620,12 @@ abstract class BaseVideoSubtitleRenderer {
         const render = () => {
             if (this.disposed) return;
             
-            if (this.isLoaded && !this.video.paused) {
+            if (this.isLoaded) {
                 const currentTime = this.video.currentTime;
                 
-                // Only re-render if time has changed significantly
-                if (Math.abs(currentTime - this.lastRenderedTime) > 0.01) {
+                // Re-render if time has changed significantly OR if we haven't rendered yet
+                // Also render when paused so subtitles are visible
+                if (Math.abs(currentTime - this.lastRenderedTime) > 0.01 || this.lastRenderedTime < 0) {
                     this.renderFrame(currentTime);
                     this.lastRenderedTime = currentTime;
                 }
@@ -597,7 +653,17 @@ abstract class BaseVideoSubtitleRenderer {
         const scaleX = this.canvas.width / data.width;
         const scaleY = this.canvas.height / data.height;
         
-        // Render each composition
+        // Log first render for debugging
+        if (this.lastRenderedTime < 0) {
+            console.log(`[libbitsub] First render at ${time}s:`, {
+                canvasSize: { w: this.canvas.width, h: this.canvas.height },
+                subtitleSize: { w: data.width, h: data.height },
+                compositionCount: data.compositionData.length,
+                scale: { x: scaleX, y: scaleY }
+            });
+        }
+        
+        // Render each composition synchronously using temp canvas
         for (const comp of data.compositionData) {
             const destX = comp.x * scaleX;
             const destY = comp.y * scaleY;
@@ -608,7 +674,9 @@ abstract class BaseVideoSubtitleRenderer {
             const tempCanvas = document.createElement('canvas');
             tempCanvas.width = comp.pixelData.width;
             tempCanvas.height = comp.pixelData.height;
-            const tempCtx = tempCanvas.getContext('2d')!;
+            const tempCtx = tempCanvas.getContext('2d');
+            if (!tempCtx) continue;
+            
             tempCtx.putImageData(comp.pixelData, 0, 0);
             
             // Draw scaled to main canvas
@@ -671,8 +739,9 @@ export class PgsRenderer extends BaseVideoSubtitleRenderer {
                 throw new Error(`Failed to fetch subtitle: ${response.status}`);
             }
             const data = new Uint8Array(await response.arrayBuffer());
-            this.pgsParser.load(data);
+            const count = this.pgsParser.load(data);
             this.isLoaded = true;
+            console.log(`[libbitsub] PGS loaded: ${count} display sets from ${data.byteLength} bytes`);
         } catch (error) {
             console.error('Failed to load PGS subtitles:', error);
         }

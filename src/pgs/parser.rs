@@ -136,8 +136,8 @@ impl PgsParser {
             // Get assembled object
             let obj = context.objects.get(&comp_obj.object_id)?;
             
-            // Find window
-            let window = context.windows.get(&comp_obj.window_id)?;
+            // Find window (used for validation, not positioning)
+            let _window = context.windows.get(&comp_obj.window_id)?;
 
             // Decode or get cached indexed pixels
             let cache_key = (obj.id, obj.version);
@@ -167,9 +167,10 @@ impl PgsParser {
                 .flat_map(|&c| c.to_le_bytes())
                 .collect();
 
+            // comp_obj.x and comp_obj.y are absolute screen positions per PGS spec
             compositions.push(SubtitleComposition {
-                x: window.x + comp_obj.x,
-                y: window.y + comp_obj.y,
+                x: comp_obj.x,
+                y: comp_obj.y,
                 width: decoded.width,
                 height: decoded.height,
                 rgba: rgba_bytes,

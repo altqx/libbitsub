@@ -34,6 +34,7 @@ impl PaletteDefinitionSegment {
             let a = reader.read_u8()?;
 
             // Convert YCbCr to RGBA and store at entry index
+            // Note: PGS stores as Y, Cr, Cb but ycbcr_to_rgba expects y, cb, cr
             if entry_id < 256 {
                 rgba[entry_id] = ycbcr_to_rgba(y, cb, cr, a);
             }
