@@ -531,10 +531,15 @@ export class VobSubRenderer extends BaseVideoSubtitleRenderer {
   private onLoading?: () => void
   private onLoaded?: () => void
   private onError?: (error: Error) => void
+  
+  // Async index lookup state
+  private cachedIndex: number = -1
+  private cachedIndexTime: number = -1
+  private pendingIndexLookup: Promise<number> | null = null
 
   constructor(options: VideoVobSubOptions) {
     super(options)
-    this.idxUrl = options.idxUrl || options.subUrl.replace(/\.sub$/i, '.idx')
+    this.idxUrl = options.idxUrl || options.subUrl.replace(/\\.sub$/i, '.idx')
     this.onLoading = options.onLoading
     this.onLoaded = options.onLoaded
     this.onError = options.onError
@@ -636,7 +641,32 @@ export class VobSubRenderer extends BaseVideoSubtitleRenderer {
 
   protected findCurrentIndex(time: number): number {
     if (this.state.useWorker && this.state.workerReady) {
-      return binarySearchTimestamp(this.state.timestamps, time * 1000)
+      const timeMs = time * 1000
+      
+      // If we have a cached index for approximately this time, use it
+      // (within 100ms tolerance to avoid constant lookups)
+      if (this.cachedIndexTime >= 0 && Math.abs(timeMs - this.cachedIndexTime) < 100) {
+        return this.cachedIndex
+      }
+      
+      // Start async lookup if not already pending
+      if (!this.pendingIndexLookup) {
+        this.pendingIndexLookup = sendToWorker({ type: 'findVobSubIndex', timeMs }).then((response) => {
+          if (response.type === 'vobSubIndex') {
+            this.cachedIndex = response.index
+            this.cachedIndexTime = timeMs
+            // Force re-render if index changed
+            if (this.lastRenderedIndex !== response.index) {
+              this.lastRenderedIndex = -1
+            }
+          }
+          this.pendingIndexLookup = null
+          return this.cachedIndex
+        })
+      }
+      
+      // Return cached index while waiting (or -1 if no cache yet)
+      return this.cachedIndex
     }
     return this.vobsubParser?.findIndexAtTimestamp(time) ?? -1
   }
@@ -677,6 +707,10 @@ export class VobSubRenderer extends BaseVideoSubtitleRenderer {
   protected onSeek(): void {
     this.state.frameCache.clear()
     this.state.pendingRenders.clear()
+    // Clear cached index lookup on seek
+    this.cachedIndex = -1
+    this.cachedIndexTime = -1
+    this.pendingIndexLookup = null
     if (this.state.useWorker && this.state.workerReady) {
       sendToWorker({ type: 'clearVobSubCache' }).catch(() => {})
     }

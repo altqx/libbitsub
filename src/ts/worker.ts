@@ -252,6 +252,12 @@ self.onmessage = async function(event) {
                 postResponse({ type: 'vobSubFrame', frame: frameData }, frameData.compositions.map(c => c.rgba.buffer), _id);
                 break;
             }
+            case 'findPgsIndex':
+                postResponse({ type: 'pgsIndex', index: pgsParser?.findIndexAtTimestamp(request.timeMs) ?? -1 }, [], _id);
+                break;
+            case 'findVobSubIndex':
+                postResponse({ type: 'vobSubIndex', index: vobSubParser?.findIndexAtTimestamp(request.timeMs) ?? -1 }, [], _id);
+                break;
             case 'getPgsTimestamps':
                 postResponse({ type: 'pgsTimestamps', timestamps: pgsParser?.getTimestamps() ?? new Float64Array(0) }, [], _id);
                 break;

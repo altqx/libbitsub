@@ -97,6 +97,8 @@ export type WorkerRequest =
   | { type: 'loadVobSubOnly'; subData: ArrayBuffer }
   | { type: 'renderPgsAtIndex'; index: number }
   | { type: 'renderVobSubAtIndex'; index: number }
+  | { type: 'findPgsIndex'; timeMs: number }
+  | { type: 'findVobSubIndex'; timeMs: number }
   | { type: 'getPgsTimestamps' }
   | { type: 'getVobSubTimestamps' }
   | { type: 'clearPgsCache' }
@@ -110,6 +112,8 @@ export type WorkerResponse =
   | { type: 'vobSubLoaded'; count: number }
   | { type: 'pgsFrame'; frame: FrameData | null }
   | { type: 'vobSubFrame'; frame: FrameData | null }
+  | { type: 'pgsIndex'; index: number }
+  | { type: 'vobSubIndex'; index: number }
   | { type: 'pgsTimestamps'; timestamps: Float64Array }
   | { type: 'vobSubTimestamps'; timestamps: Float64Array }
   | { type: 'cleared' }
