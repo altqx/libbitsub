@@ -22,7 +22,7 @@ export { initWasm, isWasmInitialized } from './ts/wasm'
 export { PgsParser, VobSubParserLowLevel, UnifiedSubtitleParser } from './ts/parsers'
 
 // Re-export renderers
-export { PgsRenderer, VobSubRenderer } from './ts/renderers'
+export { PgsRenderer, VobSubRenderer, type SubtitleRendererStats } from './ts/renderers'
 
 // =============================================================================
 // Legacy Aliases (for backward compatibility)

@@ -15,6 +15,34 @@ const DEFAULT_DISPLAY_SETTINGS: SubtitleDisplaySettings = {
   verticalOffset: 0
 }
 
+/** Performance statistics for subtitle renderer */
+export interface SubtitleRendererStats {
+  /** Total frames rendered since initialization */
+  framesRendered: number
+  /** Frames dropped due to slow rendering */
+  framesDropped: number
+  /** Average render time in milliseconds */
+  avgRenderTime: number
+  /** Maximum render time in milliseconds */
+  maxRenderTime: number
+  /** Minimum render time in milliseconds */
+  minRenderTime: number
+  /** Last render time in milliseconds */
+  lastRenderTime: number
+  /** Current FPS (renders per second) */
+  renderFps: number
+  /** Whether rendering is using web worker */
+  usingWorker: boolean
+  /** Number of cached frames */
+  cachedFrames: number
+  /** Number of pending renders */
+  pendingRenders: number
+  /** Total subtitle entries/display sets */
+  totalEntries: number
+  /** Current subtitle index being displayed */
+  currentIndex: number
+}
+
 /**
  * Base class for video-integrated subtitle renderers.
  * Handles canvas overlay, video sync, and subtitle fetching.
@@ -37,6 +65,16 @@ abstract class BaseVideoSubtitleRenderer {
   /** Display settings for subtitle rendering */
   protected displaySettings: SubtitleDisplaySettings = { ...DEFAULT_DISPLAY_SETTINGS }
 
+  // Performance tracking
+  protected perfStats = {
+    framesRendered: 0,
+    framesDropped: 0,
+    renderTimes: [] as number[],
+    lastRenderTime: 0,
+    fpsTimestamps: [] as number[],
+    lastFrameTime: 0
+  }
+
   constructor(options: VideoSubtitleOptions) {
     this.video = options.video
     this.subUrl = options.subUrl
@@ -45,6 +83,34 @@ abstract class BaseVideoSubtitleRenderer {
   /** Get current display settings */
   getDisplaySettings(): SubtitleDisplaySettings {
     return { ...this.displaySettings }
+  }
+
+  /** Get performance statistics */
+  abstract getStats(): SubtitleRendererStats
+
+  /** Get base stats common to all renderers */
+  protected getBaseStats(): Omit<SubtitleRendererStats, 'usingWorker' | 'cachedFrames' | 'pendingRenders' | 'totalEntries'> {
+    const now = performance.now()
+    // Clean up old FPS timestamps (keep last second)
+    this.perfStats.fpsTimestamps = this.perfStats.fpsTimestamps.filter(t => now - t < 1000)
+    
+    const renderTimes = this.perfStats.renderTimes
+    const avgRenderTime = renderTimes.length > 0 
+      ? renderTimes.reduce((a, b) => a + b, 0) / renderTimes.length 
+      : 0
+    const maxRenderTime = renderTimes.length > 0 ? Math.max(...renderTimes) : 0
+    const minRenderTime = renderTimes.length > 0 ? Math.min(...renderTimes) : 0
+
+    return {
+      framesRendered: this.perfStats.framesRendered,
+      framesDropped: this.perfStats.framesDropped,
+      avgRenderTime: Math.round(avgRenderTime * 100) / 100,
+      maxRenderTime: Math.round(maxRenderTime * 100) / 100,
+      minRenderTime: Math.round(minRenderTime * 100) / 100,
+      lastRenderTime: Math.round(this.perfStats.lastRenderTime * 100) / 100,
+      renderFps: this.perfStats.fpsTimestamps.length,
+      currentIndex: this.lastRenderedIndex
+    }
   }
 
   /** Set display settings and force re-render */
@@ -158,7 +224,27 @@ abstract class BaseVideoSubtitleRenderer {
 
         // Only re-render if index changed
         if (currentIndex !== this.lastRenderedIndex) {
+          const startTime = performance.now()
           this.renderFrame(currentTime, currentIndex)
+          const endTime = performance.now()
+          
+          // Track performance
+          const renderTime = endTime - startTime
+          this.perfStats.lastRenderTime = renderTime
+          this.perfStats.renderTimes.push(renderTime)
+          // Keep only last 60 samples for rolling average
+          if (this.perfStats.renderTimes.length > 60) {
+            this.perfStats.renderTimes.shift()
+          }
+          this.perfStats.framesRendered++
+          this.perfStats.fpsTimestamps.push(endTime)
+          
+          // Check for frame drop (if render took longer than frame budget ~16.67ms for 60fps)
+          const frameBudget = 16.67
+          if (renderTime > frameBudget) {
+            this.perfStats.framesDropped++
+          }
+          
           this.lastRenderedIndex = currentIndex
           this.lastRenderedTime = currentTime
         }
@@ -397,6 +483,18 @@ export class PgsRenderer extends BaseVideoSubtitleRenderer {
     this.pgsParser?.clearCache()
   }
 
+  /** Get performance statistics for PGS renderer */
+  getStats(): SubtitleRendererStats {
+    const baseStats = this.getBaseStats()
+    return {
+      ...baseStats,
+      usingWorker: this.state.useWorker && this.state.workerReady,
+      cachedFrames: this.state.frameCache.size,
+      pendingRenders: this.state.pendingRenders.size,
+      totalEntries: this.state.timestamps.length || (this.pgsParser?.getTimestamps().length ?? 0)
+    }
+  }
+
   dispose(): void {
     super.dispose()
     this.state.frameCache.clear()
@@ -566,6 +664,18 @@ export class VobSubRenderer extends BaseVideoSubtitleRenderer {
       sendToWorker({ type: 'clearVobSubCache' }).catch(() => {})
     }
     this.vobsubParser?.clearCache()
+  }
+
+  /** Get performance statistics for VobSub renderer */
+  getStats(): SubtitleRendererStats {
+    const baseStats = this.getBaseStats()
+    return {
+      ...baseStats,
+      usingWorker: this.state.useWorker && this.state.workerReady,
+      cachedFrames: this.state.frameCache.size,
+      pendingRenders: this.state.pendingRenders.size,
+      totalEntries: this.state.timestamps.length || (this.vobsubParser?.getTimestamps().length ?? 0)
+    }
   }
 
   dispose(): void {
