@@ -81,7 +81,11 @@ import { PgsRenderer } from 'libbitsub';
 const renderer = new PgsRenderer({
     video: videoElement,
     subUrl: '/subtitles/movie.sup',
-    workerUrl: '/libbitsub.worker.js' // Optional, kept for API compatibility
+    workerUrl: '/libbitsub.worker.js', // Optional, kept for API compatibility
+    // Lifecycle callbacks (optional)
+    onLoading: () => console.log('Loading subtitles...'),
+    onLoaded: () => console.log('Subtitles loaded!'),
+    onError: (error) => console.error('Failed to load:', error)
 });
 
 // The renderer automatically:
@@ -104,7 +108,14 @@ const renderer = new VobSubRenderer({
     video: videoElement,
     subUrl: '/subtitles/movie.sub',
     idxUrl: '/subtitles/movie.idx', // Optional, defaults to .sub path with .idx extension
-    workerUrl: '/libbitsub.worker.js' // Optional
+    workerUrl: '/libbitsub.worker.js', // Optional
+    // Lifecycle callbacks (optional)
+    onLoading: () => setIsLoading(true),
+    onLoaded: () => setIsLoading(false),
+    onError: (error) => {
+        setIsLoading(false);
+        console.error('Subtitle error:', error);
+    }
 });
 
 // When done:
@@ -250,6 +261,9 @@ interface VideoSubtitleOptions {
     video: HTMLVideoElement;  // Video element to sync with
     subUrl: string;           // URL to subtitle file
     workerUrl?: string;       // Worker URL (for API compatibility)
+    onLoading?: () => void;   // Called when subtitle loading starts
+    onLoaded?: () => void;    // Called when subtitle loading completes
+    onError?: (error: Error) => void;  // Called when subtitle loading fails
 }
 ```
 
