@@ -29,7 +29,7 @@ impl ObjectDefinitionSegment {
         let sequence_flag = reader.read_u8()?;
 
         let is_first = (sequence_flag & 0x80) != 0;
-        
+
         let (data_length, width, height, data) = if is_first {
             // First segment includes dimensions
             let data_length = reader.read_u24()?;
@@ -102,7 +102,7 @@ impl AssembledObject {
         // Combine all data segments
         let total_size: usize = segments.iter().map(|s| s.data.len()).sum();
         let mut data = Vec::with_capacity(total_size);
-        
+
         for segment in segments {
             data.extend_from_slice(&segment.data);
         }

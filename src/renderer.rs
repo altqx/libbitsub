@@ -2,8 +2,8 @@
 //!
 //! This module provides a unified interface for subtitle rendering.
 
-use wasm_bindgen::prelude::*;
 use js_sys::Uint8Array;
+use wasm_bindgen::prelude::*;
 
 use crate::pgs::PgsParser;
 use crate::vobsub::VobSubParser;
@@ -42,13 +42,13 @@ impl SubtitleRenderer {
     #[wasm_bindgen(js_name = loadPgs)]
     pub fn load_pgs(&mut self, data: &[u8]) -> usize {
         self.dispose();
-        
+
         let mut parser = PgsParser::new();
         let count = parser.parse(data);
-        
+
         self.pgs_parser = Some(parser);
         self.format = Some(SubtitleFormat::Pgs);
-        
+
         count
     }
 
@@ -56,10 +56,10 @@ impl SubtitleRenderer {
     #[wasm_bindgen(js_name = loadVobSub)]
     pub fn load_vobsub(&mut self, idx_content: &str, sub_data: &[u8]) {
         self.dispose();
-        
+
         let mut parser = VobSubParser::new();
         parser.load_from_data(idx_content, sub_data);
-        
+
         self.vobsub_parser = Some(parser);
         self.format = Some(SubtitleFormat::VobSub);
     }
@@ -68,10 +68,10 @@ impl SubtitleRenderer {
     #[wasm_bindgen(js_name = loadVobSubOnly)]
     pub fn load_vobsub_only(&mut self, sub_data: &[u8]) {
         self.dispose();
-        
+
         let mut parser = VobSubParser::new();
         parser.load_from_sub_only(sub_data);
-        
+
         self.vobsub_parser = Some(parser);
         self.format = Some(SubtitleFormat::VobSub);
     }
@@ -96,14 +96,14 @@ impl SubtitleRenderer {
     #[wasm_bindgen(js_name = getTimestamps)]
     pub fn get_timestamps(&self) -> js_sys::Float64Array {
         match self.format {
-            Some(SubtitleFormat::Pgs) => {
-                self.pgs_parser.as_ref()
-                    .map_or_else(|| js_sys::Float64Array::new_with_length(0), |p| p.get_timestamps())
-            }
-            Some(SubtitleFormat::VobSub) => {
-                self.vobsub_parser.as_ref()
-                    .map_or_else(|| js_sys::Float64Array::new_with_length(0), |p| p.get_timestamps())
-            }
+            Some(SubtitleFormat::Pgs) => self.pgs_parser.as_ref().map_or_else(
+                || js_sys::Float64Array::new_with_length(0),
+                |p| p.get_timestamps(),
+            ),
+            Some(SubtitleFormat::VobSub) => self.vobsub_parser.as_ref().map_or_else(
+                || js_sys::Float64Array::new_with_length(0),
+                |p| p.get_timestamps(),
+            ),
             None => js_sys::Float64Array::new_with_length(0),
         }
     }
@@ -112,12 +112,14 @@ impl SubtitleRenderer {
     #[wasm_bindgen(js_name = findIndexAtTimestamp)]
     pub fn find_index_at_timestamp(&mut self, time_ms: f64) -> i32 {
         match self.format {
-            Some(SubtitleFormat::Pgs) => {
-                self.pgs_parser.as_ref().map_or(-1, |p| p.find_index_at_timestamp(time_ms))
-            }
-            Some(SubtitleFormat::VobSub) => {
-                self.vobsub_parser.as_mut().map_or(-1, |p| p.find_index_at_timestamp(time_ms))
-            }
+            Some(SubtitleFormat::Pgs) => self
+                .pgs_parser
+                .as_ref()
+                .map_or(-1, |p| p.find_index_at_timestamp(time_ms)),
+            Some(SubtitleFormat::VobSub) => self
+                .vobsub_parser
+                .as_mut()
+                .map_or(-1, |p| p.find_index_at_timestamp(time_ms)),
             None => -1,
         }
     }
@@ -130,7 +132,7 @@ impl SubtitleRenderer {
             Some(SubtitleFormat::Pgs) => {
                 let parser = self.pgs_parser.as_mut()?;
                 let frame = parser.render_at_index(index)?;
-                
+
                 // Convert to unified format
                 let mut compositions = Vec::new();
                 for i in 0..frame.composition_count() {
@@ -144,7 +146,7 @@ impl SubtitleRenderer {
                         });
                     }
                 }
-                
+
                 Some(RenderResult {
                     screen_width: frame.width(),
                     screen_height: frame.height(),
@@ -154,7 +156,7 @@ impl SubtitleRenderer {
             Some(SubtitleFormat::VobSub) => {
                 let parser = self.vobsub_parser.as_mut()?;
                 let frame = parser.render_at_index(index)?;
-                
+
                 Some(RenderResult {
                     screen_width: frame.screen_width(),
                     screen_height: frame.screen_height(),
@@ -270,8 +272,9 @@ impl RenderResult {
     /// Get composition RGBA data at index.
     #[wasm_bindgen(js_name = getCompositionRgba)]
     pub fn get_composition_rgba(&self, index: usize) -> Uint8Array {
-        self.compositions
-            .get(index)
-            .map_or_else(|| Uint8Array::new_with_length(0), |c| Uint8Array::from(&c.rgba[..]))
+        self.compositions.get(index).map_or_else(
+            || Uint8Array::new_with_length(0),
+            |c| Uint8Array::from(&c.rgba[..]),
+        )
     }
 }

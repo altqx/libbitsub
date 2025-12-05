@@ -5,26 +5,23 @@
 use super::{SubtitlePacket, VobSubPalette};
 
 /// Decode VobSub RLE-encoded bitmap and render to RGBA.
-pub fn decode_vobsub_rle(
-    packet: &SubtitlePacket,
-    palette: &VobSubPalette,
-) -> Vec<u8> {
+pub fn decode_vobsub_rle(packet: &SubtitlePacket, palette: &VobSubPalette) -> Vec<u8> {
     let width = packet.width as usize;
     let height = packet.height as usize;
-    
+
     if width == 0 || height == 0 {
         return Vec::new();
     }
 
     // Allocate RGBA buffer
     let mut rgba = vec![0u8; width * height * 4];
-    
+
     // Build 4-color lookup table with alpha
     let mut colors = [[0u8; 4]; 4];
     for i in 0..4 {
         let palette_color = palette.rgba[packet.color_indices[i] as usize];
         let alpha = ((packet.alpha_values[i] as u32 * 255) / 15) as u8;
-        
+
         // Extract RGBA from packed u32 (little-endian: R, G, B, A)
         let bytes = palette_color.to_le_bytes();
         colors[i] = [bytes[0], bytes[1], bytes[2], alpha];
@@ -41,14 +38,7 @@ pub fn decode_vobsub_rle(
     );
 
     // Decode odd field (lines 1, 3, 5, ...)
-    decode_field(
-        &packet.odd_field_data,
-        &mut rgba,
-        width,
-        height,
-        1,
-        &colors,
-    );
+    decode_field(&packet.odd_field_data, &mut rgba, width, height, 1, &colors);
 
     rgba
 }
@@ -178,7 +168,7 @@ fn read_rle_code(
             *np = 0;
             *bp += 1;
         }
-        
+
         nibble
     };
 

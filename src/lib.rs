@@ -6,9 +6,9 @@
 //! for efficient subtitle decoding and rendering in web browsers.
 
 mod pgs;
-mod vobsub;
-mod utils;
 mod renderer;
+mod utils;
+mod vobsub;
 
 use wasm_bindgen::prelude::*;
 
@@ -27,5 +27,5 @@ pub fn init() {
 
 // Re-export main types
 pub use pgs::*;
-pub use vobsub::*;
 pub use renderer::*;
+pub use vobsub::*;

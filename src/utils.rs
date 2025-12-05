@@ -1,7 +1,7 @@
 //! Utility functions for binary reading and color conversion.
 
-use std::io::{Read, Cursor};
 use byteorder::{BigEndian, ReadBytesExt};
+use std::io::{Cursor, Read};
 
 /// Binary reader wrapper for big-endian data (used in PGS).
 pub struct BigEndianReader<'a> {
@@ -133,7 +133,7 @@ mod tests {
     #[test]
     fn test_binary_search_timestamp() {
         let timestamps = vec![0, 1000, 2000, 3000, 4000];
-        
+
         assert_eq!(binary_search_timestamp(&timestamps, 0), 0);
         assert_eq!(binary_search_timestamp(&timestamps, 500), 0);
         assert_eq!(binary_search_timestamp(&timestamps, 1000), 1);

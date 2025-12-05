@@ -140,14 +140,22 @@ pub fn decode_rle_to_rgba(data: &[u8], palette: &[u32], target: &mut [u32]) -> u
             pos += 1;
             let color_idx = data.get(pos).copied().unwrap_or(0) as usize;
             pos += 1;
-            let color = if color_idx < palette_len { palette[color_idx] } else { 0 };
+            let color = if color_idx < palette_len {
+                palette[color_idx]
+            } else {
+                0
+            };
             ((high << 8) | low, color)
         } else if byte2 & 0x80 != 0 {
             // Short length with color: 0x00 0x8N 0xCC
             let count = (byte2 & 0x3F) as usize;
             let color_idx = data.get(pos).copied().unwrap_or(0) as usize;
             pos += 1;
-            let color = if color_idx < palette_len { palette[color_idx] } else { 0 };
+            let color = if color_idx < palette_len {
+                palette[color_idx]
+            } else {
+                0
+            };
             (count, color)
         } else if byte2 & 0x40 != 0 {
             // Extended length, transparent: 0x00 0x4N 0xNN

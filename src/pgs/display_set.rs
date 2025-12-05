@@ -1,12 +1,8 @@
 //! Display Set parsing and representation.
 
 use super::{
-    PaletteDefinitionSegment,
-    ObjectDefinitionSegment,
-    WindowDefinitionSegment,
-    WindowDefinition,
-    PresentationCompositionSegment,
-    SegmentType,
+    ObjectDefinitionSegment, PaletteDefinitionSegment, PresentationCompositionSegment, SegmentType,
+    WindowDefinition, WindowDefinitionSegment,
 };
 use crate::utils::BigEndianReader;
 
@@ -81,24 +77,30 @@ impl DisplaySet {
 
             match SegmentType::try_from(segment_type) {
                 Ok(SegmentType::PaletteDefinition) => {
-                    if let Some(palette) = PaletteDefinitionSegment::parse(&mut reader, segment_size) {
+                    if let Some(palette) =
+                        PaletteDefinitionSegment::parse(&mut reader, segment_size)
+                    {
                         display_set.palettes.push(palette);
                     }
                 }
                 Ok(SegmentType::ObjectDefinition) => {
-                    if let Some(object) = ObjectDefinitionSegment::parse(&mut reader, segment_size) {
+                    if let Some(object) = ObjectDefinitionSegment::parse(&mut reader, segment_size)
+                    {
                         display_set.objects.push(object);
                     }
                 }
                 Ok(SegmentType::PresentationComposition) => {
-                    if let Some(composition) = PresentationCompositionSegment::parse(&mut reader, segment_size) {
+                    if let Some(composition) =
+                        PresentationCompositionSegment::parse(&mut reader, segment_size)
+                    {
                         display_set.pts = pts;
                         display_set.dts = dts;
                         display_set.composition = Some(composition);
                     }
                 }
                 Ok(SegmentType::WindowDefinition) => {
-                    if let Some(window) = WindowDefinitionSegment::parse(&mut reader, segment_size) {
+                    if let Some(window) = WindowDefinitionSegment::parse(&mut reader, segment_size)
+                    {
                         display_set.windows.push(window);
                     }
                 }

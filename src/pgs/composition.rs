@@ -1,7 +1,7 @@
 //! Presentation Composition Segment parsing.
 
-use crate::utils::BigEndianReader;
 use super::segment::CompositionState;
+use crate::utils::BigEndianReader;
 
 /// Composition object reference within a presentation.
 #[derive(Debug, Clone, Copy, Default)]

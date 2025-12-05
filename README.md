@@ -1,6 +1,8 @@
-# libbitsub
+# libbit(map)sub
 
 High-performance WASM renderer for graphical subtitles (PGS and VobSub), written in Rust.
+
+Started as a fork of Arcus92's [libpgs-js](https://github.com/Arcus92/libpgs-js), this project is re-engineered to maximize performance and extend functionality to VobSub, which was not supported by the original library. It remains fully backward compatible (only for PGS - obliviously). Special thanks to the original project for the inspiration!
 
 ## Features
 
@@ -11,10 +13,21 @@ High-performance WASM renderer for graphical subtitles (PGS and VobSub), written
 - **Caching** for decoded bitmaps to optimize repeated rendering
 - **TypeScript** support with full type definitions
 
+## Showcase
+
+### PGS (Created using Spp2Pgs)
+
+https://gist.github.com/user-attachments/assets/55ac8e11-1964-4fb9-923e-dcac82dc7703
+
+### Vobsub
+
+https://gist.github.com/user-attachments/assets/a89ae9fe-23e4-4bc3-8cad-16a3f0fea665
+
+
 ## Installation
 
 ```bash
-npm install libbitsub
+bun add libbitsub
 ```
 
 ## Prerequisites
@@ -33,13 +46,13 @@ cargo install wasm-pack
 
 ```bash
 # Build WASM module and TypeScript wrapper
-npm run build
+bun run build
 
 # Build WASM only (for development)
-npm run build:wasm
+bun run build:wasm
 
 # Build release version (optimized)
-npm run build:wasm:release
+bun run build:wasm:release
 ```
 
 ## Usage
@@ -263,16 +276,3 @@ interface SubtitleCompositionData {
     y: number;             // Y position
 }
 ```
-
-## Performance
-
-The Rust/WASM implementation provides significant performance improvements over pure JavaScript:
-
-- **RLE Decoding**: 2-5x faster bitmap decoding
-- **Palette Application**: SIMD-optimized color conversion
-- **Memory**: Reduced GC pressure with Rust's ownership model
-- **Caching**: Efficient LRU caches for decoded bitmaps
-
-## License
-
-MIT

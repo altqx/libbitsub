@@ -455,7 +455,6 @@ export class UnifiedSubtitleParser {
             const expectedLength = width * height * 4;
 
             if (width > 0 && height > 0 && rgba.length === expectedLength) {
-                // Copy to new Uint8ClampedArray to ensure proper buffer ownership
                 const clampedData = new Uint8ClampedArray(rgba.length);
                 clampedData.set(rgba);
                 
@@ -838,7 +837,7 @@ export class PgsRenderer extends BaseVideoSubtitleRenderer {
  *     video: videoElement,
  *     subUrl: '/subtitles/movie.sub',
  *     idxUrl: '/subtitles/movie.idx', // Optional
- *     workerUrl: '/libbitsub.worker.js' // Not used in WASM version
+ *     workerUrl: '/libbitsub.js'
  * });
  * 
  * // Later, when done:
@@ -852,7 +851,7 @@ export class VobSubRenderer extends BaseVideoSubtitleRenderer {
     constructor(options: VideoVobSubOptions) {
         super(options);
         this.idxUrl = options.idxUrl || options.subUrl.replace(/\.sub$/i, '.idx');
-        this.startInit();  // Start init after idxUrl is set
+        this.startInit();
     }
 
     protected async loadSubtitles(): Promise<void> {

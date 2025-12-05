@@ -22,14 +22,14 @@ impl PaletteDefinitionSegment {
 
         // Each palette entry is 5 bytes: ID, Y, Cr, Cb, A
         let entry_count = (length - 2) / 5;
-        
+
         // Pre-allocate with default transparent (256 possible entries)
         let mut rgba = vec![0u32; 256];
 
         for _ in 0..entry_count {
             let entry_id = reader.read_u8()? as usize;
             let y = reader.read_u8()?;
-            let cr = reader.read_u8()?;  // PGS stores Cr before Cb
+            let cr = reader.read_u8()?; // PGS stores Cr before Cb
             let cb = reader.read_u8()?;
             let a = reader.read_u8()?;
 

@@ -1,17 +1,12 @@
 //! PGS file parser and subtitle data management.
 
-use wasm_bindgen::prelude::*;
-use js_sys::{Uint8Array, Float64Array};
+use js_sys::{Float64Array, Uint8Array};
 use std::collections::HashMap;
+use wasm_bindgen::prelude::*;
 
 use super::{
-    DisplaySet,
-    PaletteDefinitionSegment,
-    ObjectDefinitionSegment,
-    AssembledObject,
-    WindowDefinition,
-    apply_palette,
-    decode_rle_to_indexed,
+    AssembledObject, DisplaySet, ObjectDefinitionSegment, PaletteDefinitionSegment,
+    WindowDefinition, apply_palette, decode_rle_to_indexed,
 };
 use crate::utils::binary_search_timestamp;
 
@@ -115,13 +110,13 @@ impl PgsParser {
 
         // Find boundary (epoch start or acquisition point) for context building
         let boundary_index = self.find_boundary_index(index);
-        
+
         // Clear cache if we moved to a different epoch/boundary
         if self.last_boundary_index != Some(boundary_index) {
             self.indexed_cache.clear();
             self.last_boundary_index = Some(boundary_index);
         }
-        
+
         // Get current display set
         let ds = &self.display_sets[index];
         let composition = ds.composition.as_ref()?;
@@ -149,7 +144,7 @@ impl PgsParser {
                 Some(o) => o,
                 None => continue, // Skip if object not found (incomplete data)
             };
-            
+
             // Window lookup is optional - don't fail if not found
             let _window = context.windows.get(&comp_obj.window_id);
 
@@ -162,12 +157,15 @@ impl PgsParser {
                 let pixel_count = (obj.width as usize) * (obj.height as usize);
                 let mut indexed = vec![0u8; pixel_count];
                 decode_rle_to_indexed(&obj.data, &mut indexed);
-                
-                self.indexed_cache.insert(cache_key, DecodedBitmap {
-                    indexed,
-                    width: obj.width,
-                    height: obj.height,
-                });
+
+                self.indexed_cache.insert(
+                    cache_key,
+                    DecodedBitmap {
+                        indexed,
+                        width: obj.width,
+                        height: obj.height,
+                    },
+                );
                 self.indexed_cache.get(&cache_key).unwrap()
             };
 
@@ -177,9 +175,7 @@ impl PgsParser {
             apply_palette(&decoded.indexed, &palette.rgba, &mut rgba);
 
             // Convert to bytes for JavaScript
-            let rgba_bytes: Vec<u8> = rgba.iter()
-                .flat_map(|&c| c.to_le_bytes())
-                .collect();
+            let rgba_bytes: Vec<u8> = rgba.iter().flat_map(|&c| c.to_le_bytes()).collect();
 
             // comp_obj.x and comp_obj.y are absolute screen positions per PGS spec
             compositions.push(SubtitleComposition {

@@ -20,9 +20,8 @@ impl Default for VobSubPalette {
                 0xFFFFFFFF, // White
                 0xFF000000, // Black (with alpha)
                 0xFF808080, // Gray
-                0xFF000000, 0xFF000000, 0xFF000000, 0xFF000000,
-                0xFF000000, 0xFF000000, 0xFF000000, 0xFF000000,
-                0xFF000000, 0xFF000000, 0xFF000000, 0xFF000000,
+                0xFF000000, 0xFF000000, 0xFF000000, 0xFF000000, 0xFF000000, 0xFF000000, 0xFF000000,
+                0xFF000000, 0xFF000000, 0xFF000000, 0xFF000000, 0xFF000000,
             ],
         }
     }
@@ -130,7 +129,10 @@ pub fn parse_idx(idx_content: &str) -> IdxParseResult {
         if let Some(rest) = trimmed.strip_prefix("timestamp:") {
             if let Some((time_part, filepos_part)) = rest.split_once(',') {
                 let time_str = time_part.trim();
-                let filepos_str = filepos_part.trim().strip_prefix("filepos:").map(|s| s.trim());
+                let filepos_str = filepos_part
+                    .trim()
+                    .strip_prefix("filepos:")
+                    .map(|s| s.trim());
 
                 if let Some(filepos_hex) = filepos_str {
                     // Parse timestamp HH:MM:SS:mmm
@@ -143,7 +145,7 @@ pub fn parse_idx(idx_content: &str) -> IdxParseResult {
                             parts[3].parse::<u32>(),
                         ) {
                             let timestamp_ms = h * 3600000 + m * 60000 + s * 1000 + ms;
-                            
+
                             // Parse file position (hex)
                             if let Ok(file_position) = u64::from_str_radix(filepos_hex, 16) {
                                 result.timestamps.push(VobSubTimestamp {
@@ -175,9 +177,9 @@ id: en, index: 0
 timestamp: 00:00:01:000, filepos: 00000000
 timestamp: 00:00:05:500, filepos: 00001000
 "#;
-        
+
         let result = parse_idx(idx);
-        
+
         assert_eq!(result.metadata.width, 720);
         assert_eq!(result.metadata.height, 480);
         assert_eq!(result.metadata.language, Some("en".to_string()));

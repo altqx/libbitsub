@@ -1,17 +1,12 @@
 //! VobSub parser exposed to JavaScript via WASM.
 
-use wasm_bindgen::prelude::*;
-use js_sys::{Uint8Array, Float64Array};
+use js_sys::{Float64Array, Uint8Array};
 use std::collections::HashMap;
+use wasm_bindgen::prelude::*;
 
 use super::{
-    parse_idx,
+    IdxParseResult, SubtitlePacket, VobSubPalette, VobSubTimestamp, decode_vobsub_rle, parse_idx,
     parse_subtitle_packet,
-    decode_vobsub_rle,
-    IdxParseResult,
-    VobSubPalette,
-    VobSubTimestamp,
-    SubtitlePacket,
 };
 use crate::utils::binary_search_timestamp;
 
@@ -45,7 +40,7 @@ impl VobSubParser {
     #[wasm_bindgen(js_name = loadFromData)]
     pub fn load_from_data(&mut self, idx_content: &str, sub_data: &[u8]) {
         self.dispose();
-        
+
         // Parse IDX
         let idx = parse_idx(idx_content);
         self.timestamps_ms = idx.timestamps.iter().map(|t| t.timestamp_ms).collect();
@@ -57,20 +52,20 @@ impl VobSubParser {
     #[wasm_bindgen(js_name = loadFromSubOnly)]
     pub fn load_from_sub_only(&mut self, sub_data: &[u8]) {
         self.dispose();
-        
+
         // Default palette
         let palette = VobSubPalette::default();
-        
+
         // Scan for packets
         let mut timestamps: Vec<VobSubTimestamp> = Vec::new();
         let mut offset = 0;
-        
+
         while offset < sub_data.len().saturating_sub(4) {
             // Look for MPEG-2 PS pack start code
-            if sub_data[offset] == 0x00 
-                && sub_data[offset + 1] == 0x00 
-                && sub_data[offset + 2] == 0x01 
-                && sub_data[offset + 3] == 0xBA 
+            if sub_data[offset] == 0x00
+                && sub_data[offset + 1] == 0x00
+                && sub_data[offset + 2] == 0x01
+                && sub_data[offset + 3] == 0xBA
             {
                 if let Some((packet, _)) = parse_subtitle_packet(sub_data, offset, &palette) {
                     if packet.width > 0 && packet.height > 0 {
@@ -87,7 +82,7 @@ impl VobSubParser {
         // Sort and store
         timestamps.sort_by_key(|t| t.timestamp_ms);
         self.timestamps_ms = timestamps.iter().map(|t| t.timestamp_ms).collect();
-        
+
         self.idx_data = Some(IdxParseResult {
             palette,
             timestamps,
@@ -128,30 +123,30 @@ impl VobSubParser {
         if self.timestamps_ms.is_empty() {
             return -1;
         }
-        
+
         let time_ms_u32 = time_ms as u32;
         let index = binary_search_timestamp(&self.timestamps_ms, time_ms_u32);
-        
+
         // Now check if we're still within the duration of this subtitle
         // We need to get the packet to check its duration
         if let Some(packet) = self.get_or_parse_packet(index) {
             let start_time = packet.timestamp_ms;
             let end_time = start_time.saturating_add(packet.duration_ms);
-            
+
             if time_ms_u32 >= start_time && time_ms_u32 < end_time {
                 return index as i32;
             }
         }
-        
+
         // Current time is past the subtitle's duration, don't display anything
         -1
     }
-    
+
     /// Get a packet from cache or parse it.
     fn get_or_parse_packet(&mut self, index: usize) -> Option<SubtitlePacket> {
         let idx_data = self.idx_data.as_ref()?;
         let sub_data = self.sub_data.as_ref()?;
-        
+
         if index >= idx_data.timestamps.len() {
             return None;
         }
@@ -163,8 +158,12 @@ impl VobSubParser {
 
         // Parse packet at file position
         let timestamp = &idx_data.timestamps[index];
-        let packet = parse_subtitle_packet(sub_data, timestamp.file_position as usize, &idx_data.palette)
-            .map(|(p, _)| p);
+        let packet = parse_subtitle_packet(
+            sub_data,
+            timestamp.file_position as usize,
+            &idx_data.palette,
+        )
+        .map(|(p, _)| p);
 
         // Cache result
         self.packet_cache.insert(index, packet.clone());
@@ -177,7 +176,7 @@ impl VobSubParser {
     pub fn render_at_index(&mut self, index: usize) -> Option<VobSubFrame> {
         let packet = self.get_or_parse_packet(index)?;
         let idx_data = self.idx_data.as_ref()?;
-        
+
         Some(self.render_packet(&packet, &idx_data.palette, &idx_data.metadata))
     }
 

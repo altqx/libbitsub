@@ -37,10 +37,10 @@ pub fn parse_subtitle_packet(
 ) -> Option<(SubtitlePacket, usize)> {
     let mut offset = start_offset;
     let data_len = data.len();
-    
+
     // Safety: limit how far we scan for a single packet (256KB should be more than enough)
     let max_scan = (start_offset + 262144).min(data_len);
-    
+
     let mut pts: u32 = 0;
     let mut data_chunks: Vec<Vec<u8>> = Vec::new();
     let mut expected_size: usize = 0;
@@ -55,11 +55,11 @@ pub fn parse_subtitle_packet(
         }
 
         let stream_id = data[offset + 3];
-        
+
         // Pack header (0xBA)
         if stream_id == 0xBA {
             offset += 4;
-            
+
             // Check MPEG-1 or MPEG-2 pack header
             if offset < data_len && (data[offset] & 0xC0) == 0x40 {
                 // MPEG-2: pack header + stuffing
@@ -78,14 +78,14 @@ pub fn parse_subtitle_packet(
         // Private Stream 1 (0xBD) - contains subtitle data
         if stream_id == 0xBD {
             offset += 4;
-            
+
             if offset + 2 > data_len {
                 break;
             }
-            
+
             let pes_length = ((data[offset] as usize) << 8) | (data[offset + 1] as usize);
             offset += 2;
-            
+
             if offset + pes_length > data_len {
                 break;
             }
@@ -107,24 +107,24 @@ pub fn parse_subtitle_packet(
 
             // Calculate payload length
             let payload_length = pes_length.saturating_sub(3 + header_data_length + 1);
-            
+
             if payload_length > 0 && offset + payload_length <= data_len {
                 let payload = data[offset..offset + payload_length].to_vec();
-                
+
                 // First packet - read expected subtitle size
                 if expected_size == 0 && payload.len() >= 2 {
                     expected_size = ((payload[0] as usize) << 8) | (payload[1] as usize);
                 }
-                
+
                 data_chunks.push(payload);
                 collected_size += payload_length;
                 offset += payload_length;
-                
+
                 // Check if we've collected enough data
                 if expected_size > 0 && collected_size >= expected_size {
                     break;
                 }
-                
+
                 continue;
             }
         }
@@ -181,14 +181,14 @@ fn extract_pts(data: &[u8], offset: usize) -> u32 {
     if offset + 5 > data.len() {
         return 0;
     }
-    
+
     let pts32_30 = ((data[offset] >> 1) & 0x07) as u64;
     let pts29_15 = (((data[offset + 1] as u64) << 7) | ((data[offset + 2] >> 1) as u64)) as u64;
     let pts14_0 = (((data[offset + 3] as u64) << 7) | ((data[offset + 4] >> 1) as u64)) as u64;
-    
+
     // Combine into 33-bit value
     let pts = (pts32_30 << 30) | (pts29_15 << 15) | pts14_0;
-    
+
     // Convert from 90kHz clock to milliseconds
     (pts / 90) as u32
 }
@@ -204,7 +204,7 @@ fn parse_subtitle_data(data: &[u8], pts: u32) -> Option<SubtitlePacket> {
 
     // First 2 bytes: total subtitle packet size
     // let _packet_size = ((data[0] as usize) << 8) | (data[1] as usize);
-    
+
     // Next 2 bytes: offset to first control sequence (DCSQ offset)
     let dcsq_offset = ((data[2] as usize) << 8) | (data[3] as usize);
 
@@ -221,21 +221,22 @@ fn parse_subtitle_data(data: &[u8], pts: u32) -> Option<SubtitlePacket> {
 
     let mut ctrl_offset = packet_start + dcsq_offset;
     let mut iterations = 0;
-    const MAX_ITERATIONS: usize = 1000;  // Safety limit
+    const MAX_ITERATIONS: usize = 1000; // Safety limit
 
     while ctrl_offset < end_offset && iterations < MAX_ITERATIONS {
         iterations += 1;
-        
+
         // Each control sequence block starts with a delay value (2 bytes)
         if ctrl_offset + 4 > end_offset {
             break;
         }
-        
+
         let delay = ((data[ctrl_offset] as u32) << 8) | (data[ctrl_offset + 1] as u32);
         ctrl_offset += 2;
 
         // Next 2 bytes: offset to next control block
-        let next_ctrl_offset = ((data[ctrl_offset] as usize) << 8) | (data[ctrl_offset + 1] as usize);
+        let next_ctrl_offset =
+            ((data[ctrl_offset] as usize) << 8) | (data[ctrl_offset + 1] as usize);
         ctrl_offset += 2;
 
         // Parse commands
@@ -273,10 +274,14 @@ fn parse_subtitle_data(data: &[u8], pts: u32) -> Option<SubtitlePacket> {
                 0x05 => {
                     // Set display area
                     if ctrl_offset + 6 <= end_offset {
-                        let x1 = ((data[ctrl_offset] as u16) << 4) | ((data[ctrl_offset + 1] >> 4) as u16);
-                        let x2 = (((data[ctrl_offset + 1] & 0x0F) as u16) << 8) | (data[ctrl_offset + 2] as u16);
-                        let y1 = ((data[ctrl_offset + 3] as u16) << 4) | ((data[ctrl_offset + 4] >> 4) as u16);
-                        let y2 = (((data[ctrl_offset + 4] & 0x0F) as u16) << 8) | (data[ctrl_offset + 5] as u16);
+                        let x1 = ((data[ctrl_offset] as u16) << 4)
+                            | ((data[ctrl_offset + 1] >> 4) as u16);
+                        let x2 = (((data[ctrl_offset + 1] & 0x0F) as u16) << 8)
+                            | (data[ctrl_offset + 2] as u16);
+                        let y1 = ((data[ctrl_offset + 3] as u16) << 4)
+                            | ((data[ctrl_offset + 4] >> 4) as u16);
+                        let y2 = (((data[ctrl_offset + 4] & 0x0F) as u16) << 8)
+                            | (data[ctrl_offset + 5] as u16);
                         x = x1;
                         y = y1;
                         width = x2.saturating_sub(x1) + 1;
@@ -287,8 +292,10 @@ fn parse_subtitle_data(data: &[u8], pts: u32) -> Option<SubtitlePacket> {
                 0x06 => {
                     // Set field offsets
                     if ctrl_offset + 4 <= end_offset {
-                        top_field_offset = ((data[ctrl_offset] as usize) << 8) | (data[ctrl_offset + 1] as usize);
-                        bottom_field_offset = ((data[ctrl_offset + 2] as usize) << 8) | (data[ctrl_offset + 3] as usize);
+                        top_field_offset =
+                            ((data[ctrl_offset] as usize) << 8) | (data[ctrl_offset + 1] as usize);
+                        bottom_field_offset = ((data[ctrl_offset + 2] as usize) << 8)
+                            | (data[ctrl_offset + 3] as usize);
                         ctrl_offset += 4;
                     }
                 }
@@ -311,9 +318,17 @@ fn parse_subtitle_data(data: &[u8], pts: u32) -> Option<SubtitlePacket> {
     }
 
     // Calculate field data positions
-    let even_start = if top_field_offset > 0 { top_field_offset } else { 4 };
-    let odd_start = if bottom_field_offset > 0 { bottom_field_offset } else { even_start };
-    
+    let even_start = if top_field_offset > 0 {
+        top_field_offset
+    } else {
+        4
+    };
+    let odd_start = if bottom_field_offset > 0 {
+        bottom_field_offset
+    } else {
+        even_start
+    };
+
     let even_field_end = odd_start;
     let odd_field_end = packet_start + dcsq_offset;
 
