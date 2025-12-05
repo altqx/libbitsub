@@ -30,6 +30,19 @@ https://gist.github.com/user-attachments/assets/a89ae9fe-23e4-4bc3-8cad-16a3f0fe
 bun add libbitsub
 ```
 
+### Setup for Web Workers (Recommended)
+
+For best performance with large subtitle files, copy the WASM files to your public folder so Web Workers can access them:
+
+```bash
+# For Next.js, Vite, or similar frameworks
+mkdir -p public/libbitsub
+cp node_modules/libbitsub/pkg/libbitsub_bg.wasm public/libbitsub/
+cp node_modules/libbitsub/pkg/libbitsub.js public/libbitsub/
+```
+
+This enables off-main-thread parsing which prevents UI freezing when loading large PGS files.
+
 ## Prerequisites
 
 To build from source, you need:
@@ -81,7 +94,7 @@ import { PgsRenderer } from 'libbitsub';
 const renderer = new PgsRenderer({
     video: videoElement,
     subUrl: '/subtitles/movie.sup',
-    workerUrl: '/libbitsub.worker.js', // Optional, kept for API compatibility
+    workerUrl: '/libbitsub.js', // Optional, kept for API compatibility
     // Lifecycle callbacks (optional)
     onLoading: () => console.log('Loading subtitles...'),
     onLoaded: () => console.log('Subtitles loaded!'),
@@ -108,7 +121,7 @@ const renderer = new VobSubRenderer({
     video: videoElement,
     subUrl: '/subtitles/movie.sub',
     idxUrl: '/subtitles/movie.idx', // Optional, defaults to .sub path with .idx extension
-    workerUrl: '/libbitsub.worker.js', // Optional
+    workerUrl: '/libbitsub.js', // Optional
     // Lifecycle callbacks (optional)
     onLoading: () => setIsLoading(true),
     onLoaded: () => setIsLoading(false),
