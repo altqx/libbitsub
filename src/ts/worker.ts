@@ -33,8 +33,6 @@ let vobSubParser = null;
 // Minimal WASM bindings (inlined from wasm-bindgen output)
 let wasm;
 let cachedUint8Memory = null;
-let cachedInt32Memory = null;
-let cachedFloat64Memory = null;
 let WASM_VECTOR_LEN = 0;
 let cachedTextEncoder = new TextEncoder();
 let cachedTextDecoder = new TextDecoder('utf-8', { ignoreBOM: true, fatal: true });
@@ -44,20 +42,6 @@ function getUint8Memory() {
         cachedUint8Memory = new Uint8Array(wasm.memory.buffer);
     }
     return cachedUint8Memory;
-}
-
-function getInt32Memory() {
-    if (cachedInt32Memory === null || cachedInt32Memory.byteLength === 0) {
-        cachedInt32Memory = new Int32Array(wasm.memory.buffer);
-    }
-    return cachedInt32Memory;
-}
-
-function getFloat64Memory() {
-    if (cachedFloat64Memory === null || cachedFloat64Memory.byteLength === 0) {
-        cachedFloat64Memory = new Float64Array(wasm.memory.buffer);
-    }
-    return cachedFloat64Memory;
 }
 
 function passArray8ToWasm(arg) {
@@ -145,14 +129,11 @@ async function initWasm(wasmUrl) {
                     return wasm.pgsparser_parse(this.ptr, ptr, WASM_VECTOR_LEN);
                 }
                 getTimestamps() {
-                    wasm.pgsparser_get_timestamps(8, this.ptr);
-                    const r0 = getInt32Memory()[8 / 4 + 0];
-                    const r1 = getInt32Memory()[8 / 4 + 1];
-                    return new Float64Array(getFloat64Memory().buffer, r0, r1);
+                    return wasm.pgsparser_getTimestamps(this.ptr);
                 }
-                renderAtIndex(idx) { return wasm.pgsparser_render_at_index(this.ptr, idx); }
-                findIndexAtTimestamp(ts) { return wasm.pgsparser_find_index_at_timestamp(this.ptr, ts); }
-                clearCache() { wasm.pgsparser_clear_cache(this.ptr); }
+                renderAtIndex(idx) { return wasm.pgsparser_renderAtIndex(this.ptr, idx); }
+                findIndexAtTimestamp(ts) { return wasm.pgsparser_findIndexAtTimestamp(this.ptr, ts); }
+                clearCache() { wasm.pgsparser_clearCache(this.ptr); }
                 free() { wasm.pgsparser_free(this.ptr); }
                 get count() { return wasm.pgsparser_count(this.ptr); }
             },
@@ -161,21 +142,18 @@ async function initWasm(wasmUrl) {
                 loadFromData(idx, sub) {
                     const idxPtr = passStringToWasm(idx);
                     const subPtr = passArray8ToWasm(sub);
-                    wasm.vobsubparser_load_from_data(this.ptr, idxPtr, WASM_VECTOR_LEN, subPtr, sub.length);
+                    wasm.vobsubparser_loadFromData(this.ptr, idxPtr, WASM_VECTOR_LEN, subPtr, sub.length);
                 }
                 loadFromSubOnly(sub) {
                     const ptr = passArray8ToWasm(sub);
-                    wasm.vobsubparser_load_from_sub_only(this.ptr, ptr, WASM_VECTOR_LEN);
+                    wasm.vobsubparser_loadFromSubOnly(this.ptr, ptr, WASM_VECTOR_LEN);
                 }
                 getTimestamps() {
-                    wasm.vobsubparser_get_timestamps(8, this.ptr);
-                    const r0 = getInt32Memory()[8 / 4 + 0];
-                    const r1 = getInt32Memory()[8 / 4 + 1];
-                    return new Float64Array(getFloat64Memory().buffer, r0, r1);
+                    return wasm.vobsubparser_getTimestamps(this.ptr);
                 }
-                renderAtIndex(idx) { return wasm.vobsubparser_render_at_index(this.ptr, idx); }
-                findIndexAtTimestamp(ts) { return wasm.vobsubparser_find_index_at_timestamp(this.ptr, ts); }
-                clearCache() { wasm.vobsubparser_clear_cache(this.ptr); }
+                renderAtIndex(idx) { return wasm.vobsubparser_renderAtIndex(this.ptr, idx); }
+                findIndexAtTimestamp(ts) { return wasm.vobsubparser_findIndexAtTimestamp(this.ptr, ts); }
+                clearCache() { wasm.vobsubparser_clearCache(this.ptr); }
                 free() { wasm.vobsubparser_free(this.ptr); }
                 get count() { return wasm.vobsubparser_count(this.ptr); }
             }

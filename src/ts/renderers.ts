@@ -89,15 +89,16 @@ abstract class BaseVideoSubtitleRenderer {
   abstract getStats(): SubtitleRendererStats
 
   /** Get base stats common to all renderers */
-  protected getBaseStats(): Omit<SubtitleRendererStats, 'usingWorker' | 'cachedFrames' | 'pendingRenders' | 'totalEntries'> {
+  protected getBaseStats(): Omit<
+    SubtitleRendererStats,
+    'usingWorker' | 'cachedFrames' | 'pendingRenders' | 'totalEntries'
+  > {
     const now = performance.now()
     // Clean up old FPS timestamps (keep last second)
-    this.perfStats.fpsTimestamps = this.perfStats.fpsTimestamps.filter(t => now - t < 1000)
-    
+    this.perfStats.fpsTimestamps = this.perfStats.fpsTimestamps.filter((t) => now - t < 1000)
+
     const renderTimes = this.perfStats.renderTimes
-    const avgRenderTime = renderTimes.length > 0 
-      ? renderTimes.reduce((a, b) => a + b, 0) / renderTimes.length 
-      : 0
+    const avgRenderTime = renderTimes.length > 0 ? renderTimes.reduce((a, b) => a + b, 0) / renderTimes.length : 0
     const maxRenderTime = renderTimes.length > 0 ? Math.max(...renderTimes) : 0
     const minRenderTime = renderTimes.length > 0 ? Math.min(...renderTimes) : 0
 
@@ -208,7 +209,7 @@ abstract class BaseVideoSubtitleRenderer {
   protected abstract renderAtTime(time: number): SubtitleData | undefined
   protected abstract findCurrentIndex(time: number): number
   protected abstract renderAtIndex(index: number): SubtitleData | undefined
-  
+
   /** Check if a render is pending for the given index (async loading in progress) */
   protected abstract isPendingRender(index: number): boolean
 
@@ -230,7 +231,7 @@ abstract class BaseVideoSubtitleRenderer {
           const startTime = performance.now()
           this.renderFrame(currentTime, currentIndex)
           const endTime = performance.now()
-          
+
           // Track performance
           const renderTime = endTime - startTime
           this.perfStats.lastRenderTime = renderTime
@@ -241,13 +242,13 @@ abstract class BaseVideoSubtitleRenderer {
           }
           this.perfStats.framesRendered++
           this.perfStats.fpsTimestamps.push(endTime)
-          
+
           // Check for frame drop (if render took longer than frame budget ~16.67ms for 60fps)
           const frameBudget = 16.67
           if (renderTime > frameBudget) {
             this.perfStats.framesDropped++
           }
-          
+
           this.lastRenderedIndex = currentIndex
           this.lastRenderedTime = currentTime
         }
@@ -531,7 +532,7 @@ export class VobSubRenderer extends BaseVideoSubtitleRenderer {
   private onLoading?: () => void
   private onLoaded?: () => void
   private onError?: (error: Error) => void
-  
+
   // Async index lookup state
   private cachedIndex: number = -1
   private cachedIndexTime: number = -1
@@ -642,30 +643,34 @@ export class VobSubRenderer extends BaseVideoSubtitleRenderer {
   protected findCurrentIndex(time: number): number {
     if (this.state.useWorker && this.state.workerReady) {
       const timeMs = time * 1000
-      
-      // If we have a cached index for approximately this time, use it
-      // (within 100ms tolerance to avoid constant lookups)
-      if (this.cachedIndexTime >= 0 && Math.abs(timeMs - this.cachedIndexTime) < 100) {
+
+      // Only use cache if time is very close (within 1 frame)
+      const timeDelta = timeMs - this.cachedIndexTime
+      const cacheValid = this.cachedIndexTime >= 0 && Math.abs(timeDelta) < 17
+
+      if (cacheValid) {
         return this.cachedIndex
       }
-      
+
       // Start async lookup if not already pending
       if (!this.pendingIndexLookup) {
         this.pendingIndexLookup = sendToWorker({ type: 'findVobSubIndex', timeMs }).then((response) => {
           if (response.type === 'vobSubIndex') {
-            this.cachedIndex = response.index
+            const newIndex = response.index
+            const oldIndex = this.cachedIndex
+            this.cachedIndex = newIndex
             this.cachedIndexTime = timeMs
-            // Force re-render if index changed
-            if (this.lastRenderedIndex !== response.index) {
-              this.lastRenderedIndex = -1
+
+            // Force re-render if index changed (including to -1 for clear)
+            if (oldIndex !== newIndex) {
+              this.lastRenderedIndex = -2 // Use -2 to force update even when new index is -1
             }
           }
           this.pendingIndexLookup = null
           return this.cachedIndex
         })
       }
-      
-      // Return cached index while waiting (or -1 if no cache yet)
+
       return this.cachedIndex
     }
     return this.vobsubParser?.findIndexAtTimestamp(time) ?? -1

@@ -127,19 +127,52 @@ impl VobSubParser {
         let time_ms_u32 = time_ms as u32;
         let index = binary_search_timestamp(&self.timestamps_ms, time_ms_u32);
 
-        // Now check if we're still within the duration of this subtitle
-        // We need to get the packet to check its duration
-        if let Some(packet) = self.get_or_parse_packet(index) {
-            let start_time = packet.timestamp_ms;
-            let end_time = start_time.saturating_add(packet.duration_ms);
+        // Get the start time from IDX (what we searched against)
+        let start_time = self.timestamps_ms[index];
 
-            if time_ms_u32 >= start_time && time_ms_u32 < end_time {
-                return index as i32;
-            }
+        // Don't show if we're before this subtitle's start time
+        if time_ms_u32 < start_time {
+            return -1;
         }
 
-        // Current time is past the subtitle's duration, don't display anything
+        // Calculate end time
+        let end_time = self.calculate_end_time(index, start_time);
+
+        if time_ms_u32 < end_time {
+            return index as i32;
+        }
+
+        // Current time is past the subtitle's duration
         -1
+    }
+    /// Calculate the end time for a subtitle at the given index.
+    fn calculate_end_time(&mut self, index: usize, start_time: u32) -> u32 {
+        // Maximum duration for the last subtitle (no next subtitle to clamp to)
+        const MAX_LAST_DURATION_MS: u32 = 5000;
+
+        // Try to get explicit duration from control sequence first
+        let explicit_duration = self.get_or_parse_packet(index)
+            .filter(|p| p.duration_ms > 0 && p.duration_ms != 5000)
+            .map(|p| p.duration_ms);
+
+        // Check if we have a next subtitle
+        if index + 1 < self.timestamps_ms.len() {
+            let next_start = self.timestamps_ms[index + 1];
+
+            if let Some(duration) = explicit_duration {
+                let explicit_end = start_time.saturating_add(duration);
+                return explicit_end.min(next_start);
+            }
+
+            next_start
+        } else {
+            // Last subtitle - use explicit duration if valid, otherwise default
+            if let Some(duration) = explicit_duration {
+                return start_time.saturating_add(duration);
+            }
+            // Default duration for last subtitle
+            start_time.saturating_add(MAX_LAST_DURATION_MS)
+        }
     }
 
     /// Get a packet from cache or parse it.

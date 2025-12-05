@@ -214,6 +214,7 @@ fn parse_subtitle_data(data: &[u8], pts: u32) -> Option<SubtitlePacket> {
     let mut width: u16 = 0;
     let mut height: u16 = 0;
     let mut duration: u32 = 0;
+    let mut found_stop: bool = false;
     let mut color_indices = [0u8, 1, 2, 3];
     let mut alpha_values = [0u8, 15, 15, 15];
     let mut top_field_offset: usize = 0;
@@ -223,8 +224,11 @@ fn parse_subtitle_data(data: &[u8], pts: u32) -> Option<SubtitlePacket> {
     let mut iterations = 0;
     const MAX_ITERATIONS: usize = 1000; // Safety limit
 
-    while ctrl_offset < end_offset && iterations < MAX_ITERATIONS {
+    while ctrl_offset < end_offset && iterations < MAX_ITERATIONS && !found_stop {
         iterations += 1;
+        
+        // Remember where this block started (before reading delay/next_offset)
+        let block_start = ctrl_offset;
 
         // Each control sequence block starts with a delay value (2 bytes)
         if ctrl_offset + 4 > end_offset {
@@ -248,8 +252,9 @@ fn parse_subtitle_data(data: &[u8], pts: u32) -> Option<SubtitlePacket> {
                 0x00 => {} // Force display
                 0x01 => {} // Start display
                 0x02 => {
-                    // Stop display
+                    // Stop display - delay is when to stop (duration in 1024/90000 sec units)
                     duration = (delay * 1024) / 90;
+                    found_stop = true;
                 }
                 0x03 => {
                     // Set palette
@@ -308,13 +313,18 @@ fn parse_subtitle_data(data: &[u8], pts: u32) -> Option<SubtitlePacket> {
             }
         }
 
-        // Check if this is the last control block or if we're not making progress
-        let new_ctrl_offset = packet_start + next_ctrl_offset;
-        if next_ctrl_offset <= dcsq_offset || new_ctrl_offset <= ctrl_offset {
+        // Check if this is the last control block
+        // The end of the chain is indicated by next_ctrl_offset pointing to the current block or earlier
+        let next_block_abs = packet_start + next_ctrl_offset;
+        
+        // Break if:
+        // 1. next_ctrl_offset points backwards into bitmap data (< dcsq_offset)
+        // 2. next_ctrl_offset points to current block or earlier (self-reference = end marker)
+        if next_ctrl_offset < dcsq_offset || next_block_abs <= block_start {
             break;
         }
 
-        ctrl_offset = new_ctrl_offset;
+        ctrl_offset = next_block_abs;
     }
 
     // Calculate field data positions
