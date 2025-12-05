@@ -1,6 +1,6 @@
 /**
  * TypeScript wrapper for the libbitsub Rust rendering engine.
- * Provides a compatible API with the original libbitsub-js implementation.
+ * Provides a compatible API with the original libpgs-js implementation.
  */
 
 import type {
@@ -18,13 +18,23 @@ export type { RenderResult, SubtitleFrame, VobSubFrame };
 
 /** WASM module instance */
 let wasmModule: typeof import('../pkg/libbitsub') | null = null;
+let wasmInitPromise: Promise<void> | null = null;
 
 /**
  * Initialize the WASM module. Must be called before using any rendering functions.
  */
 export async function initWasm(): Promise<void> {
     if (wasmModule) return;
-    wasmModule = await import('../pkg/libbitsub');
+    if (wasmInitPromise) return wasmInitPromise;
+    
+    wasmInitPromise = (async () => {
+        const mod = await import('../pkg/libbitsub');
+        // Call the default init function to load and instantiate WASM
+        await mod.default();
+        wasmModule = mod;
+    })();
+    
+    return wasmInitPromise;
 }
 
 /**
@@ -68,10 +78,15 @@ export interface SubtitleCompositionData {
     y: number;
 }
 
+// =============================================================================
+// Low-Level Parsers (for programmatic use)
+// =============================================================================
+
 /**
- * High-performance PGS subtitle renderer using WASM.
+ * Low-level PGS subtitle parser using WASM.
+ * Use this for programmatic access to PGS data without video integration.
  */
-export class PgsRenderer {
+export class PgsParser {
     private parser: WasmPgsParser | null = null;
     private timestamps: Float64Array = new Float64Array(0);
 
@@ -182,9 +197,10 @@ export class PgsRenderer {
 }
 
 /**
- * High-performance VobSub subtitle renderer using WASM.
+ * Low-level VobSub subtitle parser using WASM.
+ * Use this for programmatic access to VobSub data without video integration.
  */
-export class VobSubRenderer {
+export class VobSubParserLowLevel {
     private parser: WasmVobSubParser | null = null;
     private timestamps: Float64Array = new Float64Array(0);
 
@@ -294,9 +310,9 @@ export class VobSubRenderer {
 }
 
 /**
- * Unified subtitle renderer that handles both PGS and VobSub formats.
+ * Unified subtitle parser that handles both PGS and VobSub formats.
  */
-export class UnifiedSubtitleRenderer {
+export class UnifiedSubtitleParser {
     private renderer: WasmSubtitleRenderer | null = null;
     private timestamps: Float64Array = new Float64Array(0);
 
@@ -439,3 +455,311 @@ export class UnifiedSubtitleRenderer {
         this.timestamps = new Float64Array(0);
     }
 }
+
+// =============================================================================
+// High-Level Video-Integrated Renderers (compatible with old libpgs-js API)
+// =============================================================================
+
+/**
+ * Options for video subtitle renderers.
+ */
+export interface VideoSubtitleOptions {
+    /** The video element to sync with */
+    video: HTMLVideoElement;
+    /** URL to the subtitle file */
+    subUrl: string;
+    /** Worker URL (kept for API compatibility, not used in WASM version) */
+    workerUrl?: string;
+}
+
+/**
+ * Options for VobSub video subtitle renderer.
+ */
+export interface VideoVobSubOptions extends VideoSubtitleOptions {
+    /** URL to the .idx file (optional, defaults to subUrl with .idx extension) */
+    idxUrl?: string;
+}
+
+/**
+ * Base class for video-integrated subtitle renderers.
+ * Handles canvas overlay, video sync, and subtitle fetching.
+ */
+abstract class BaseVideoSubtitleRenderer {
+    protected video: HTMLVideoElement;
+    protected subUrl: string;
+    protected canvas: HTMLCanvasElement | null = null;
+    protected ctx: CanvasRenderingContext2D | null = null;
+    protected animationFrameId: number | null = null;
+    protected isLoaded: boolean = false;
+    protected lastRenderedTime: number = -1;
+    protected disposed: boolean = false;
+    protected resizeObserver: ResizeObserver | null = null;
+
+    constructor(options: VideoSubtitleOptions) {
+        this.video = options.video;
+        this.subUrl = options.subUrl;
+        this.init();
+    }
+
+    /**
+     * Initialize the renderer - set up canvas and start loading.
+     */
+    protected async init(): Promise<void> {
+        await initWasm();
+        this.createCanvas();
+        await this.loadSubtitles();
+        this.startRenderLoop();
+    }
+
+    /**
+     * Create the canvas overlay positioned over the video.
+     */
+    protected createCanvas(): void {
+        this.canvas = document.createElement('canvas');
+        this.canvas.style.position = 'absolute';
+        this.canvas.style.top = '0';
+        this.canvas.style.left = '0';
+        this.canvas.style.pointerEvents = 'none';
+        this.canvas.style.width = '100%';
+        this.canvas.style.height = '100%';
+        
+        // Insert canvas after video
+        this.video.parentElement?.appendChild(this.canvas);
+        
+        this.ctx = this.canvas.getContext('2d');
+        this.updateCanvasSize();
+        
+        // Handle resize
+        this.resizeObserver = new ResizeObserver(() => this.updateCanvasSize());
+        this.resizeObserver.observe(this.video);
+    }
+
+    /**
+     * Update canvas size to match video display size.
+     */
+    protected updateCanvasSize(): void {
+        if (!this.canvas) return;
+        
+        const rect = this.video.getBoundingClientRect();
+        this.canvas.width = rect.width * window.devicePixelRatio;
+        this.canvas.height = rect.height * window.devicePixelRatio;
+        
+        // Clear and re-render on resize
+        this.lastRenderedTime = -1;
+    }
+
+    /**
+     * Load subtitles from URL. Must be implemented by subclasses.
+     */
+    protected abstract loadSubtitles(): Promise<void>;
+
+    /**
+     * Render subtitle at the given time. Must be implemented by subclasses.
+     */
+    protected abstract renderAtTime(time: number): SubtitleData | undefined;
+
+    /**
+     * Start the render loop synced to video playback.
+     */
+    protected startRenderLoop(): void {
+        const render = () => {
+            if (this.disposed) return;
+            
+            if (this.isLoaded && !this.video.paused) {
+                const currentTime = this.video.currentTime;
+                
+                // Only re-render if time has changed significantly
+                if (Math.abs(currentTime - this.lastRenderedTime) > 0.01) {
+                    this.renderFrame(currentTime);
+                    this.lastRenderedTime = currentTime;
+                }
+            }
+            
+            this.animationFrameId = requestAnimationFrame(render);
+        };
+        
+        this.animationFrameId = requestAnimationFrame(render);
+    }
+
+    /**
+     * Render a subtitle frame to the canvas.
+     */
+    protected renderFrame(time: number): void {
+        if (!this.ctx || !this.canvas) return;
+        
+        // Clear canvas
+        this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+        
+        const data = this.renderAtTime(time);
+        if (!data || data.compositionData.length === 0) return;
+        
+        // Calculate scale to fit subtitle to canvas
+        const scaleX = this.canvas.width / data.width;
+        const scaleY = this.canvas.height / data.height;
+        
+        // Render each composition
+        for (const comp of data.compositionData) {
+            const destX = comp.x * scaleX;
+            const destY = comp.y * scaleY;
+            const destWidth = comp.pixelData.width * scaleX;
+            const destHeight = comp.pixelData.height * scaleY;
+            
+            // Create temporary canvas to hold the ImageData
+            const tempCanvas = document.createElement('canvas');
+            tempCanvas.width = comp.pixelData.width;
+            tempCanvas.height = comp.pixelData.height;
+            const tempCtx = tempCanvas.getContext('2d')!;
+            tempCtx.putImageData(comp.pixelData, 0, 0);
+            
+            // Draw scaled to main canvas
+            this.ctx.drawImage(tempCanvas, destX, destY, destWidth, destHeight);
+        }
+    }
+
+    /**
+     * Dispose of all resources.
+     */
+    dispose(): void {
+        this.disposed = true;
+        
+        if (this.animationFrameId !== null) {
+            cancelAnimationFrame(this.animationFrameId);
+            this.animationFrameId = null;
+        }
+        
+        if (this.resizeObserver) {
+            this.resizeObserver.disconnect();
+            this.resizeObserver = null;
+        }
+        
+        if (this.canvas && this.canvas.parentElement) {
+            this.canvas.parentElement.removeChild(this.canvas);
+        }
+        this.canvas = null;
+        this.ctx = null;
+    }
+}
+
+/**
+ * High-level PGS subtitle renderer that integrates with video playback.
+ * Compatible with the old libpgs-js API.
+ * 
+ * @example
+ * ```typescript
+ * const renderer = new PgsRenderer({
+ *     video: videoElement,
+ *     subUrl: '/subtitles/movie.sup',
+ *     workerUrl: '/libbitsub.worker.js' // Not used in WASM version
+ * });
+ * 
+ * // Later, when done:
+ * renderer.dispose();
+ * ```
+ */
+export class PgsRenderer extends BaseVideoSubtitleRenderer {
+    private pgsParser: PgsParser | null = null;
+
+    constructor(options: VideoSubtitleOptions) {
+        super(options);
+    }
+
+    protected async loadSubtitles(): Promise<void> {
+        try {
+            this.pgsParser = new PgsParser();
+            const response = await fetch(this.subUrl);
+            if (!response.ok) {
+                throw new Error(`Failed to fetch subtitle: ${response.status}`);
+            }
+            const data = new Uint8Array(await response.arrayBuffer());
+            this.pgsParser.load(data);
+            this.isLoaded = true;
+        } catch (error) {
+            console.error('Failed to load PGS subtitles:', error);
+        }
+    }
+
+    protected renderAtTime(time: number): SubtitleData | undefined {
+        return this.pgsParser?.renderAtTimestamp(time);
+    }
+
+    dispose(): void {
+        super.dispose();
+        this.pgsParser?.dispose();
+        this.pgsParser = null;
+    }
+}
+
+/**
+ * High-level VobSub subtitle renderer that integrates with video playback.
+ * Compatible with the old libpgs-js API.
+ * 
+ * @example
+ * ```typescript
+ * const renderer = new VobSubRenderer({
+ *     video: videoElement,
+ *     subUrl: '/subtitles/movie.sub',
+ *     idxUrl: '/subtitles/movie.idx', // Optional
+ *     workerUrl: '/libbitsub.worker.js' // Not used in WASM version
+ * });
+ * 
+ * // Later, when done:
+ * renderer.dispose();
+ * ```
+ */
+export class VobSubRenderer extends BaseVideoSubtitleRenderer {
+    private vobsubParser: VobSubParserLowLevel | null = null;
+    private idxUrl: string;
+
+    constructor(options: VideoVobSubOptions) {
+        super(options);
+        this.idxUrl = options.idxUrl || options.subUrl.replace(/\.sub$/i, '.idx');
+    }
+
+    protected async loadSubtitles(): Promise<void> {
+        try {
+            this.vobsubParser = new VobSubParserLowLevel();
+            const [subResponse, idxResponse] = await Promise.all([
+                fetch(this.subUrl),
+                fetch(this.idxUrl),
+            ]);
+
+            if (!subResponse.ok) {
+                throw new Error(`Failed to fetch .sub file: ${subResponse.status}`);
+            }
+            if (!idxResponse.ok) {
+                throw new Error(`Failed to fetch .idx file: ${idxResponse.status}`);
+            }
+
+            const subData = new Uint8Array(await subResponse.arrayBuffer());
+            const idxData = await idxResponse.text();
+
+            this.vobsubParser.loadFromData(idxData, subData);
+            this.isLoaded = true;
+        } catch (error) {
+            console.error('Failed to load VobSub subtitles:', error);
+        }
+    }
+
+    protected renderAtTime(time: number): SubtitleData | undefined {
+        return this.vobsubParser?.renderAtTimestamp(time);
+    }
+
+    dispose(): void {
+        super.dispose();
+        this.vobsubParser?.dispose();
+        this.vobsubParser = null;
+    }
+}
+
+// =============================================================================
+// Legacy Aliases (for backward compatibility)
+// =============================================================================
+
+/** @deprecated Use PgsRenderer instead */
+export const PGSRenderer = PgsRenderer;
+
+/** @deprecated Use VobSubRenderer instead */
+export const VobsubRenderer = VobSubRenderer;
+
+/** @deprecated Use UnifiedSubtitleParser instead */
+export const UnifiedSubtitleRenderer = UnifiedSubtitleParser;

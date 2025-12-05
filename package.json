@@ -1,7 +1,7 @@
 {
   "name": "libbitsub",
-  "version": "0.10.0",
-  "author": "Akari Contributors",
+  "version": "0.0.1",
+  "author": "altqx",
   "license": "MIT",
   "description": "High-performance WASM renderer for graphical subtitles (PGS and VobSub)",
   "keywords": [
@@ -14,11 +14,11 @@
     "rendering"
   ],
   "main": "dist/index.js",
-  "module": "dist/index.mjs",
+  "module": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {
     ".": {
-      "import": "./dist/index.mjs",
+      "import": "./dist/index.js",
       "require": "./dist/index.js",
       "types": "./dist/index.d.ts"
     },
@@ -36,7 +36,7 @@
     "build:wasm": "wasm-pack build --target web --out-dir pkg",
     "build:wasm:release": "wasm-pack build --release --target web --out-dir pkg",
     "build:wasm:bundler": "wasm-pack build --target bundler --out-dir pkg-bundler",
-    "build:ts": "tsc && cp src/wrapper.ts dist/",
+    "build:ts": "tsc",
     "build": "npm run build:wasm:release && npm run build:ts",
     "clean": "rm -rf pkg pkg-bundler dist target",
     "test": "cargo test",

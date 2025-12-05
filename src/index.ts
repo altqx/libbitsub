@@ -4,19 +4,39 @@
  * @packageDocumentation
  */
 
+// High-level video-integrated renderers (compatible with old libpgs-js API)
+export {
+    PgsRenderer,
+    VobSubRenderer,
+    type VideoSubtitleOptions,
+    type VideoVobSubOptions,
+} from './wrapper';
+
+// Low-level parsers for programmatic use
+export {
+    PgsParser,
+    VobSubParserLowLevel,
+    UnifiedSubtitleParser,
+} from './wrapper';
+
+// Utility exports
 export {
     initWasm,
     isWasmInitialized,
-    PgsRenderer,
-    VobSubRenderer,
-    UnifiedSubtitleRenderer,
     type SubtitleData,
     type SubtitleCompositionData,
 } from './wrapper';
 
-// Re-export WASM types for advanced usage
+// WASM types
 export type {
     RenderResult,
     SubtitleFrame,
     VobSubFrame,
-} from '../pkg/libbitsub';
+} from './wrapper';
+
+// Legacy aliases
+export {
+    PGSRenderer,
+    VobsubRenderer,
+    UnifiedSubtitleRenderer,
+} from './wrapper';

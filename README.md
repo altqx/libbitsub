@@ -46,34 +46,81 @@ npm run build:wasm:release
 
 ### Initialize WASM
 
-Before using the renderer, you must initialize the WASM module:
+Before using any renderer, you must initialize the WASM module:
 
 ```typescript
-import { initWasm, UnifiedSubtitleRenderer } from 'libbitsub';
+import { initWasm } from 'libbitsub';
 
 // Initialize WASM (do this once at app startup)
 await initWasm();
 ```
 
-### PGS Subtitles
+## High-Level API (Video Integration)
+
+The high-level API automatically handles video synchronization, canvas overlay, and subtitle fetching.
+
+### PGS Subtitles (Video-Integrated)
 
 ```typescript
-import { initWasm, PgsRenderer } from 'libbitsub';
+import { PgsRenderer } from 'libbitsub';
+
+// Create renderer with video element
+const renderer = new PgsRenderer({
+    video: videoElement,
+    subUrl: '/subtitles/movie.sup',
+    workerUrl: '/libbitsub.worker.js' // Optional, kept for API compatibility
+});
+
+// The renderer automatically:
+// - Fetches the subtitle file
+// - Creates a canvas overlay on the video
+// - Syncs rendering with video playback
+// - Handles resize events
+
+// When done:
+renderer.dispose();
+```
+
+### VobSub Subtitles (Video-Integrated)
+
+```typescript
+import { VobSubRenderer } from 'libbitsub';
+
+// Create renderer with video element
+const renderer = new VobSubRenderer({
+    video: videoElement,
+    subUrl: '/subtitles/movie.sub',
+    idxUrl: '/subtitles/movie.idx', // Optional, defaults to .sub path with .idx extension
+    workerUrl: '/libbitsub.worker.js' // Optional
+});
+
+// When done:
+renderer.dispose();
+```
+
+## Low-Level API (Programmatic Use)
+
+For more control over rendering, use the low-level parsers directly.
+
+### PGS Subtitles (Low-Level)
+
+```typescript
+import { initWasm, PgsParser } from 'libbitsub';
 
 await initWasm();
 
-const renderer = new PgsRenderer();
+const parser = new PgsParser();
 
 // Load PGS data from a .sup file
 const response = await fetch('subtitles.sup');
 const data = new Uint8Array(await response.arrayBuffer());
-renderer.load(data);
+parser.load(data);
 
 // Get timestamps
-const timestamps = renderer.getTimestamps(); // Float64Array in milliseconds
+const timestamps = parser.getTimestamps(); // Float64Array in milliseconds
 
 // Render at a specific time
-const subtitleData = renderer.renderAtTimestamp(currentTimeInSeconds);
+const subtitleData = parser.renderAtTimestamp(currentTimeInSeconds);
 if (subtitleData) {
     for (const comp of subtitleData.compositionData) {
         ctx.putImageData(comp.pixelData, comp.x, comp.y);
@@ -81,17 +128,17 @@ if (subtitleData) {
 }
 
 // Clean up
-renderer.dispose();
+parser.dispose();
 ```
 
-### VobSub Subtitles
+### VobSub Subtitles (Low-Level)
 
 ```typescript
-import { initWasm, VobSubRenderer } from 'libbitsub';
+import { initWasm, VobSubParserLowLevel } from 'libbitsub';
 
 await initWasm();
 
-const renderer = new VobSubRenderer();
+const parser = new VobSubParserLowLevel();
 
 // Load from IDX + SUB files
 const idxResponse = await fetch('subtitles.idx');
@@ -99,50 +146,64 @@ const idxContent = await idxResponse.text();
 const subResponse = await fetch('subtitles.sub');
 const subData = new Uint8Array(await subResponse.arrayBuffer());
 
-renderer.loadFromData(idxContent, subData);
+parser.loadFromData(idxContent, subData);
 
 // Or load from SUB file only
-// renderer.loadFromSubOnly(subData);
+// parser.loadFromSubOnly(subData);
 
 // Render
-const subtitleData = renderer.renderAtTimestamp(currentTimeInSeconds);
+const subtitleData = parser.renderAtTimestamp(currentTimeInSeconds);
 if (subtitleData) {
     for (const comp of subtitleData.compositionData) {
         ctx.putImageData(comp.pixelData, comp.x, comp.y);
     }
 }
 
-renderer.dispose();
+parser.dispose();
 ```
 
-### Unified Renderer
+### Unified Parser
 
 For handling both formats with a single API:
 
 ```typescript
-import { initWasm, UnifiedSubtitleRenderer } from 'libbitsub';
+import { initWasm, UnifiedSubtitleParser } from 'libbitsub';
 
 await initWasm();
 
-const renderer = new UnifiedSubtitleRenderer();
+const parser = new UnifiedSubtitleParser();
 
 // Load PGS
-renderer.loadPgs(pgsData);
+parser.loadPgs(pgsData);
 
 // Or load VobSub
-// renderer.loadVobSub(idxContent, subData);
+// parser.loadVobSub(idxContent, subData);
 
-console.log(renderer.format); // 'pgs' or 'vobsub'
+console.log(parser.format); // 'pgs' or 'vobsub'
 
-const subtitleData = renderer.renderAtTimestamp(time);
+const subtitleData = parser.renderAtTimestamp(time);
 // ... render to canvas
 
-renderer.dispose();
+parser.dispose();
 ```
 
 ## API Reference
 
-### `PgsRenderer`
+### High-Level (Video-Integrated)
+
+#### `PgsRenderer`
+
+- `constructor(options: VideoSubtitleOptions)` - Create video-integrated PGS renderer
+- `dispose(): void` - Clean up all resources
+
+#### `VobSubRenderer`
+
+- `constructor(options: VideoVobSubOptions)` - Create video-integrated VobSub renderer
+- `dispose(): void` - Clean up all resources
+
+### Low-Level (Programmatic)
+
+#### `PgsParser`
 
 - `load(data: Uint8Array): number` - Load PGS data, returns display set count
 - `getTimestamps(): Float64Array` - Get all timestamps in milliseconds
@@ -153,13 +214,13 @@ renderer.dispose();
 - `clearCache(): void` - Clear decoded bitmap cache
 - `dispose(): void` - Release resources
 
-### `VobSubRenderer`
+#### `VobSubParserLowLevel`
 
 - `loadFromData(idxContent: string, subData: Uint8Array): void` - Load IDX + SUB
 - `loadFromSubOnly(subData: Uint8Array): void` - Load SUB only
-- Same rendering methods as PgsRenderer
+- Same rendering methods as PgsParser
 
-### `UnifiedSubtitleRenderer`
+#### `UnifiedSubtitleParser`
 
 - `loadPgs(data: Uint8Array): number` - Load PGS data
 - `loadVobSub(idxContent: string, subData: Uint8Array): void` - Load VobSub
@@ -167,7 +228,27 @@ renderer.dispose();
 - `format: 'pgs' | 'vobsub' | null` - Current format
 - Same rendering methods as above
 
-### `SubtitleData`
+### Types
+
+#### `VideoSubtitleOptions`
+
+```typescript
+interface VideoSubtitleOptions {
+    video: HTMLVideoElement;  // Video element to sync with
+    subUrl: string;           // URL to subtitle file
+    workerUrl?: string;       // Worker URL (for API compatibility)
+}
+```
+
+#### `VideoVobSubOptions`
+
+```typescript
+interface VideoVobSubOptions extends VideoSubtitleOptions {
+    idxUrl?: string;  // URL to .idx file (optional)
+}
+```
+
+#### `SubtitleData`
 
 ```typescript
 interface SubtitleData {
