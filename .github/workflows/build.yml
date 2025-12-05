@@ -142,7 +142,7 @@ jobs:
           deno-version: v2.x
 
       - name: Publish to JSR
-        run: deno publish --no-check
+        run: deno publish --no-check --sloppy-imports
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
