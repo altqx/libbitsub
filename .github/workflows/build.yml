@@ -66,11 +66,19 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
 
-      - name: Install wasm-pack
-        run: cargo install wasm-pack
-
       - name: Rust Cache
         uses: swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+
+      - name: Cache wasm-pack
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/wasm-pack
+          key: ${{ runner.os }}-wasm-pack
+
+      - name: Install wasm-pack
+        run: command -v wasm-pack || cargo install wasm-pack
 
       - name: Cache Bun dependencies
         uses: actions/cache@v4
@@ -128,8 +136,13 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
+      - name: Setup Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
       - name: Publish to JSR
-        run: npx jsr publish
+        run: deno publish
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
