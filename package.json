@@ -37,7 +37,7 @@
     "build:wasm:release": "wasm-pack build --release --target web --out-dir pkg",
     "build:wasm:bundler": "wasm-pack build --target bundler --out-dir pkg-bundler",
     "build:ts": "tsc",
-    "build": "npm run build:wasm:release && npm run build:ts",
+    "build": "bun run build:wasm:release && bun run build:ts",
     "clean": "rm -rf pkg pkg-bundler dist target",
     "test": "cargo test",
     "test:wasm": "wasm-pack test --headless --chrome",

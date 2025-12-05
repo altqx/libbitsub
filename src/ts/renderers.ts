@@ -3,11 +3,17 @@
  * Handles canvas overlay, video sync, and subtitle fetching.
  */
 
-import type { SubtitleData, VideoSubtitleOptions, VideoVobSubOptions } from './types'
+import type { SubtitleData, SubtitleDisplaySettings, VideoSubtitleOptions, VideoVobSubOptions } from './types'
 import { initWasm } from './wasm'
 import { getOrCreateWorker, sendToWorker } from './worker'
 import { binarySearchTimestamp, convertFrameData, createWorkerState } from './utils'
 import { PgsParser, VobSubParserLowLevel } from './parsers'
+
+/** Default display settings */
+const DEFAULT_DISPLAY_SETTINGS: SubtitleDisplaySettings = {
+  scale: 1.0,
+  verticalOffset: 0
+}
 
 /**
  * Base class for video-integrated subtitle renderers.
@@ -28,9 +34,43 @@ abstract class BaseVideoSubtitleRenderer {
   protected tempCtx: CanvasRenderingContext2D | null = null
   protected lastRenderedData: SubtitleData | null = null
 
+  /** Display settings for subtitle rendering */
+  protected displaySettings: SubtitleDisplaySettings = { ...DEFAULT_DISPLAY_SETTINGS }
+
   constructor(options: VideoSubtitleOptions) {
     this.video = options.video
     this.subUrl = options.subUrl
+  }
+
+  /** Get current display settings */
+  getDisplaySettings(): SubtitleDisplaySettings {
+    return { ...this.displaySettings }
+  }
+
+  /** Set display settings and force re-render */
+  setDisplaySettings(settings: Partial<SubtitleDisplaySettings>): void {
+    const changed =
+      settings.scale !== this.displaySettings.scale || settings.verticalOffset !== this.displaySettings.verticalOffset
+
+    if (settings.scale !== undefined) {
+      this.displaySettings.scale = Math.max(0.1, Math.min(3.0, settings.scale))
+    }
+    if (settings.verticalOffset !== undefined) {
+      this.displaySettings.verticalOffset = Math.max(-50, Math.min(50, settings.verticalOffset))
+    }
+
+    // Force re-render if settings changed
+    if (changed) {
+      this.lastRenderedIndex = -1
+      this.lastRenderedTime = -1
+    }
+  }
+
+  /** Reset display settings to defaults */
+  resetDisplaySettings(): void {
+    this.displaySettings = { ...DEFAULT_DISPLAY_SETTINGS }
+    this.lastRenderedIndex = -1
+    this.lastRenderedTime = -1
   }
 
   /** Start initialization. */
@@ -155,8 +195,15 @@ abstract class BaseVideoSubtitleRenderer {
     // Store for potential reuse
     this.lastRenderedData = data
 
-    const scaleX = this.canvas.width / data.width
-    const scaleY = this.canvas.height / data.height
+    // Calculate base scale factors
+    const baseScaleX = this.canvas.width / data.width
+    const baseScaleY = this.canvas.height / data.height
+
+    // Apply display settings
+    const { scale, verticalOffset } = this.displaySettings
+    const scaleX = baseScaleX * scale
+    const scaleY = baseScaleY * scale
+    const offsetY = (verticalOffset / 100) * this.canvas.height
 
     for (const comp of data.compositionData) {
       if (!this.tempCanvas || !this.tempCtx) continue
@@ -168,13 +215,17 @@ abstract class BaseVideoSubtitleRenderer {
       }
 
       this.tempCtx.putImageData(comp.pixelData, 0, 0)
-      this.ctx.drawImage(
-        this.tempCanvas,
-        comp.x * scaleX,
-        comp.y * scaleY,
-        comp.pixelData.width * scaleX,
-        comp.pixelData.height * scaleY
-      )
+
+      // Calculate position with scale and offset applied
+      // Center the scaled content horizontally
+      const scaledWidth = comp.pixelData.width * scaleX
+      const scaledHeight = comp.pixelData.height * scaleY
+      const baseX = comp.x * baseScaleX
+      const baseY = comp.y * baseScaleY
+      const centeredX = baseX + (comp.pixelData.width * baseScaleX - scaledWidth) / 2
+      const adjustedY = baseY + offsetY + (comp.pixelData.height * baseScaleY - scaledHeight)
+
+      this.ctx.drawImage(this.tempCanvas, centeredX, adjustedY, scaledWidth, scaledHeight)
     }
   }
 

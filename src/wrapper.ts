@@ -7,6 +7,7 @@
 export type {
   SubtitleData,
   SubtitleCompositionData,
+  SubtitleDisplaySettings,
   VideoSubtitleOptions,
   VideoVobSubOptions,
   RenderResult,

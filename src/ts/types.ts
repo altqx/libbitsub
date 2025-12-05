@@ -64,6 +64,14 @@ export interface VideoVobSubOptions extends VideoSubtitleOptions {
   idxUrl?: string
 }
 
+/** Display settings for subtitle rendering. */
+export interface SubtitleDisplaySettings {
+  /** Scale factor for subtitles (1.0 = 100%, 0.5 = 50%, 2.0 = 200%) */
+  scale: number
+  /** Vertical offset as percentage of video height (-50 to 50, negative = up, positive = down) */
+  verticalOffset: number
+}
+
 // =============================================================================
 // Worker Types
 // =============================================================================

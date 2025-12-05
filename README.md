@@ -134,6 +134,40 @@ const renderer = new VobSubRenderer({
 renderer.dispose()
 ```
 
+### Subtitle Display Settings
+
+Both `PgsRenderer` and `VobSubRenderer` support real-time customization of subtitle size and position:
+
+```typescript
+// Get current settings
+const settings = renderer.getDisplaySettings()
+console.log(settings)
+// Output: { scale: 1.0, verticalOffset: 0 }
+
+// Update settings
+renderer.setDisplaySettings({
+  scale: 1.2, // 1.2 = 120% size
+  verticalOffset: -10 // -10% (move up 10% of video height)
+})
+
+// Reset to defaults
+renderer.resetDisplaySettings()
+```
+
+**Settings Reference:**
+
+- `scale` (number): Scale factor for subtitles.
+  - `1.0` = 100% (Original size)
+  - `0.5` = 50%
+  - `2.0` = 200%
+  - Range: `0.1` to `3.0`
+
+- `verticalOffset` (number): Vertical position offset as a percentage of video height.
+  - `0` = Original position
+  - Negative values move up (e.g., `-10` moves up by 10% of height)
+  - Positive values move down (e.g., `10` moves down by 10% of height)
+  - Range: `-50` to `50`
+
 ## Low-Level API (Programmatic Use)
 
 For more control over rendering, use the low-level parsers directly.
@@ -230,11 +264,17 @@ parser.dispose()
 #### `PgsRenderer`
 
 - `constructor(options: VideoSubtitleOptions)` - Create video-integrated PGS renderer
+- `getDisplaySettings(): SubtitleDisplaySettings` - Get current display settings
+- `setDisplaySettings(settings: Partial<SubtitleDisplaySettings>): void` - Update display settings
+- `resetDisplaySettings(): void` - Reset display settings to defaults
 - `dispose(): void` - Clean up all resources
 
 #### `VobSubRenderer`
 
 - `constructor(options: VideoVobSubOptions)` - Create video-integrated VobSub renderer
+- `getDisplaySettings(): SubtitleDisplaySettings` - Get current display settings
+- `setDisplaySettings(settings: Partial<SubtitleDisplaySettings>): void` - Update display settings
+- `resetDisplaySettings(): void` - Reset display settings to defaults
 - `dispose(): void` - Clean up all resources
 
 ### Low-Level (Programmatic)
@@ -284,6 +324,17 @@ interface VideoSubtitleOptions {
 ```typescript
 interface VideoVobSubOptions extends VideoSubtitleOptions {
   idxUrl?: string // URL to .idx file (optional)
+}
+```
+
+#### `SubtitleDisplaySettings`
+
+```typescript
+interface SubtitleDisplaySettings {
+  // Scale factor (1.0 = 100%, 0.5 = 50%, 2.0 = 200%)
+  scale: number
+  // Vertical offset as % of video height (-50 to 50)
+  verticalOffset: number
 }
 ```
 

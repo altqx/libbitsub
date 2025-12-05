@@ -11,7 +11,13 @@ export { PgsRenderer, VobSubRenderer, type VideoSubtitleOptions, type VideoVobSu
 export { PgsParser, VobSubParserLowLevel, UnifiedSubtitleParser } from './wrapper'
 
 // Utility exports
-export { initWasm, isWasmInitialized, type SubtitleData, type SubtitleCompositionData } from './wrapper'
+export {
+  initWasm,
+  isWasmInitialized,
+  type SubtitleData,
+  type SubtitleCompositionData,
+  type SubtitleDisplaySettings
+} from './wrapper'
 
 // WASM types
 export type { RenderResult, SubtitleFrame, VobSubFrame } from './wrapper'
