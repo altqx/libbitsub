@@ -23,7 +23,6 @@ https://gist.github.com/user-attachments/assets/55ac8e11-1964-4fb9-923e-dcac82dc
 
 https://gist.github.com/user-attachments/assets/a89ae9fe-23e4-4bc3-8cad-16a3f0fea665
 
-
 ## Installation
 
 ```bash
@@ -75,10 +74,10 @@ bun run build:wasm:release
 Before using any renderer, you must initialize the WASM module:
 
 ```typescript
-import { initWasm } from 'libbitsub';
+import { initWasm } from 'libbitsub'
 
 // Initialize WASM (do this once at app startup)
-await initWasm();
+await initWasm()
 ```
 
 ## High-Level API (Video Integration)
@@ -88,18 +87,18 @@ The high-level API automatically handles video synchronization, canvas overlay, 
 ### PGS Subtitles (Video-Integrated)
 
 ```typescript
-import { PgsRenderer } from 'libbitsub';
+import { PgsRenderer } from 'libbitsub'
 
 // Create renderer with video element
 const renderer = new PgsRenderer({
-    video: videoElement,
-    subUrl: '/subtitles/movie.sup',
-    workerUrl: '/libbitsub.js', // Optional, kept for API compatibility
-    // Lifecycle callbacks (optional)
-    onLoading: () => console.log('Loading subtitles...'),
-    onLoaded: () => console.log('Subtitles loaded!'),
-    onError: (error) => console.error('Failed to load:', error)
-});
+  video: videoElement,
+  subUrl: '/subtitles/movie.sup',
+  workerUrl: '/libbitsub.js', // Optional, kept for API compatibility
+  // Lifecycle callbacks (optional)
+  onLoading: () => console.log('Loading subtitles...'),
+  onLoaded: () => console.log('Subtitles loaded!'),
+  onError: (error) => console.error('Failed to load:', error)
+})
 
 // The renderer automatically:
 // - Fetches the subtitle file
@@ -108,31 +107,31 @@ const renderer = new PgsRenderer({
 // - Handles resize events
 
 // When done:
-renderer.dispose();
+renderer.dispose()
 ```
 
 ### VobSub Subtitles (Video-Integrated)
 
 ```typescript
-import { VobSubRenderer } from 'libbitsub';
+import { VobSubRenderer } from 'libbitsub'
 
 // Create renderer with video element
 const renderer = new VobSubRenderer({
-    video: videoElement,
-    subUrl: '/subtitles/movie.sub',
-    idxUrl: '/subtitles/movie.idx', // Optional, defaults to .sub path with .idx extension
-    workerUrl: '/libbitsub.js', // Optional
-    // Lifecycle callbacks (optional)
-    onLoading: () => setIsLoading(true),
-    onLoaded: () => setIsLoading(false),
-    onError: (error) => {
-        setIsLoading(false);
-        console.error('Subtitle error:', error);
-    }
-});
+  video: videoElement,
+  subUrl: '/subtitles/movie.sub',
+  idxUrl: '/subtitles/movie.idx', // Optional, defaults to .sub path with .idx extension
+  workerUrl: '/libbitsub.js', // Optional
+  // Lifecycle callbacks (optional)
+  onLoading: () => setIsLoading(true),
+  onLoaded: () => setIsLoading(false),
+  onError: (error) => {
+    setIsLoading(false)
+    console.error('Subtitle error:', error)
+  }
+})
 
 // When done:
-renderer.dispose();
+renderer.dispose()
 ```
 
 ## Low-Level API (Programmatic Use)
@@ -142,61 +141,61 @@ For more control over rendering, use the low-level parsers directly.
 ### PGS Subtitles (Low-Level)
 
 ```typescript
-import { initWasm, PgsParser } from 'libbitsub';
+import { initWasm, PgsParser } from 'libbitsub'
 
-await initWasm();
+await initWasm()
 
-const parser = new PgsParser();
+const parser = new PgsParser()
 
 // Load PGS data from a .sup file
-const response = await fetch('subtitles.sup');
-const data = new Uint8Array(await response.arrayBuffer());
-parser.load(data);
+const response = await fetch('subtitles.sup')
+const data = new Uint8Array(await response.arrayBuffer())
+parser.load(data)
 
 // Get timestamps
-const timestamps = parser.getTimestamps(); // Float64Array in milliseconds
+const timestamps = parser.getTimestamps() // Float64Array in milliseconds
 
 // Render at a specific time
-const subtitleData = parser.renderAtTimestamp(currentTimeInSeconds);
+const subtitleData = parser.renderAtTimestamp(currentTimeInSeconds)
 if (subtitleData) {
-    for (const comp of subtitleData.compositionData) {
-        ctx.putImageData(comp.pixelData, comp.x, comp.y);
-    }
+  for (const comp of subtitleData.compositionData) {
+    ctx.putImageData(comp.pixelData, comp.x, comp.y)
+  }
 }
 
 // Clean up
-parser.dispose();
+parser.dispose()
 ```
 
 ### VobSub Subtitles (Low-Level)
 
 ```typescript
-import { initWasm, VobSubParserLowLevel } from 'libbitsub';
+import { initWasm, VobSubParserLowLevel } from 'libbitsub'
 
-await initWasm();
+await initWasm()
 
-const parser = new VobSubParserLowLevel();
+const parser = new VobSubParserLowLevel()
 
 // Load from IDX + SUB files
-const idxResponse = await fetch('subtitles.idx');
-const idxContent = await idxResponse.text();
-const subResponse = await fetch('subtitles.sub');
-const subData = new Uint8Array(await subResponse.arrayBuffer());
+const idxResponse = await fetch('subtitles.idx')
+const idxContent = await idxResponse.text()
+const subResponse = await fetch('subtitles.sub')
+const subData = new Uint8Array(await subResponse.arrayBuffer())
 
-parser.loadFromData(idxContent, subData);
+parser.loadFromData(idxContent, subData)
 
 // Or load from SUB file only
 // parser.loadFromSubOnly(subData);
 
 // Render
-const subtitleData = parser.renderAtTimestamp(currentTimeInSeconds);
+const subtitleData = parser.renderAtTimestamp(currentTimeInSeconds)
 if (subtitleData) {
-    for (const comp of subtitleData.compositionData) {
-        ctx.putImageData(comp.pixelData, comp.x, comp.y);
-    }
+  for (const comp of subtitleData.compositionData) {
+    ctx.putImageData(comp.pixelData, comp.x, comp.y)
+  }
 }
 
-parser.dispose();
+parser.dispose()
 ```
 
 ### Unified Parser
@@ -204,24 +203,24 @@ parser.dispose();
 For handling both formats with a single API:
 
 ```typescript
-import { initWasm, UnifiedSubtitleParser } from 'libbitsub';
+import { initWasm, UnifiedSubtitleParser } from 'libbitsub'
 
-await initWasm();
+await initWasm()
 
-const parser = new UnifiedSubtitleParser();
+const parser = new UnifiedSubtitleParser()
 
 // Load PGS
-parser.loadPgs(pgsData);
+parser.loadPgs(pgsData)
 
 // Or load VobSub
 // parser.loadVobSub(idxContent, subData);
 
-console.log(parser.format); // 'pgs' or 'vobsub'
+console.log(parser.format) // 'pgs' or 'vobsub'
 
-const subtitleData = parser.renderAtTimestamp(time);
+const subtitleData = parser.renderAtTimestamp(time)
 // ... render to canvas
 
-parser.dispose();
+parser.dispose()
 ```
 
 ## API Reference
@@ -271,12 +270,12 @@ parser.dispose();
 
 ```typescript
 interface VideoSubtitleOptions {
-    video: HTMLVideoElement;  // Video element to sync with
-    subUrl: string;           // URL to subtitle file
-    workerUrl?: string;       // Worker URL (for API compatibility)
-    onLoading?: () => void;   // Called when subtitle loading starts
-    onLoaded?: () => void;    // Called when subtitle loading completes
-    onError?: (error: Error) => void;  // Called when subtitle loading fails
+  video: HTMLVideoElement // Video element to sync with
+  subUrl: string // URL to subtitle file
+  workerUrl?: string // Worker URL (for API compatibility)
+  onLoading?: () => void // Called when subtitle loading starts
+  onLoaded?: () => void // Called when subtitle loading completes
+  onError?: (error: Error) => void // Called when subtitle loading fails
 }
 ```
 
@@ -284,7 +283,7 @@ interface VideoSubtitleOptions {
 
 ```typescript
 interface VideoVobSubOptions extends VideoSubtitleOptions {
-    idxUrl?: string;  // URL to .idx file (optional)
+  idxUrl?: string // URL to .idx file (optional)
 }
 ```
 
@@ -292,14 +291,14 @@ interface VideoVobSubOptions extends VideoSubtitleOptions {
 
 ```typescript
 interface SubtitleData {
-    width: number;      // Screen width
-    height: number;     // Screen height
-    compositionData: SubtitleCompositionData[];
+  width: number // Screen width
+  height: number // Screen height
+  compositionData: SubtitleCompositionData[]
 }
 
 interface SubtitleCompositionData {
-    pixelData: ImageData;  // RGBA pixel data
-    x: number;             // X position
-    y: number;             // Y position
+  pixelData: ImageData // RGBA pixel data
+  x: number // X position
+  y: number // Y position
 }
 ```

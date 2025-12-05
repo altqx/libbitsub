@@ -151,14 +151,14 @@ jobs:
             ## libbitsub v${{ needs.check-version.outputs.version }}
 
             ### Installation
-            
+
             **npm / bun**
             ```bash
             npm install libbitsub
             # or
             bun add libbitsub
             ```
-            
+
             **JSR (Deno)**
             ```bash
             deno add jsr:@altq/libbitsub

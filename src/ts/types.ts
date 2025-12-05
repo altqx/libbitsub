@@ -3,23 +3,16 @@
  */
 
 import type {
-    SubtitleRenderer as WasmSubtitleRenderer,
-    PgsParser as WasmPgsParser,
-    VobSubParser as WasmVobSubParser,
-    RenderResult,
-    SubtitleFrame,
-    VobSubFrame,
-} from '../../pkg/libbitsub';
+  SubtitleRenderer as WasmSubtitleRenderer,
+  PgsParser as WasmPgsParser,
+  VobSubParser as WasmVobSubParser,
+  RenderResult,
+  SubtitleFrame,
+  VobSubFrame
+} from '../../pkg/libbitsub'
 
 // Re-export WASM types
-export type {
-    WasmSubtitleRenderer,
-    WasmPgsParser,
-    WasmVobSubParser,
-    RenderResult,
-    SubtitleFrame,
-    VobSubFrame,
-};
+export type { WasmSubtitleRenderer, WasmPgsParser, WasmVobSubParser, RenderResult, SubtitleFrame, VobSubFrame }
 
 // =============================================================================
 // Subtitle Data Types
@@ -27,22 +20,22 @@ export type {
 
 /** Subtitle data output format compatible with the original JS implementation. */
 export interface SubtitleData {
-    /** Total width of the presentation (screen). */
-    width: number;
-    /** Total height of the presentation (screen). */
-    height: number;
-    /** Pre-compiled composition elements. */
-    compositionData: SubtitleCompositionData[];
+  /** Total width of the presentation (screen). */
+  width: number
+  /** Total height of the presentation (screen). */
+  height: number
+  /** Pre-compiled composition elements. */
+  compositionData: SubtitleCompositionData[]
 }
 
 /** A single composition element. */
 export interface SubtitleCompositionData {
-    /** The compiled pixel data of the subtitle. */
-    pixelData: ImageData;
-    /** X position on screen. */
-    x: number;
-    /** Y position on screen. */
-    y: number;
+  /** The compiled pixel data of the subtitle. */
+  pixelData: ImageData
+  /** X position on screen. */
+  x: number
+  /** Y position on screen. */
+  y: number
 }
 
 // =============================================================================
@@ -51,24 +44,24 @@ export interface SubtitleCompositionData {
 
 /** Options for video subtitle renderers. */
 export interface VideoSubtitleOptions {
-    /** The video element to sync with */
-    video: HTMLVideoElement;
-    /** URL to the subtitle file */
-    subUrl: string;
-    /** Worker URL (kept for API compatibility, not used in WASM version) */
-    workerUrl?: string;
-    /** Callback when subtitle loading starts */
-    onLoading?: () => void;
-    /** Callback when subtitle loading completes */
-    onLoaded?: () => void;
-    /** Callback when subtitle loading fails */
-    onError?: (error: Error) => void;
+  /** The video element to sync with */
+  video: HTMLVideoElement
+  /** URL to the subtitle file */
+  subUrl: string
+  /** Worker URL (kept for API compatibility, not used in WASM version) */
+  workerUrl?: string
+  /** Callback when subtitle loading starts */
+  onLoading?: () => void
+  /** Callback when subtitle loading completes */
+  onLoaded?: () => void
+  /** Callback when subtitle loading fails */
+  onError?: (error: Error) => void
 }
 
 /** Options for VobSub video subtitle renderer. */
 export interface VideoVobSubOptions extends VideoSubtitleOptions {
-    /** URL to the .idx file (optional, defaults to subUrl with .idx extension) */
-    idxUrl?: string;
+  /** URL to the .idx file (optional, defaults to subUrl with .idx extension) */
+  idxUrl?: string
 }
 
 // =============================================================================
@@ -76,50 +69,50 @@ export interface VideoVobSubOptions extends VideoSubtitleOptions {
 // =============================================================================
 
 export interface CompositionData {
-    rgba: Uint8Array;
-    x: number;
-    y: number;
-    width: number;
-    height: number;
+  rgba: Uint8Array
+  x: number
+  y: number
+  width: number
+  height: number
 }
 
 export interface FrameData {
-    width: number;
-    height: number;
-    compositions: CompositionData[];
+  width: number
+  height: number
+  compositions: CompositionData[]
 }
 
 export type WorkerRequest =
-    | { type: 'init'; wasmUrl: string }
-    | { type: 'loadPgs'; data: ArrayBuffer }
-    | { type: 'loadVobSub'; idxContent: string; subData: ArrayBuffer }
-    | { type: 'loadVobSubOnly'; subData: ArrayBuffer }
-    | { type: 'renderPgsAtIndex'; index: number }
-    | { type: 'renderVobSubAtIndex'; index: number }
-    | { type: 'getPgsTimestamps' }
-    | { type: 'getVobSubTimestamps' }
-    | { type: 'clearPgsCache' }
-    | { type: 'clearVobSubCache' }
-    | { type: 'disposePgs' }
-    | { type: 'disposeVobSub' };
+  | { type: 'init'; wasmUrl: string }
+  | { type: 'loadPgs'; data: ArrayBuffer }
+  | { type: 'loadVobSub'; idxContent: string; subData: ArrayBuffer }
+  | { type: 'loadVobSubOnly'; subData: ArrayBuffer }
+  | { type: 'renderPgsAtIndex'; index: number }
+  | { type: 'renderVobSubAtIndex'; index: number }
+  | { type: 'getPgsTimestamps' }
+  | { type: 'getVobSubTimestamps' }
+  | { type: 'clearPgsCache' }
+  | { type: 'clearVobSubCache' }
+  | { type: 'disposePgs' }
+  | { type: 'disposeVobSub' }
 
 export type WorkerResponse =
-    | { type: 'initComplete'; success: boolean; error?: string }
-    | { type: 'pgsLoaded'; count: number; byteLength: number }
-    | { type: 'vobSubLoaded'; count: number }
-    | { type: 'pgsFrame'; frame: FrameData | null }
-    | { type: 'vobSubFrame'; frame: FrameData | null }
-    | { type: 'pgsTimestamps'; timestamps: Float64Array }
-    | { type: 'vobSubTimestamps'; timestamps: Float64Array }
-    | { type: 'cleared' }
-    | { type: 'disposed' }
-    | { type: 'error'; message: string };
+  | { type: 'initComplete'; success: boolean; error?: string }
+  | { type: 'pgsLoaded'; count: number; byteLength: number }
+  | { type: 'vobSubLoaded'; count: number }
+  | { type: 'pgsFrame'; frame: FrameData | null }
+  | { type: 'vobSubFrame'; frame: FrameData | null }
+  | { type: 'pgsTimestamps'; timestamps: Float64Array }
+  | { type: 'vobSubTimestamps'; timestamps: Float64Array }
+  | { type: 'cleared' }
+  | { type: 'disposed' }
+  | { type: 'error'; message: string }
 
 /** Shared worker state for video renderers. */
 export interface WorkerRendererState {
-    useWorker: boolean;
-    workerReady: boolean;
-    timestamps: Float64Array;
-    frameCache: Map<number, SubtitleData | null>;
-    pendingRenders: Map<number, Promise<SubtitleData | null>>;
+  useWorker: boolean
+  workerReady: boolean
+  timestamps: Float64Array
+  frameCache: Map<number, SubtitleData | null>
+  pendingRenders: Map<number, Promise<SubtitleData | null>>
 }

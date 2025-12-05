@@ -3,26 +3,29 @@
  * Handles off-main-thread subtitle parsing and rendering.
  */
 
-import type { WorkerRequest, WorkerResponse } from './types';
-import { getWasmUrl } from './wasm';
+import type { WorkerRequest, WorkerResponse } from './types'
+import { getWasmUrl } from './wasm'
 
-let sharedWorker: Worker | null = null;
-let workerInitPromise: Promise<Worker> | null = null;
-let messageId = 0;
+let sharedWorker: Worker | null = null
+let workerInitPromise: Promise<Worker> | null = null
+let messageId = 0
 
-const pendingCallbacks = new Map<number, { 
-    resolve: (response: WorkerResponse) => void; 
-    reject: (error: Error) => void;
-}>();
+const pendingCallbacks = new Map<
+  number,
+  {
+    resolve: (response: WorkerResponse) => void
+    reject: (error: Error) => void
+  }
+>()
 
 /** Check if Web Workers are available. */
 export function isWorkerAvailable(): boolean {
-    return typeof Worker !== 'undefined' && typeof window !== 'undefined' && typeof Blob !== 'undefined';
+  return typeof Worker !== 'undefined' && typeof window !== 'undefined' && typeof Blob !== 'undefined'
 }
 
 /** Create inline worker script with embedded WASM loader. */
 function createWorkerScript(): string {
-    return `
+  return `
 let wasmModule = null;
 let pgsParser = null;
 let vobSubParser = null;
@@ -275,102 +278,102 @@ self.onmessage = async function(event) {
     } catch (error) {
         postResponse({ type: 'error', message: error instanceof Error ? error.message : String(error) }, [], _id);
     }
-};`;
+};`
 }
 
 /** Create or get the shared worker instance. */
 export function getOrCreateWorker(): Promise<Worker> {
-    if (sharedWorker) return Promise.resolve(sharedWorker);
-    if (workerInitPromise) return workerInitPromise;
-    
-    workerInitPromise = new Promise((resolve, reject) => {
-        try {
-            console.log('[libbitsub] Creating worker...');
-            const blob = new Blob([createWorkerScript()], { type: 'application/javascript' });
-            const workerUrl = URL.createObjectURL(blob);
-            const worker = new Worker(workerUrl, { type: 'module' });
-            
-            worker.onmessage = (event: MessageEvent<WorkerResponse & { _id?: number }>) => {
-                const { _id, ...response } = event.data;
-                if (_id !== undefined) {
-                    const callback = pendingCallbacks.get(_id);
-                    if (callback) {
-                        pendingCallbacks.delete(_id);
-                        callback.resolve(response as WorkerResponse);
-                    }
-                }
-            };
-            
-            worker.onerror = (error) => {
-                console.error('[libbitsub] Worker error:', error);
-                if (workerInitPromise) {
-                    workerInitPromise = null;
-                    reject(error);
-                }
-            };
-            
-            sharedWorker = worker;
-            
-            const wasmUrl = getWasmUrl();
-            console.log('[libbitsub] Initializing worker with WASM URL:', wasmUrl);
-            
-            sendToWorker({ type: 'init', wasmUrl })
-                .then(() => { 
-                    console.log('[libbitsub] Worker initialized successfully');
-                    URL.revokeObjectURL(workerUrl); 
-                    resolve(worker); 
-                })
-                .catch((err) => { 
-                    console.error('[libbitsub] Worker initialization failed:', err);
-                    URL.revokeObjectURL(workerUrl); 
-                    sharedWorker = null; 
-                    workerInitPromise = null; 
-                    reject(err); 
-                });
-        } catch (error) {
-            console.error('[libbitsub] Failed to create worker:', error);
-            workerInitPromise = null;
-            reject(error);
+  if (sharedWorker) return Promise.resolve(sharedWorker)
+  if (workerInitPromise) return workerInitPromise
+
+  workerInitPromise = new Promise((resolve, reject) => {
+    try {
+      console.log('[libbitsub] Creating worker...')
+      const blob = new Blob([createWorkerScript()], { type: 'application/javascript' })
+      const workerUrl = URL.createObjectURL(blob)
+      const worker = new Worker(workerUrl, { type: 'module' })
+
+      worker.onmessage = (event: MessageEvent<WorkerResponse & { _id?: number }>) => {
+        const { _id, ...response } = event.data
+        if (_id !== undefined) {
+          const callback = pendingCallbacks.get(_id)
+          if (callback) {
+            pendingCallbacks.delete(_id)
+            callback.resolve(response as WorkerResponse)
+          }
         }
-    });
-    
-    return workerInitPromise;
+      }
+
+      worker.onerror = (error) => {
+        console.error('[libbitsub] Worker error:', error)
+        if (workerInitPromise) {
+          workerInitPromise = null
+          reject(error)
+        }
+      }
+
+      sharedWorker = worker
+
+      const wasmUrl = getWasmUrl()
+      console.log('[libbitsub] Initializing worker with WASM URL:', wasmUrl)
+
+      sendToWorker({ type: 'init', wasmUrl })
+        .then(() => {
+          console.log('[libbitsub] Worker initialized successfully')
+          URL.revokeObjectURL(workerUrl)
+          resolve(worker)
+        })
+        .catch((err) => {
+          console.error('[libbitsub] Worker initialization failed:', err)
+          URL.revokeObjectURL(workerUrl)
+          sharedWorker = null
+          workerInitPromise = null
+          reject(err)
+        })
+    } catch (error) {
+      console.error('[libbitsub] Failed to create worker:', error)
+      workerInitPromise = null
+      reject(error)
+    }
+  })
+
+  return workerInitPromise
 }
 
 /** Default timeout for worker operations (30 seconds for large files) */
-const WORKER_TIMEOUT = 30000;
+const WORKER_TIMEOUT = 30000
 
 /** Send a message to the worker with timeout support. */
 export function sendToWorker(request: WorkerRequest, timeout = WORKER_TIMEOUT): Promise<WorkerResponse> {
-    return new Promise((resolve, reject) => {
-        if (!sharedWorker) {
-            reject(new Error('Worker not initialized'));
-            return;
-        }
-        
-        const id = ++messageId;
-        
-        // Set up timeout
-        const timeoutId = setTimeout(() => {
-            pendingCallbacks.delete(id);
-            reject(new Error(`Worker operation timed out after ${timeout}ms`));
-        }, timeout);
-        
-        pendingCallbacks.set(id, { 
-            resolve: (response) => {
-                clearTimeout(timeoutId);
-                resolve(response);
-            }, 
-            reject: (error) => {
-                clearTimeout(timeoutId);
-                reject(error);
-            }
-        });
-        
-        const transfers: Transferable[] = [];
-        if ('data' in request && request.data instanceof ArrayBuffer) transfers.push(request.data);
-        if ('subData' in request && request.subData instanceof ArrayBuffer) transfers.push(request.subData);
-        
-        sharedWorker.postMessage({ ...request, _id: id }, transfers);
-    });
+  return new Promise((resolve, reject) => {
+    if (!sharedWorker) {
+      reject(new Error('Worker not initialized'))
+      return
+    }
+
+    const id = ++messageId
+
+    // Set up timeout
+    const timeoutId = setTimeout(() => {
+      pendingCallbacks.delete(id)
+      reject(new Error(`Worker operation timed out after ${timeout}ms`))
+    }, timeout)
+
+    pendingCallbacks.set(id, {
+      resolve: (response) => {
+        clearTimeout(timeoutId)
+        resolve(response)
+      },
+      reject: (error) => {
+        clearTimeout(timeoutId)
+        reject(error)
+      }
+    })
+
+    const transfers: Transferable[] = []
+    if ('data' in request && request.data instanceof ArrayBuffer) transfers.push(request.data)
+    if ('subData' in request && request.subData instanceof ArrayBuffer) transfers.push(request.subData)
+
+    sharedWorker.postMessage({ ...request, _id: id }, transfers)
+  })
 }
