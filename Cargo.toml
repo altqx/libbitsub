@@ -1,11 +1,11 @@
 [package]
 name = "libbitsub"
-version = "0.0.1"
+version = "0.1.0"
 edition = "2024"
 authors = ["altqx"]
 license = "GPL-3.0"
 description = "High-performance WASM renderer for graphical subtitles (PGS and VobSub)"
-repository = "https://github.com/altqx/akari"
+repository = "https://github.com/altqx/libbitsub"
 keywords = ["pgs", "vobsub", "subtitle", "wasm", "rendering"]
 
 [lib]
