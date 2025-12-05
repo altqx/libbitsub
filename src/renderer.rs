@@ -110,13 +110,13 @@ impl SubtitleRenderer {
 
     /// Find the subtitle index for a given timestamp in milliseconds.
     #[wasm_bindgen(js_name = findIndexAtTimestamp)]
-    pub fn find_index_at_timestamp(&self, time_ms: f64) -> i32 {
+    pub fn find_index_at_timestamp(&mut self, time_ms: f64) -> i32 {
         match self.format {
             Some(SubtitleFormat::Pgs) => {
                 self.pgs_parser.as_ref().map_or(-1, |p| p.find_index_at_timestamp(time_ms))
             }
             Some(SubtitleFormat::VobSub) => {
-                self.vobsub_parser.as_ref().map_or(-1, |p| p.find_index_at_timestamp(time_ms))
+                self.vobsub_parser.as_mut().map_or(-1, |p| p.find_index_at_timestamp(time_ms))
             }
             None => -1,
         }

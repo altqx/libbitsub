@@ -122,17 +122,33 @@ impl VobSubParser {
     }
 
     /// Find the subtitle index for a given timestamp in milliseconds.
+    /// Returns -1 if no subtitle should be displayed at this time.
     #[wasm_bindgen(js_name = findIndexAtTimestamp)]
-    pub fn find_index_at_timestamp(&self, time_ms: f64) -> i32 {
+    pub fn find_index_at_timestamp(&mut self, time_ms: f64) -> i32 {
         if self.timestamps_ms.is_empty() {
             return -1;
         }
-        binary_search_timestamp(&self.timestamps_ms, time_ms as u32) as i32
+        
+        let time_ms_u32 = time_ms as u32;
+        let index = binary_search_timestamp(&self.timestamps_ms, time_ms_u32);
+        
+        // Now check if we're still within the duration of this subtitle
+        // We need to get the packet to check its duration
+        if let Some(packet) = self.get_or_parse_packet(index) {
+            let start_time = packet.timestamp_ms;
+            let end_time = start_time.saturating_add(packet.duration_ms);
+            
+            if time_ms_u32 >= start_time && time_ms_u32 < end_time {
+                return index as i32;
+            }
+        }
+        
+        // Current time is past the subtitle's duration, don't display anything
+        -1
     }
-
-    /// Render subtitle at the given index and return RGBA data.
-    #[wasm_bindgen(js_name = renderAtIndex)]
-    pub fn render_at_index(&mut self, index: usize) -> Option<VobSubFrame> {
+    
+    /// Get a packet from cache or parse it.
+    fn get_or_parse_packet(&mut self, index: usize) -> Option<SubtitlePacket> {
         let idx_data = self.idx_data.as_ref()?;
         let sub_data = self.sub_data.as_ref()?;
         
@@ -140,11 +156,9 @@ impl VobSubParser {
             return None;
         }
 
-        // Check cache
+        // Check cache first
         if let Some(cached) = self.packet_cache.get(&index) {
-            return cached.as_ref().map(|packet| {
-                self.render_packet(packet, &idx_data.palette, &idx_data.metadata)
-            });
+            return cached.clone();
         }
 
         // Parse packet at file position
@@ -155,7 +169,16 @@ impl VobSubParser {
         // Cache result
         self.packet_cache.insert(index, packet.clone());
 
-        packet.as_ref().map(|p| self.render_packet(p, &idx_data.palette, &idx_data.metadata))
+        packet
+    }
+
+    /// Render subtitle at the given index and return RGBA data.
+    #[wasm_bindgen(js_name = renderAtIndex)]
+    pub fn render_at_index(&mut self, index: usize) -> Option<VobSubFrame> {
+        let packet = self.get_or_parse_packet(index)?;
+        let idx_data = self.idx_data.as_ref()?;
+        
+        Some(self.render_packet(&packet, &idx_data.palette, &idx_data.metadata))
     }
 
     /// Render a packet to a frame.

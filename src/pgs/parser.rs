@@ -24,6 +24,8 @@ pub struct PgsParser {
     timestamps_ms: Vec<u32>,
     /// Cache for decoded indexed pixels (before palette application)
     indexed_cache: HashMap<(u16, u8), DecodedBitmap>,
+    /// Last rendered boundary index (for cache invalidation)
+    last_boundary_index: Option<usize>,
 }
 
 /// Cached decoded bitmap (indexed pixels, before palette)
@@ -42,6 +44,7 @@ impl PgsParser {
             display_sets: Vec::new(),
             timestamps_ms: Vec::new(),
             indexed_cache: HashMap::new(),
+            last_boundary_index: None,
         }
     }
 
@@ -52,6 +55,7 @@ impl PgsParser {
         self.display_sets.clear();
         self.timestamps_ms.clear();
         self.indexed_cache.clear();
+        self.last_boundary_index = None;
 
         let mut offset = 0;
         let len = data.len();
@@ -112,19 +116,26 @@ impl PgsParser {
         // Find boundary (epoch start or acquisition point) for context building
         let boundary_index = self.find_boundary_index(index);
         
-        // Build context from boundary to current index
-        let context = self.build_context(boundary_index, index);
+        // Clear cache if we moved to a different epoch/boundary
+        if self.last_boundary_index != Some(boundary_index) {
+            self.indexed_cache.clear();
+            self.last_boundary_index = Some(boundary_index);
+        }
         
         // Get current display set
         let ds = &self.display_sets[index];
         let composition = ds.composition.as_ref()?;
 
+        // Empty composition_objects means clear the screen
         if composition.composition_objects.is_empty() {
             return None;
         }
 
         let width = composition.width;
         let height = composition.height;
+
+        // Build context from boundary to current index
+        let context = self.build_context(boundary_index, index);
 
         // Find the palette to use
         let palette = context.palettes.get(&composition.palette_id)?;
@@ -134,10 +145,13 @@ impl PgsParser {
 
         for comp_obj in &composition.composition_objects {
             // Get assembled object
-            let obj = context.objects.get(&comp_obj.object_id)?;
+            let obj = match context.objects.get(&comp_obj.object_id) {
+                Some(o) => o,
+                None => continue, // Skip if object not found (incomplete data)
+            };
             
-            // Find window (used for validation, not positioning)
-            let _window = context.windows.get(&comp_obj.window_id)?;
+            // Window lookup is optional - don't fail if not found
+            let _window = context.windows.get(&comp_obj.window_id);
 
             // Decode or get cached indexed pixels
             let cache_key = (obj.id, obj.version);
@@ -188,6 +202,7 @@ impl PgsParser {
     #[wasm_bindgen(js_name = clearCache)]
     pub fn clear_cache(&mut self) {
         self.indexed_cache.clear();
+        self.last_boundary_index = None;
     }
 
     /// Find the boundary index (epoch start or acquisition point) before the given index.
@@ -209,15 +224,21 @@ impl PgsParser {
         for i in boundary_index..=target_index {
             let ds = &self.display_sets[i];
 
-            // Accumulate objects
+            // Process objects - need to handle multi-segment objects correctly
             for obj in &ds.objects {
-                let objects = context.object_parts
-                    .entry(obj.id)
-                    .or_insert_with(Vec::new);
-                objects.push(obj.clone());
+                if obj.is_first_in_sequence() {
+                    // New object definition - clear any existing parts for this ID
+                    context.object_parts.insert(obj.id, vec![obj.clone()]);
+                } else {
+                    // Continuation segment - append to existing
+                    if let Some(parts) = context.object_parts.get_mut(&obj.id) {
+                        parts.push(obj.clone());
+                    }
+                    // If no first segment exists, ignore this continuation
+                }
             }
 
-            // Latest palette wins
+            // Latest palette wins (by ID and version)
             for palette in &ds.palettes {
                 context.palettes.insert(palette.id, palette.clone());
             }

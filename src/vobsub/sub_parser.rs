@@ -38,13 +38,16 @@ pub fn parse_subtitle_packet(
     let mut offset = start_offset;
     let data_len = data.len();
     
+    // Safety: limit how far we scan for a single packet (256KB should be more than enough)
+    let max_scan = (start_offset + 262144).min(data_len);
+    
     let mut pts: u32 = 0;
     let mut data_chunks: Vec<Vec<u8>> = Vec::new();
     let mut expected_size: usize = 0;
     let mut collected_size: usize = 0;
 
     // Look for MPEG-2 PS headers and collect all packets
-    while offset < data_len.saturating_sub(4) {
+    while offset < max_scan.saturating_sub(4) {
         // Check for start code prefix (00 00 01)
         if data[offset] != 0x00 || data[offset + 1] != 0x00 || data[offset + 2] != 0x01 {
             offset += 1;
@@ -217,8 +220,12 @@ fn parse_subtitle_data(data: &[u8], pts: u32) -> Option<SubtitlePacket> {
     let mut bottom_field_offset: usize = 0;
 
     let mut ctrl_offset = packet_start + dcsq_offset;
+    let mut iterations = 0;
+    const MAX_ITERATIONS: usize = 1000;  // Safety limit
 
-    while ctrl_offset < end_offset {
+    while ctrl_offset < end_offset && iterations < MAX_ITERATIONS {
+        iterations += 1;
+        
         // Each control sequence block starts with a delay value (2 bytes)
         if ctrl_offset + 4 > end_offset {
             break;
@@ -294,12 +301,13 @@ fn parse_subtitle_data(data: &[u8], pts: u32) -> Option<SubtitlePacket> {
             }
         }
 
-        // Check if this is the last control block
-        if next_ctrl_offset <= dcsq_offset {
+        // Check if this is the last control block or if we're not making progress
+        let new_ctrl_offset = packet_start + next_ctrl_offset;
+        if next_ctrl_offset <= dcsq_offset || new_ctrl_offset <= ctrl_offset {
             break;
         }
 
-        ctrl_offset = packet_start + next_ctrl_offset;
+        ctrl_offset = new_ctrl_offset;
     }
 
     // Calculate field data positions

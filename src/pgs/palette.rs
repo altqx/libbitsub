@@ -29,12 +29,13 @@ impl PaletteDefinitionSegment {
         for _ in 0..entry_count {
             let entry_id = reader.read_u8()? as usize;
             let y = reader.read_u8()?;
-            let cr = reader.read_u8()?;
+            let cr = reader.read_u8()?;  // PGS stores Cr before Cb
             let cb = reader.read_u8()?;
             let a = reader.read_u8()?;
 
             // Convert YCbCr to RGBA and store at entry index
-            // Note: PGS stores as Y, Cr, Cb but ycbcr_to_rgba expects y, cb, cr
+            // PGS palette order is: Y, Cr, Cb, A
+            // ycbcr_to_rgba expects: y, cb, cr, a
             if entry_id < 256 {
                 rgba[entry_id] = ycbcr_to_rgba(y, cb, cr, a);
             }

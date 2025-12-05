@@ -22,6 +22,7 @@ let wasmInitPromise: Promise<void> | null = null;
 
 /**
  * Initialize the WASM module. Must be called before using any rendering functions.
+ * Can be called early to pre-load the WASM module before it's needed.
  */
 export async function initWasm(): Promise<void> {
     if (wasmModule) return;
@@ -35,6 +36,14 @@ export async function initWasm(): Promise<void> {
     })();
     
     return wasmInitPromise;
+}
+
+// Pre-initialize WASM module on first import (non-blocking)
+if (typeof window !== 'undefined') {
+    // Defer initialization to avoid blocking initial page load
+    setTimeout(() => {
+        initWasm().catch(err => console.warn('[libbitsub] WASM pre-init failed:', err));
+    }, 100);
 }
 
 /**
@@ -526,6 +535,7 @@ abstract class BaseVideoSubtitleRenderer {
     protected ctx: CanvasRenderingContext2D | null = null;
     protected animationFrameId: number | null = null;
     protected isLoaded: boolean = false;
+    protected lastRenderedIndex: number = -1;
     protected lastRenderedTime: number = -1;
     protected disposed: boolean = false;
     protected resizeObserver: ResizeObserver | null = null;
@@ -533,6 +543,13 @@ abstract class BaseVideoSubtitleRenderer {
     constructor(options: VideoSubtitleOptions) {
         this.video = options.video;
         this.subUrl = options.subUrl;
+        // Note: Subclasses must call this.init() after setting their own properties
+    }
+    
+    /**
+     * Start initialization. Subclasses should call this after setting their properties.
+     */
+    protected startInit(): void {
         this.init();
     }
 
@@ -542,6 +559,8 @@ abstract class BaseVideoSubtitleRenderer {
     protected async init(): Promise<void> {
         await initWasm();
         this.createCanvas();
+        // Yield to main thread before heavy parsing work
+        await new Promise(resolve => setTimeout(resolve, 0));
         await this.loadSubtitles();
         this.startRenderLoop();
     }
@@ -581,8 +600,17 @@ abstract class BaseVideoSubtitleRenderer {
         
         // Re-render on seek
         this.video.addEventListener('seeked', () => {
+            this.lastRenderedIndex = -1;
             this.lastRenderedTime = -1;
+            this.onSeek();
         });
+    }
+    
+    /**
+     * Called when video seeks. Subclasses can override to clear caches.
+     */
+    protected onSeek(): void {
+        // Override in subclasses if needed
     }
 
     /**
@@ -600,6 +628,7 @@ abstract class BaseVideoSubtitleRenderer {
         this.canvas.height = height * window.devicePixelRatio;
         
         // Clear and re-render on resize
+        this.lastRenderedIndex = -1;
         this.lastRenderedTime = -1;
     }
 
@@ -622,11 +651,20 @@ abstract class BaseVideoSubtitleRenderer {
             
             if (this.isLoaded) {
                 const currentTime = this.video.currentTime;
+                const currentIndex = this.findCurrentIndex(currentTime);
                 
-                // Re-render if time has changed significantly OR if we haven't rendered yet
-                // Also render when paused so subtitles are visible
-                if (Math.abs(currentTime - this.lastRenderedTime) > 0.01 || this.lastRenderedTime < 0) {
-                    this.renderFrame(currentTime);
+                // Re-render if:
+                // 1. Display set index changed (new subtitle to show)
+                // 2. First render (lastRenderedIndex < 0)
+                // 3. Time jumped backwards (seeking)
+                const shouldRender = 
+                    currentIndex !== this.lastRenderedIndex ||
+                    this.lastRenderedIndex < 0 ||
+                    currentTime < this.lastRenderedTime - 0.5;
+                
+                if (shouldRender) {
+                    this.renderFrame(currentTime, currentIndex);
+                    this.lastRenderedIndex = currentIndex;
                     this.lastRenderedTime = currentTime;
                 }
             }
@@ -636,17 +674,26 @@ abstract class BaseVideoSubtitleRenderer {
         
         this.animationFrameId = requestAnimationFrame(render);
     }
+    
+    /**
+     * Find the current subtitle index for the given time.
+     * Must be implemented by subclasses.
+     */
+    protected abstract findCurrentIndex(time: number): number;
 
     /**
      * Render a subtitle frame to the canvas.
      */
-    protected renderFrame(time: number): void {
+    protected renderFrame(time: number, index: number): void {
         if (!this.ctx || !this.canvas) return;
         
         // Clear canvas
         this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
         
-        const data = this.renderAtTime(time);
+        // If index is -1, there's no subtitle at this time
+        if (index < 0) return;
+        
+        const data = this.renderAtIndex(index);
         if (!data || data.compositionData.length === 0) return;
         
         // Calculate scale to fit subtitle to canvas
@@ -654,8 +701,8 @@ abstract class BaseVideoSubtitleRenderer {
         const scaleY = this.canvas.height / data.height;
         
         // Log first render for debugging
-        if (this.lastRenderedTime < 0) {
-            console.log(`[libbitsub] First render at ${time}s:`, {
+        if (this.lastRenderedIndex < 0) {
+            console.log(`[libbitsub] First render at ${time}s (index ${index}):`, {
                 canvasSize: { w: this.canvas.width, h: this.canvas.height },
                 subtitleSize: { w: data.width, h: data.height },
                 compositionCount: data.compositionData.length,
@@ -683,6 +730,11 @@ abstract class BaseVideoSubtitleRenderer {
             this.ctx.drawImage(tempCanvas, destX, destY, destWidth, destHeight);
         }
     }
+    
+    /**
+     * Render subtitle at the given index. Must be implemented by subclasses.
+     */
+    protected abstract renderAtIndex(index: number): SubtitleData | undefined;
 
     /**
      * Dispose of all resources.
@@ -729,16 +781,21 @@ export class PgsRenderer extends BaseVideoSubtitleRenderer {
 
     constructor(options: VideoSubtitleOptions) {
         super(options);
+        this.startInit();  // PgsRenderer has no extra properties, so init immediately
     }
 
     protected async loadSubtitles(): Promise<void> {
         try {
-            this.pgsParser = new PgsParser();
             const response = await fetch(this.subUrl);
             if (!response.ok) {
                 throw new Error(`Failed to fetch subtitle: ${response.status}`);
             }
             const data = new Uint8Array(await response.arrayBuffer());
+            
+            // Yield to main thread before heavy WASM parsing
+            await new Promise(resolve => setTimeout(resolve, 0));
+            
+            this.pgsParser = new PgsParser();
             const count = this.pgsParser.load(data);
             this.isLoaded = true;
             console.log(`[libbitsub] PGS loaded: ${count} display sets from ${data.byteLength} bytes`);
@@ -749,6 +806,19 @@ export class PgsRenderer extends BaseVideoSubtitleRenderer {
 
     protected renderAtTime(time: number): SubtitleData | undefined {
         return this.pgsParser?.renderAtTimestamp(time);
+    }
+    
+    protected findCurrentIndex(time: number): number {
+        return this.pgsParser?.findIndexAtTimestamp(time) ?? -1;
+    }
+    
+    protected renderAtIndex(index: number): SubtitleData | undefined {
+        return this.pgsParser?.renderAtIndex(index);
+    }
+    
+    protected onSeek(): void {
+        // Clear cache on seek to ensure proper context rebuilding
+        this.pgsParser?.clearCache();
     }
 
     dispose(): void {
@@ -782,11 +852,13 @@ export class VobSubRenderer extends BaseVideoSubtitleRenderer {
     constructor(options: VideoVobSubOptions) {
         super(options);
         this.idxUrl = options.idxUrl || options.subUrl.replace(/\.sub$/i, '.idx');
+        this.startInit();  // Start init after idxUrl is set
     }
 
     protected async loadSubtitles(): Promise<void> {
         try {
-            this.vobsubParser = new VobSubParserLowLevel();
+            console.log(`[libbitsub] Loading VobSub: ${this.subUrl}, ${this.idxUrl}`);
+            
             const [subResponse, idxResponse] = await Promise.all([
                 fetch(this.subUrl),
                 fetch(this.idxUrl),
@@ -801,8 +873,15 @@ export class VobSubRenderer extends BaseVideoSubtitleRenderer {
 
             const subData = new Uint8Array(await subResponse.arrayBuffer());
             const idxData = await idxResponse.text();
+            
+            console.log(`[libbitsub] VobSub files loaded: .sub=${subData.byteLength} bytes, .idx=${idxData.length} chars`);
 
+            // Yield to main thread before heavy WASM parsing
+            await new Promise(resolve => setTimeout(resolve, 0));
+
+            this.vobsubParser = new VobSubParserLowLevel();
             this.vobsubParser.loadFromData(idxData, subData);
+            console.log(`[libbitsub] VobSub loaded: ${this.vobsubParser.count} subtitle entries`);
             this.isLoaded = true;
         } catch (error) {
             console.error('Failed to load VobSub subtitles:', error);
@@ -811,6 +890,14 @@ export class VobSubRenderer extends BaseVideoSubtitleRenderer {
 
     protected renderAtTime(time: number): SubtitleData | undefined {
         return this.vobsubParser?.renderAtTimestamp(time);
+    }
+    
+    protected findCurrentIndex(time: number): number {
+        return this.vobsubParser?.findIndexAtTimestamp(time) ?? -1;
+    }
+    
+    protected renderAtIndex(index: number): SubtitleData | undefined {
+        return this.vobsubParser?.renderAtIndex(index);
     }
 
     dispose(): void {
