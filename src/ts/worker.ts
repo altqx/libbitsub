@@ -20,21 +20,165 @@ export function isWorkerAvailable(): boolean {
     return typeof Worker !== 'undefined' && typeof window !== 'undefined' && typeof Blob !== 'undefined';
 }
 
-/** Create inline worker script. */
+/** Create inline worker script with embedded WASM loader. */
 function createWorkerScript(): string {
     return `
 let wasmModule = null;
 let pgsParser = null;
 let vobSubParser = null;
 
+// Minimal WASM bindings (inlined from wasm-bindgen output)
+let wasm;
+let cachedUint8Memory = null;
+let cachedInt32Memory = null;
+let cachedFloat64Memory = null;
+let WASM_VECTOR_LEN = 0;
+let cachedTextEncoder = new TextEncoder();
+let cachedTextDecoder = new TextDecoder('utf-8', { ignoreBOM: true, fatal: true });
+
+function getUint8Memory() {
+    if (cachedUint8Memory === null || cachedUint8Memory.byteLength === 0) {
+        cachedUint8Memory = new Uint8Array(wasm.memory.buffer);
+    }
+    return cachedUint8Memory;
+}
+
+function getInt32Memory() {
+    if (cachedInt32Memory === null || cachedInt32Memory.byteLength === 0) {
+        cachedInt32Memory = new Int32Array(wasm.memory.buffer);
+    }
+    return cachedInt32Memory;
+}
+
+function getFloat64Memory() {
+    if (cachedFloat64Memory === null || cachedFloat64Memory.byteLength === 0) {
+        cachedFloat64Memory = new Float64Array(wasm.memory.buffer);
+    }
+    return cachedFloat64Memory;
+}
+
+function passArray8ToWasm(arg) {
+    const ptr = wasm.__wbindgen_malloc(arg.length);
+    getUint8Memory().set(arg, ptr);
+    WASM_VECTOR_LEN = arg.length;
+    return ptr;
+}
+
+const encodeString = (typeof cachedTextEncoder.encodeInto === 'function'
+    ? function (arg, view) {
+        return cachedTextEncoder.encodeInto(arg, view);
+    }
+    : function (arg, view) {
+        const buf = cachedTextEncoder.encode(arg);
+        view.set(buf);
+        return { read: arg.length, written: buf.length };
+    });
+
+function passStringToWasm(arg) {
+    let len = arg.length;
+    let ptr = wasm.__wbindgen_malloc(len);
+    const mem = getUint8Memory();
+    let offset = 0;
+    for (; offset < len; offset++) {
+        const code = arg.charCodeAt(offset);
+        if (code > 0x7F) break;
+        mem[ptr + offset] = code;
+    }
+    if (offset !== len) {
+        if (offset !== 0) arg = arg.slice(offset);
+        ptr = wasm.__wbindgen_realloc(ptr, len, len = offset + arg.length * 3);
+        const view = getUint8Memory().subarray(ptr + offset, ptr + len);
+        const ret = encodeString(arg, view);
+        offset += ret.written;
+    }
+    WASM_VECTOR_LEN = offset;
+    return ptr;
+}
+
+function getStringFromWasm(ptr, len) {
+    return cachedTextDecoder.decode(getUint8Memory().subarray(ptr, ptr + len));
+}
+
 async function initWasm(wasmUrl) {
-    if (wasmModule) return;
+    if (wasm) return;
+    
+    console.log('[libbitsub worker] Fetching WASM from:', wasmUrl);
     const response = await fetch(wasmUrl);
-    const wasmBytes = await response.arrayBuffer();
-    const jsGlueUrl = wasmUrl.replace('.wasm', '.js');
-    const mod = await import(jsGlueUrl);
-    await mod.default(wasmBytes);
-    wasmModule = mod;
+    if (!response.ok) {
+        throw new Error('Failed to fetch WASM: ' + response.status);
+    }
+    
+    // Try to load the JS glue file
+    const jsGlueUrl = wasmUrl.replace('_bg.wasm', '.js').replace('.wasm', '.js');
+    console.log('[libbitsub worker] Loading JS glue from:', jsGlueUrl);
+    
+    try {
+        const mod = await import(/* webpackIgnore: true */ jsGlueUrl);
+        const wasmBytes = await response.arrayBuffer();
+        await mod.default(wasmBytes);
+        wasmModule = mod;
+        wasm = mod.__wasm || mod;
+        console.log('[libbitsub worker] WASM initialized via JS glue');
+    } catch (jsError) {
+        console.warn('[libbitsub worker] JS glue import failed, using direct instantiation:', jsError.message);
+        
+        // Fallback: direct WASM instantiation (limited functionality)
+        const wasmBytes = await response.arrayBuffer();
+        const result = await WebAssembly.instantiate(wasmBytes, {
+            __wbindgen_placeholder__: {
+                __wbindgen_throw: function(ptr, len) {
+                    throw new Error(getStringFromWasm(ptr, len));
+                }
+            }
+        });
+        wasm = result.instance.exports;
+        
+        // Create minimal module interface
+        wasmModule = {
+            PgsParser: class {
+                constructor() { this.ptr = wasm.pgsparser_new(); }
+                parse(data) {
+                    const ptr = passArray8ToWasm(data);
+                    return wasm.pgsparser_parse(this.ptr, ptr, WASM_VECTOR_LEN);
+                }
+                getTimestamps() {
+                    wasm.pgsparser_get_timestamps(8, this.ptr);
+                    const r0 = getInt32Memory()[8 / 4 + 0];
+                    const r1 = getInt32Memory()[8 / 4 + 1];
+                    return new Float64Array(getFloat64Memory().buffer, r0, r1);
+                }
+                renderAtIndex(idx) { return wasm.pgsparser_render_at_index(this.ptr, idx); }
+                findIndexAtTimestamp(ts) { return wasm.pgsparser_find_index_at_timestamp(this.ptr, ts); }
+                clearCache() { wasm.pgsparser_clear_cache(this.ptr); }
+                free() { wasm.pgsparser_free(this.ptr); }
+                get count() { return wasm.pgsparser_count(this.ptr); }
+            },
+            VobSubParser: class {
+                constructor() { this.ptr = wasm.vobsubparser_new(); }
+                loadFromData(idx, sub) {
+                    const idxPtr = passStringToWasm(idx);
+                    const subPtr = passArray8ToWasm(sub);
+                    wasm.vobsubparser_load_from_data(this.ptr, idxPtr, WASM_VECTOR_LEN, subPtr, sub.length);
+                }
+                loadFromSubOnly(sub) {
+                    const ptr = passArray8ToWasm(sub);
+                    wasm.vobsubparser_load_from_sub_only(this.ptr, ptr, WASM_VECTOR_LEN);
+                }
+                getTimestamps() {
+                    wasm.vobsubparser_get_timestamps(8, this.ptr);
+                    const r0 = getInt32Memory()[8 / 4 + 0];
+                    const r1 = getInt32Memory()[8 / 4 + 1];
+                    return new Float64Array(getFloat64Memory().buffer, r0, r1);
+                }
+                renderAtIndex(idx) { return wasm.vobsubparser_render_at_index(this.ptr, idx); }
+                findIndexAtTimestamp(ts) { return wasm.vobsubparser_find_index_at_timestamp(this.ptr, ts); }
+                clearCache() { wasm.vobsubparser_clear_cache(this.ptr); }
+                free() { wasm.vobsubparser_free(this.ptr); }
+                get count() { return wasm.vobsubparser_count(this.ptr); }
+            }
+        };
+        console.log('[libbitsub worker] WASM initialized via direct instantiation');
+    }
 }
 
 function convertFrame(frame, isVobSub) {
@@ -141,6 +285,7 @@ export function getOrCreateWorker(): Promise<Worker> {
     
     workerInitPromise = new Promise((resolve, reject) => {
         try {
+            console.log('[libbitsub] Creating worker...');
             const blob = new Blob([createWorkerScript()], { type: 'application/javascript' });
             const workerUrl = URL.createObjectURL(blob);
             const worker = new Worker(workerUrl, { type: 'module' });
@@ -166,10 +311,24 @@ export function getOrCreateWorker(): Promise<Worker> {
             
             sharedWorker = worker;
             
-            sendToWorker({ type: 'init', wasmUrl: getWasmUrl() })
-                .then(() => { URL.revokeObjectURL(workerUrl); resolve(worker); })
-                .catch((err) => { URL.revokeObjectURL(workerUrl); sharedWorker = null; workerInitPromise = null; reject(err); });
+            const wasmUrl = getWasmUrl();
+            console.log('[libbitsub] Initializing worker with WASM URL:', wasmUrl);
+            
+            sendToWorker({ type: 'init', wasmUrl })
+                .then(() => { 
+                    console.log('[libbitsub] Worker initialized successfully');
+                    URL.revokeObjectURL(workerUrl); 
+                    resolve(worker); 
+                })
+                .catch((err) => { 
+                    console.error('[libbitsub] Worker initialization failed:', err);
+                    URL.revokeObjectURL(workerUrl); 
+                    sharedWorker = null; 
+                    workerInitPromise = null; 
+                    reject(err); 
+                });
         } catch (error) {
+            console.error('[libbitsub] Failed to create worker:', error);
             workerInitPromise = null;
             reject(error);
         }

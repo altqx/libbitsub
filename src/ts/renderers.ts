@@ -24,6 +24,9 @@ abstract class BaseVideoSubtitleRenderer {
     protected lastRenderedTime: number = -1;
     protected disposed: boolean = false;
     protected resizeObserver: ResizeObserver | null = null;
+    protected tempCanvas: HTMLCanvasElement | null = null;
+    protected tempCtx: CanvasRenderingContext2D | null = null;
+    protected lastRenderedData: SubtitleData | null = null;
 
     constructor(options: VideoSubtitleOptions) {
         this.video = options.video;
@@ -102,6 +105,10 @@ abstract class BaseVideoSubtitleRenderer {
 
     /** Start the render loop. */
     protected startRenderLoop(): void {
+        // Create reusable temp canvas for rendering
+        this.tempCanvas = document.createElement('canvas');
+        this.tempCtx = this.tempCanvas.getContext('2d');
+        
         const render = () => {
             if (this.disposed) return;
             
@@ -109,12 +116,8 @@ abstract class BaseVideoSubtitleRenderer {
                 const currentTime = this.video.currentTime;
                 const currentIndex = this.findCurrentIndex(currentTime);
                 
-                const shouldRender = 
-                    currentIndex !== this.lastRenderedIndex ||
-                    this.lastRenderedIndex < 0 ||
-                    currentTime < this.lastRenderedTime - 0.5;
-                
-                if (shouldRender) {
+                // Only re-render if index changed
+                if (currentIndex !== this.lastRenderedIndex) {
                     this.renderFrame(currentTime, currentIndex);
                     this.lastRenderedIndex = currentIndex;
                     this.lastRenderedTime = currentTime;
@@ -131,34 +134,43 @@ abstract class BaseVideoSubtitleRenderer {
     protected renderFrame(time: number, index: number): void {
         if (!this.ctx || !this.canvas) return;
         
-        this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
-        if (index < 0) return;
+        // Get the data for this index
+        const data = index >= 0 ? this.renderAtIndex(index) : undefined;
         
-        const data = this.renderAtIndex(index);
-        if (!data || data.compositionData.length === 0) return;
+        // If no data yet (async loading), keep showing the last rendered frame
+        if (data === undefined && this.lastRenderedData !== null && index >= 0) {
+            // Don't clear - keep showing the last frame while loading
+            return;
+        }
+        
+        // Clear canvas
+        this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+        
+        // If no subtitle at this index, we're done
+        if (index < 0 || !data || data.compositionData.length === 0) {
+            this.lastRenderedData = null;
+            return;
+        }
+        
+        // Store for potential reuse
+        this.lastRenderedData = data;
         
         const scaleX = this.canvas.width / data.width;
         const scaleY = this.canvas.height / data.height;
         
-        if (this.lastRenderedIndex < 0) {
-            console.log(`[libbitsub] First render at ${time}s (index ${index}):`, {
-                canvasSize: { w: this.canvas.width, h: this.canvas.height },
-                subtitleSize: { w: data.width, h: data.height },
-                compositionCount: data.compositionData.length,
-                scale: { x: scaleX, y: scaleY }
-            });
-        }
-        
         for (const comp of data.compositionData) {
-            const tempCanvas = document.createElement('canvas');
-            tempCanvas.width = comp.pixelData.width;
-            tempCanvas.height = comp.pixelData.height;
-            const tempCtx = tempCanvas.getContext('2d');
-            if (!tempCtx) continue;
+            if (!this.tempCanvas || !this.tempCtx) continue;
             
-            tempCtx.putImageData(comp.pixelData, 0, 0);
+            // Resize temp canvas if needed
+            if (this.tempCanvas.width !== comp.pixelData.width || 
+                this.tempCanvas.height !== comp.pixelData.height) {
+                this.tempCanvas.width = comp.pixelData.width;
+                this.tempCanvas.height = comp.pixelData.height;
+            }
+            
+            this.tempCtx.putImageData(comp.pixelData, 0, 0);
             this.ctx.drawImage(
-                tempCanvas, 
+                this.tempCanvas, 
                 comp.x * scaleX, 
                 comp.y * scaleY, 
                 comp.pixelData.width * scaleX, 
@@ -182,6 +194,9 @@ abstract class BaseVideoSubtitleRenderer {
         this.canvas?.parentElement?.removeChild(this.canvas);
         this.canvas = null;
         this.ctx = null;
+        this.tempCanvas = null;
+        this.tempCtx = null;
+        this.lastRenderedData = null;
     }
 }
 
@@ -307,11 +322,13 @@ export class PgsRenderer extends BaseVideoSubtitleRenderer {
                 renderPromise.then(result => {
                     this.state.frameCache.set(index, result);
                     this.state.pendingRenders.delete(index);
-                    if (this.lastRenderedIndex === -1 || this.lastRenderedIndex === index) {
+                    // Force re-render on next frame by resetting lastRenderedIndex
+                    if (this.findCurrentIndex(this.video.currentTime) === index) {
                         this.lastRenderedIndex = -1;
                     }
                 });
             }
+            // Return undefined to indicate async loading in progress
             return undefined;
         }
         return this.pgsParser?.renderAtIndex(index);
@@ -461,10 +478,12 @@ export class VobSubRenderer extends BaseVideoSubtitleRenderer {
     
     protected renderAtIndex(index: number): SubtitleData | undefined {
         if (this.state.useWorker && this.state.workerReady) {
+            // Return cached frame immediately if available
             if (this.state.frameCache.has(index)) {
                 return this.state.frameCache.get(index) ?? undefined;
             }
             
+            // Start async render if not already pending
             if (!this.state.pendingRenders.has(index)) {
                 const renderPromise = sendToWorker({ type: 'renderVobSubAtIndex', index })
                     .then(response => response.type === 'vobSubFrame' && response.frame ? convertFrameData(response.frame) : null);
@@ -473,11 +492,13 @@ export class VobSubRenderer extends BaseVideoSubtitleRenderer {
                 renderPromise.then(result => {
                     this.state.frameCache.set(index, result);
                     this.state.pendingRenders.delete(index);
-                    if (this.lastRenderedIndex === -1 || this.lastRenderedIndex === index) {
+                    // Force re-render on next frame by resetting lastRenderedIndex
+                    if (this.findCurrentIndex(this.video.currentTime) === index) {
                         this.lastRenderedIndex = -1;
                     }
                 });
             }
+            // Return undefined to indicate async loading in progress
             return undefined;
         }
         return this.vobsubParser?.renderAtIndex(index);
