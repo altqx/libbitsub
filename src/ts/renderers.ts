@@ -208,6 +208,9 @@ abstract class BaseVideoSubtitleRenderer {
   protected abstract renderAtTime(time: number): SubtitleData | undefined
   protected abstract findCurrentIndex(time: number): number
   protected abstract renderAtIndex(index: number): SubtitleData | undefined
+  
+  /** Check if a render is pending for the given index (async loading in progress) */
+  protected abstract isPendingRender(index: number): boolean
 
   /** Start the render loop. */
   protected startRenderLoop(): void {
@@ -263,10 +266,16 @@ abstract class BaseVideoSubtitleRenderer {
     // Get the data for this index
     const data = index >= 0 ? this.renderAtIndex(index) : undefined
 
-    // If no data yet (async loading), keep showing the last rendered frame
+    // If data is undefined, it means async loading is in progress
+    // Keep showing the last frame only while waiting for async data
+    // Note: null means "loaded but empty" (clear screen), undefined means "still loading"
     if (data === undefined && this.lastRenderedData !== null && index >= 0) {
-      // Don't clear - keep showing the last frame while loading
-      return
+      // Check if this index has a pending render (truly async loading)
+      // If not pending, it means the render returned no data immediately
+      if (this.isPendingRender(index)) {
+        // Don't clear - keep showing the last frame while loading
+        return
+      }
     }
 
     // Clear canvas
@@ -474,6 +483,10 @@ export class PgsRenderer extends BaseVideoSubtitleRenderer {
     return this.pgsParser?.renderAtIndex(index)
   }
 
+  protected isPendingRender(index: number): boolean {
+    return this.state.pendingRenders.has(index)
+  }
+
   protected onSeek(): void {
     this.state.frameCache.clear()
     this.state.pendingRenders.clear()
@@ -655,6 +668,10 @@ export class VobSubRenderer extends BaseVideoSubtitleRenderer {
       return undefined
     }
     return this.vobsubParser?.renderAtIndex(index)
+  }
+
+  protected isPendingRender(index: number): boolean {
+    return this.state.pendingRenders.has(index)
   }
 
   protected onSeek(): void {
