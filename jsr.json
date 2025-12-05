@@ -1,0 +1,18 @@
+{
+  "name": "@altq/libbitsub",
+  "version": "0.1.0",
+  "license": "GPL-3.0",
+  "exports": "./src/index.ts",
+  "publish": {
+    "exclude": [
+      "!./pkg",
+      "src/testfiles/",
+      "src/**/*.rs",
+      "target/",
+      "node_modules/",
+      "dist/",
+      "pkg-bundler/",
+      "resources/"
+    ]
+  }
+}
