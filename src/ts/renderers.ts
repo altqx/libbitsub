@@ -192,23 +192,32 @@ abstract class BaseVideoSubtitleRenderer {
 export class PgsRenderer extends BaseVideoSubtitleRenderer {
     private pgsParser: PgsParser | null = null;
     private state = createWorkerState();
+    private onLoading?: () => void;
+    private onLoaded?: () => void;
+    private onError?: (error: Error) => void;
 
     constructor(options: VideoSubtitleOptions) {
         super(options);
+        this.onLoading = options.onLoading;
+        this.onLoaded = options.onLoaded;
+        this.onError = options.onError;
         this.startInit();
     }
 
     protected async loadSubtitles(): Promise<void> {
         try {
+            this.onLoading?.();
+            
             const response = await fetch(this.subUrl);
             if (!response.ok) throw new Error(`Failed to fetch subtitle: ${response.status}`);
             
             const arrayBuffer = await response.arrayBuffer();
+            const data = new Uint8Array(arrayBuffer);
             
             if (this.state.useWorker) {
                 try {
                     await getOrCreateWorker();
-                    const loadResponse = await sendToWorker({ type: 'loadPgs', data: arrayBuffer });
+                    const loadResponse = await sendToWorker({ type: 'loadPgs', data: data.buffer.slice(0) });
                     
                     if (loadResponse.type === 'pgsLoaded') {
                         this.state.workerReady = true;
@@ -218,29 +227,58 @@ export class PgsRenderer extends BaseVideoSubtitleRenderer {
                         }
                         this.isLoaded = true;
                         console.log(`[libbitsub] PGS loaded (worker): ${loadResponse.count} display sets from ${loadResponse.byteLength} bytes`);
+                        this.onLoaded?.();
+                        return; // Success, don't fall through to main thread
                     } else if (loadResponse.type === 'error') {
                         throw new Error(loadResponse.message);
                     }
                 } catch (workerError) {
                     console.warn('[libbitsub] Worker failed, falling back to main thread:', workerError);
                     this.state.useWorker = false;
-                    await this.loadOnMainThread(new Uint8Array(arrayBuffer));
                 }
-            } else {
-                await this.loadOnMainThread(new Uint8Array(arrayBuffer));
             }
+            
+            // Main thread fallback - use idle callback to avoid blocking UI
+            await this.loadOnMainThread(data);
+            this.onLoaded?.();
         } catch (error) {
             console.error('Failed to load PGS subtitles:', error);
+            this.onError?.(error instanceof Error ? error : new Error(String(error)));
         }
     }
     
     private async loadOnMainThread(data: Uint8Array): Promise<void> {
-        await new Promise(resolve => setTimeout(resolve, 0));
+        // Yield to browser before heavy parsing
+        await this.yieldToMain();
+        
         this.pgsParser = new PgsParser();
-        const count = this.pgsParser.load(data);
-        this.state.timestamps = this.pgsParser.getTimestamps();
-        this.isLoaded = true;
-        console.log(`[libbitsub] PGS loaded (main thread): ${count} display sets from ${data.byteLength} bytes`);
+        
+        // Parse in a microtask to allow UI to update
+        await new Promise<void>((resolve) => {
+            // Use requestIdleCallback if available, otherwise setTimeout
+            const scheduleTask = typeof requestIdleCallback !== 'undefined' 
+                ? (cb: () => void) => requestIdleCallback(() => cb(), { timeout: 1000 })
+                : (cb: () => void) => setTimeout(cb, 0);
+            
+            scheduleTask(() => {
+                const count = this.pgsParser!.load(data);
+                this.state.timestamps = this.pgsParser!.getTimestamps();
+                this.isLoaded = true;
+                console.log(`[libbitsub] PGS loaded (main thread): ${count} display sets from ${data.byteLength} bytes`);
+                resolve();
+            });
+        });
+    }
+    
+    /** Yield to main thread to prevent UI blocking */
+    private yieldToMain(): Promise<void> {
+        // Use scheduler.yield if available (Chrome 115+)
+        const globalScheduler = (globalThis as any).scheduler;
+        if (globalScheduler && typeof globalScheduler.yield === 'function') {
+            return globalScheduler.yield();
+        }
+        // Fallback to setTimeout
+        return new Promise(resolve => setTimeout(resolve, 0));
     }
 
     protected renderAtTime(time: number): SubtitleData | undefined {
@@ -308,15 +346,23 @@ export class VobSubRenderer extends BaseVideoSubtitleRenderer {
     private vobsubParser: VobSubParserLowLevel | null = null;
     private idxUrl: string;
     private state = createWorkerState();
+    private onLoading?: () => void;
+    private onLoaded?: () => void;
+    private onError?: (error: Error) => void;
 
     constructor(options: VideoVobSubOptions) {
         super(options);
         this.idxUrl = options.idxUrl || options.subUrl.replace(/\.sub$/i, '.idx');
+        this.onLoading = options.onLoading;
+        this.onLoaded = options.onLoaded;
+        this.onError = options.onError;
         this.startInit();
     }
 
     protected async loadSubtitles(): Promise<void> {
         try {
+            this.onLoading?.();
+            
             console.log(`[libbitsub] Loading VobSub: ${this.subUrl}, ${this.idxUrl}`);
             
             const [subResponse, idxResponse] = await Promise.all([
@@ -329,6 +375,7 @@ export class VobSubRenderer extends BaseVideoSubtitleRenderer {
 
             const subArrayBuffer = await subResponse.arrayBuffer();
             const idxData = await idxResponse.text();
+            const subData = new Uint8Array(subArrayBuffer);
             
             console.log(`[libbitsub] VobSub files loaded: .sub=${subArrayBuffer.byteLength} bytes, .idx=${idxData.length} chars`);
 
@@ -338,7 +385,7 @@ export class VobSubRenderer extends BaseVideoSubtitleRenderer {
                     const loadResponse = await sendToWorker({ 
                         type: 'loadVobSub', 
                         idxContent: idxData,
-                        subData: subArrayBuffer 
+                        subData: subData.buffer.slice(0) 
                     });
                     
                     if (loadResponse.type === 'vobSubLoaded') {
@@ -349,29 +396,55 @@ export class VobSubRenderer extends BaseVideoSubtitleRenderer {
                         }
                         this.isLoaded = true;
                         console.log(`[libbitsub] VobSub loaded (worker): ${loadResponse.count} subtitle entries`);
+                        this.onLoaded?.();
+                        return; // Success, don't fall through to main thread
                     } else if (loadResponse.type === 'error') {
                         throw new Error(loadResponse.message);
                     }
                 } catch (workerError) {
                     console.warn('[libbitsub] Worker failed, falling back to main thread:', workerError);
                     this.state.useWorker = false;
-                    await this.loadOnMainThread(idxData, new Uint8Array(subArrayBuffer));
                 }
-            } else {
-                await this.loadOnMainThread(idxData, new Uint8Array(subArrayBuffer));
             }
+            
+            // Main thread fallback
+            await this.loadOnMainThread(idxData, subData);
+            this.onLoaded?.();
         } catch (error) {
             console.error('Failed to load VobSub subtitles:', error);
+            this.onError?.(error instanceof Error ? error : new Error(String(error)));
         }
     }
     
     private async loadOnMainThread(idxData: string, subData: Uint8Array): Promise<void> {
-        await new Promise(resolve => setTimeout(resolve, 0));
+        // Yield to browser before heavy parsing
+        await this.yieldToMain();
+        
         this.vobsubParser = new VobSubParserLowLevel();
-        this.vobsubParser.loadFromData(idxData, subData);
-        this.state.timestamps = this.vobsubParser.getTimestamps();
-        console.log(`[libbitsub] VobSub loaded (main thread): ${this.vobsubParser.count} subtitle entries`);
-        this.isLoaded = true;
+        
+        // Parse in a microtask to allow UI to update
+        await new Promise<void>((resolve) => {
+            const scheduleTask = typeof requestIdleCallback !== 'undefined' 
+                ? (cb: () => void) => requestIdleCallback(() => cb(), { timeout: 1000 })
+                : (cb: () => void) => setTimeout(cb, 0);
+            
+            scheduleTask(() => {
+                this.vobsubParser!.loadFromData(idxData, subData);
+                this.state.timestamps = this.vobsubParser!.getTimestamps();
+                console.log(`[libbitsub] VobSub loaded (main thread): ${this.vobsubParser!.count} subtitle entries`);
+                this.isLoaded = true;
+                resolve();
+            });
+        });
+    }
+    
+    /** Yield to main thread to prevent UI blocking */
+    private yieldToMain(): Promise<void> {
+        const globalScheduler = (globalThis as any).scheduler;
+        if (globalScheduler && typeof globalScheduler.yield === 'function') {
+            return globalScheduler.yield();
+        }
+        return new Promise(resolve => setTimeout(resolve, 0));
     }
 
     protected renderAtTime(time: number): SubtitleData | undefined {

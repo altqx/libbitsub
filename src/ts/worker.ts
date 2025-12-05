@@ -178,8 +178,11 @@ export function getOrCreateWorker(): Promise<Worker> {
     return workerInitPromise;
 }
 
-/** Send a message to the worker. */
-export function sendToWorker(request: WorkerRequest): Promise<WorkerResponse> {
+/** Default timeout for worker operations (30 seconds for large files) */
+const WORKER_TIMEOUT = 30000;
+
+/** Send a message to the worker with timeout support. */
+export function sendToWorker(request: WorkerRequest, timeout = WORKER_TIMEOUT): Promise<WorkerResponse> {
     return new Promise((resolve, reject) => {
         if (!sharedWorker) {
             reject(new Error('Worker not initialized'));
@@ -187,7 +190,23 @@ export function sendToWorker(request: WorkerRequest): Promise<WorkerResponse> {
         }
         
         const id = ++messageId;
-        pendingCallbacks.set(id, { resolve, reject });
+        
+        // Set up timeout
+        const timeoutId = setTimeout(() => {
+            pendingCallbacks.delete(id);
+            reject(new Error(`Worker operation timed out after ${timeout}ms`));
+        }, timeout);
+        
+        pendingCallbacks.set(id, { 
+            resolve: (response) => {
+                clearTimeout(timeoutId);
+                resolve(response);
+            }, 
+            reject: (error) => {
+                clearTimeout(timeoutId);
+                reject(error);
+            }
+        });
         
         const transfers: Transferable[] = [];
         if ('data' in request && request.data instanceof ArrayBuffer) transfers.push(request.data);
