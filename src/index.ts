@@ -5,7 +5,13 @@
  */
 
 // High-level video-integrated renderers (compatible with old libpgs-js API)
-export { PgsRenderer, VobSubRenderer, type VideoSubtitleOptions, type VideoVobSubOptions, type SubtitleRendererStats } from './wrapper'
+export {
+  PgsRenderer,
+  VobSubRenderer,
+  type VideoSubtitleOptions,
+  type VideoVobSubOptions,
+  type SubtitleRendererStats
+} from './wrapper'
 
 // Low-level parsers for programmatic use
 export { PgsParser, VobSubParserLowLevel, UnifiedSubtitleParser } from './wrapper'

@@ -151,7 +151,8 @@ impl VobSubParser {
         const MAX_LAST_DURATION_MS: u32 = 5000;
 
         // Try to get explicit duration from control sequence first
-        let explicit_duration = self.get_or_parse_packet(index)
+        let explicit_duration = self
+            .get_or_parse_packet(index)
             .filter(|p| p.duration_ms > 0 && p.duration_ms != 5000)
             .map(|p| p.duration_ms);
 

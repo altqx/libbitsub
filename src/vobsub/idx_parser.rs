@@ -191,39 +191,50 @@ timestamp: 00:00:05:500, filepos: 00001000
     #[test]
     fn test_parse_real_vobsub_durations() {
         use crate::vobsub::parse_subtitle_packet;
-        
+
         let idx_content = include_str!("../testfiles/vobsub.idx");
         let sub_data = include_bytes!("../testfiles/vobsub.sub");
-        
+
         let idx = parse_idx(idx_content);
-        
+
         println!("\n=== VobSub Duration Analysis ===");
         println!("Total timestamps: {}", idx.timestamps.len());
-        
+
         // Parse first 10 packets and check their durations
         for (i, ts) in idx.timestamps.iter().take(10).enumerate() {
             let next_ts = idx.timestamps.get(i + 1);
             let gap_to_next = next_ts.map(|n| n.timestamp_ms - ts.timestamp_ms);
-            
-            if let Some((packet, _)) = parse_subtitle_packet(sub_data, ts.file_position as usize, &idx.palette) {
+
+            if let Some((packet, _)) =
+                parse_subtitle_packet(sub_data, ts.file_position as usize, &idx.palette)
+            {
                 // Now we should get real durations from control sequences
                 println!(
                     "Sub {}: start={}ms, ctrl_dur={}ms, gap={}ms",
-                    i, ts.timestamp_ms, packet.duration_ms, 
+                    i,
+                    ts.timestamp_ms,
+                    packet.duration_ms,
                     gap_to_next.unwrap_or(0)
                 );
-                
+
                 // Duration from control sequence should be less than gap to next subtitle
                 // (subtitle ends before next one starts)
                 if let Some(gap) = gap_to_next {
-                    assert!(packet.duration_ms <= gap || packet.duration_ms == 5000, 
-                        "Duration {} should be <= gap {} (or default 5000)", packet.duration_ms, gap);
+                    assert!(
+                        packet.duration_ms <= gap || packet.duration_ms == 5000,
+                        "Duration {} should be <= gap {} (or default 5000)",
+                        packet.duration_ms,
+                        gap
+                    );
                 }
             } else {
-                println!("Subtitle {}: FAILED TO PARSE at offset 0x{:X}", i, ts.file_position);
+                println!(
+                    "Subtitle {}: FAILED TO PARSE at offset 0x{:X}",
+                    i, ts.file_position
+                );
             }
         }
-        
+
         println!("\n=== Durations are now correctly parsed from control sequences ===");
     }
 }

@@ -226,7 +226,7 @@ fn parse_subtitle_data(data: &[u8], pts: u32) -> Option<SubtitlePacket> {
 
     while ctrl_offset < end_offset && iterations < MAX_ITERATIONS && !found_stop {
         iterations += 1;
-        
+
         // Remember where this block started (before reading delay/next_offset)
         let block_start = ctrl_offset;
 
@@ -316,7 +316,7 @@ fn parse_subtitle_data(data: &[u8], pts: u32) -> Option<SubtitlePacket> {
         // Check if this is the last control block
         // The end of the chain is indicated by next_ctrl_offset pointing to the current block or earlier
         let next_block_abs = packet_start + next_ctrl_offset;
-        
+
         // Break if:
         // 1. next_ctrl_offset points backwards into bitmap data (< dcsq_offset)
         // 2. next_ctrl_offset points to current block or earlier (self-reference = end marker)

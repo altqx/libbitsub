@@ -41,7 +41,7 @@
     "clean": "rm -rf pkg pkg-bundler dist target",
     "test": "cargo test",
     "test:wasm": "wasm-pack test --headless --chrome",
-    "format": "prettier . --write"
+    "format": "cargo fmt && prettier . --write"
   },
   "devDependencies": {
     "prettier": "^3.7.4",
