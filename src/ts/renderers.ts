@@ -159,11 +159,7 @@ abstract class BaseVideoSubtitleRenderer {
     this.canvas = document.createElement('canvas')
     Object.assign(this.canvas.style, {
       position: 'absolute',
-      top: '0',
-      left: '0',
       pointerEvents: 'none',
-      width: '100%',
-      height: '100%',
       zIndex: '10'
     })
 
@@ -191,16 +187,61 @@ abstract class BaseVideoSubtitleRenderer {
   /** Called when video seeks. */
   protected onSeek(): void {}
 
-  /** Update canvas size to match video. */
+  /** Calculate the actual video content bounds, accounting for letterboxing/pillarboxing */
+  protected getVideoContentBounds(): { x: number; y: number; width: number; height: number } {
+    const rect = this.video.getBoundingClientRect()
+    const videoWidth = this.video.videoWidth || rect.width
+    const videoHeight = this.video.videoHeight || rect.height
+
+    // Calculate aspect ratios
+    const elementAspect = rect.width / rect.height
+    const videoAspect = videoWidth / videoHeight
+
+    let contentWidth: number
+    let contentHeight: number
+    let contentX: number
+    let contentY: number
+
+    if (Math.abs(elementAspect - videoAspect) < 0.01) {
+      // Aspect ratios match - video fills the element
+      contentWidth = rect.width
+      contentHeight = rect.height
+      contentX = 0
+      contentY = 0
+    } else if (elementAspect > videoAspect) {
+      // Element is wider than video - pillarboxing (black bars on sides)
+      contentHeight = rect.height
+      contentWidth = rect.height * videoAspect
+      contentX = (rect.width - contentWidth) / 2
+      contentY = 0
+    } else {
+      // Element is taller than video - letterboxing (black bars top/bottom)
+      contentWidth = rect.width
+      contentHeight = rect.width / videoAspect
+      contentX = 0
+      contentY = (rect.height - contentHeight) / 2
+    }
+
+    return { x: contentX, y: contentY, width: contentWidth, height: contentHeight }
+  }
+
+  /** Update canvas size to match video content area. */
   protected updateCanvasSize(): void {
     if (!this.canvas) return
 
-    const rect = this.video.getBoundingClientRect()
-    const width = rect.width > 0 ? rect.width : this.video.videoWidth || 1920
-    const height = rect.height > 0 ? rect.height : this.video.videoHeight || 1080
+    const bounds = this.getVideoContentBounds()
+    const width = bounds.width > 0 ? bounds.width : this.video.videoWidth || 1920
+    const height = bounds.height > 0 ? bounds.height : this.video.videoHeight || 1080
 
     this.canvas.width = width * window.devicePixelRatio
     this.canvas.height = height * window.devicePixelRatio
+
+    // Position canvas to match video content area
+    this.canvas.style.left = `${bounds.x}px`
+    this.canvas.style.top = `${bounds.y}px`
+    this.canvas.style.width = `${bounds.width}px`
+    this.canvas.style.height = `${bounds.height}px`
+
     this.lastRenderedIndex = -1
     this.lastRenderedTime = -1
   }
