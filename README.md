@@ -168,6 +168,60 @@ renderer.resetDisplaySettings()
   - Positive values move down (e.g., `10` moves down by 10% of height)
   - Range: `-50` to `50`
 
+### Performance Statistics
+
+Both `PgsRenderer` and `VobSubRenderer` provide real-time performance metrics:
+
+```typescript
+// Get performance statistics
+const stats = renderer.getStats()
+console.log(stats)
+// Output:
+// {
+//   framesRendered: 120,
+//   framesDropped: 2,
+//   avgRenderTime: 1.45,
+//   maxRenderTime: 8.32,
+//   minRenderTime: 0.12,
+//   lastRenderTime: 1.23,
+//   renderFps: 60,
+//   usingWorker: true,
+//   cachedFrames: 5,
+//   pendingRenders: 0,
+//   totalEntries: 847,
+//   currentIndex: 42
+// }
+
+// Example: Display stats in a debug overlay
+setInterval(() => {
+  const stats = renderer.getStats()
+  debugOverlay.textContent = `
+    FPS: ${stats.renderFps}
+    Frames: ${stats.framesRendered} (dropped: ${stats.framesDropped})
+    Avg render: ${stats.avgRenderTime}ms
+    Worker: ${stats.usingWorker ? 'Yes' : 'No'}
+    Cache: ${stats.cachedFrames} frames
+  `
+}, 1000)
+```
+
+**Stats Reference:**
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `framesRendered` | number | Total frames rendered since initialization |
+| `framesDropped` | number | Frames dropped due to slow rendering (>16.67ms) |
+| `avgRenderTime` | number | Average render time in milliseconds (rolling 60-sample window) |
+| `maxRenderTime` | number | Maximum render time in milliseconds |
+| `minRenderTime` | number | Minimum render time in milliseconds |
+| `lastRenderTime` | number | Most recent render time in milliseconds |
+| `renderFps` | number | Current renders per second (based on last 1 second) |
+| `usingWorker` | boolean | Whether rendering is using Web Worker (off-main-thread) |
+| `cachedFrames` | number | Number of decoded frames currently cached |
+| `pendingRenders` | number | Number of frames currently being decoded asynchronously |
+| `totalEntries` | number | Total subtitle entries/display sets in the loaded file |
+| `currentIndex` | number | Index of the currently displayed subtitle |
+
 ## Low-Level API (Programmatic Use)
 
 For more control over rendering, use the low-level parsers directly.
@@ -267,6 +321,7 @@ parser.dispose()
 - `getDisplaySettings(): SubtitleDisplaySettings` - Get current display settings
 - `setDisplaySettings(settings: Partial<SubtitleDisplaySettings>): void` - Update display settings
 - `resetDisplaySettings(): void` - Reset display settings to defaults
+- `getStats(): SubtitleRendererStats` - Get performance statistics
 - `dispose(): void` - Clean up all resources
 
 #### `VobSubRenderer`
@@ -275,6 +330,7 @@ parser.dispose()
 - `getDisplaySettings(): SubtitleDisplaySettings` - Get current display settings
 - `setDisplaySettings(settings: Partial<SubtitleDisplaySettings>): void` - Update display settings
 - `resetDisplaySettings(): void` - Reset display settings to defaults
+- `getStats(): SubtitleRendererStats` - Get performance statistics
 - `dispose(): void` - Clean up all resources
 
 ### Low-Level (Programmatic)
@@ -335,6 +391,25 @@ interface SubtitleDisplaySettings {
   scale: number
   // Vertical offset as % of video height (-50 to 50)
   verticalOffset: number
+}
+```
+
+#### `SubtitleRendererStats`
+
+```typescript
+interface SubtitleRendererStats {
+  framesRendered: number    // Total frames rendered since initialization
+  framesDropped: number     // Frames dropped due to slow rendering
+  avgRenderTime: number     // Average render time in milliseconds
+  maxRenderTime: number     // Maximum render time in milliseconds
+  minRenderTime: number     // Minimum render time in milliseconds
+  lastRenderTime: number    // Last render time in milliseconds
+  renderFps: number         // Current FPS (renders per second)
+  usingWorker: boolean      // Whether rendering is using web worker
+  cachedFrames: number      // Number of cached frames
+  pendingRenders: number    // Number of pending renders
+  totalEntries: number      // Total subtitle entries/display sets
+  currentIndex: number      // Current subtitle index being displayed
 }
 ```
 
