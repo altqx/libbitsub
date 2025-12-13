@@ -1,9 +1,9 @@
 [package]
 name = "libbitsub"
-version = "1.0.0"
+version = "1.1.0"
 edition = "2024"
 authors = ["altqx"]
-license = "GPL-3.0"
+license = "GPL-3.0-only"
 description = "High-performance WASM renderer for graphical subtitles (PGS and VobSub)"
 repository = "https://github.com/altqx/libbitsub"
 keywords = ["pgs", "vobsub", "subtitle", "wasm", "rendering"]
@@ -20,7 +20,7 @@ js-sys = "0.3.83"
 console_error_panic_hook = { version = "0.1.7", optional = true }
 wee_alloc = { version = "0.4.5", optional = true }
 byteorder = "1.5.0"
-memchr = "2.7"
+memchr = "2.7.6"
 
 [dev-dependencies]
 wasm-bindgen-test = "0.3.56"
