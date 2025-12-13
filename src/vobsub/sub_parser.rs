@@ -2,6 +2,8 @@
 //!
 //! The SUB file contains MPEG-2 Private Stream 1 packets with DVD subtitle data.
 
+use memchr::memchr;
+
 use super::VobSubPalette;
 
 /// Parsed subtitle packet from the SUB file.
@@ -49,9 +51,16 @@ pub fn parse_subtitle_packet(
     // Look for MPEG-2 PS headers and collect all packets
     while offset < max_scan.saturating_sub(4) {
         // Check for start code prefix (00 00 01)
-        if data[offset] != 0x00 || data[offset + 1] != 0x00 || data[offset + 2] != 0x01 {
-            offset += 1;
-            continue;
+        if let Some(pos) = memchr(0x00, &data[offset..max_scan.saturating_sub(3)]) {
+            let candidate = offset + pos;
+
+            if data[candidate + 1] != 0x00 || data[candidate + 2] != 0x01 {
+                offset = candidate + 1;
+                continue;
+            }
+            offset = candidate;
+        } else {
+            break;
         }
 
         let stream_id = data[offset + 3];

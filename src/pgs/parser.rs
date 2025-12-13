@@ -1,6 +1,7 @@
 //! PGS file parser and subtitle data management.
 
 use js_sys::{Float64Array, Uint8Array};
+use memchr::memchr;
 use std::collections::HashMap;
 use wasm_bindgen::prelude::*;
 
@@ -21,6 +22,8 @@ pub struct PgsParser {
     indexed_cache: HashMap<(u16, u8), DecodedBitmap>,
     /// Last rendered boundary index (for cache invalidation)
     last_boundary_index: Option<usize>,
+    /// Reusable buffer for RGBA output during rendering
+    rgba_buffer: Vec<u32>,
 }
 
 /// Cached decoded bitmap (indexed pixels, before palette)
@@ -40,6 +43,7 @@ impl PgsParser {
             timestamps_ms: Vec::new(),
             indexed_cache: HashMap::new(),
             last_boundary_index: None,
+            rgba_buffer: Vec::new(),
         }
     }
 
@@ -51,9 +55,17 @@ impl PgsParser {
         self.timestamps_ms.clear();
         self.indexed_cache.clear();
         self.last_boundary_index = None;
+        self.rgba_buffer.clear();
+
+        let len = data.len();
+
+        // Pre-allocate based on typical PGS file structure
+        // Roughly 1 display set per 2-5KB, use conservative estimate
+        let estimated_count = (len / 3000).max(16);
+        self.display_sets.reserve(estimated_count);
+        self.timestamps_ms.reserve(estimated_count);
 
         let mut offset = 0;
-        let len = data.len();
 
         while offset < len {
             if let Some((display_set, consumed)) = DisplaySet::parse(&data[offset..], true) {
@@ -61,13 +73,20 @@ impl PgsParser {
                 self.display_sets.push(display_set);
                 offset += consumed;
             } else {
-                // Try to recover by scanning for next magic number
+                // Try to recover by scanning for next magic number using SIMD-accelerated search
+                // "PG" (0x50 0x47)
                 offset += 1;
-                while offset < len - 1 {
-                    if data[offset] == 0x50 && data[offset + 1] == 0x47 {
-                        break;
+                if let Some(pos) = memchr(0x50, &data[offset..]) {
+                    let candidate = offset + pos;
+                    if candidate + 1 < len && data[candidate + 1] == 0x47 {
+                        offset = candidate;
+                    } else {
+                        // Found 0x50 but not followed by 0x47, continue searching
+                        offset = candidate + 1;
                     }
-                    offset += 1;
+                } else {
+                    // No more 0x50 bytes found, done
+                    break;
                 }
             }
         }
@@ -171,11 +190,22 @@ impl PgsParser {
 
             // Apply palette to get RGBA
             let pixel_count = (decoded.width as usize) * (decoded.height as usize);
-            let mut rgba = vec![0u32; pixel_count];
-            apply_palette(&decoded.indexed, &palette.rgba, &mut rgba);
+
+            // Ensure buffer has enough capacity and set length
+            if self.rgba_buffer.len() < pixel_count {
+                self.rgba_buffer.resize(pixel_count, 0);
+            }
+            apply_palette(
+                &decoded.indexed,
+                &palette.rgba,
+                &mut self.rgba_buffer[..pixel_count],
+            );
 
             // Convert to bytes for JavaScript
-            let rgba_bytes: Vec<u8> = rgba.iter().flat_map(|&c| c.to_le_bytes()).collect();
+            let rgba_bytes: Vec<u8> = self.rgba_buffer[..pixel_count]
+                .iter()
+                .flat_map(|&c| c.to_le_bytes())
+                .collect();
 
             // comp_obj.x and comp_obj.y are absolute screen positions per PGS spec
             compositions.push(SubtitleComposition {

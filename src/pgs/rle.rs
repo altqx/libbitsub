@@ -189,12 +189,39 @@ pub fn decode_rle_to_rgba(data: &[u8], palette: &[u32], target: &mut [u32]) -> u
 #[inline]
 pub fn apply_palette(indexed: &[u8], palette: &[u32], target: &mut [u32]) {
     let len = indexed.len().min(target.len());
-    let palette_len = palette.len();
 
-    // Process in chunks for better cache utilization
-    for i in 0..len {
-        let idx = indexed[i] as usize;
-        target[i] = if idx < palette_len { palette[idx] } else { 0 };
+    // PGS palettes are always 256 entries
+    if palette.len() >= 256 {
+        // Fast path: no bounds checking needed for palette lookup
+        // Process in chunks of 8 for better cache utilization and SIMD potential
+        let chunks = len / 8;
+        let remainder = len % 8;
+
+        for chunk in 0..chunks {
+            let base = chunk * 8;
+            // Unroll 8 iterations
+            target[base] = palette[indexed[base] as usize];
+            target[base + 1] = palette[indexed[base + 1] as usize];
+            target[base + 2] = palette[indexed[base + 2] as usize];
+            target[base + 3] = palette[indexed[base + 3] as usize];
+            target[base + 4] = palette[indexed[base + 4] as usize];
+            target[base + 5] = palette[indexed[base + 5] as usize];
+            target[base + 6] = palette[indexed[base + 6] as usize];
+            target[base + 7] = palette[indexed[base + 7] as usize];
+        }
+
+        // Handle remainder
+        let base = chunks * 8;
+        for i in 0..remainder {
+            target[base + i] = palette[indexed[base + i] as usize];
+        }
+    } else {
+        // Fallback with bounds checking
+        let palette_len = palette.len();
+        for i in 0..len {
+            let idx = indexed[i] as usize;
+            target[i] = if idx < palette_len { palette[idx] } else { 0 };
+        }
     }
 }
 

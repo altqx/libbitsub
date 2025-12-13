@@ -34,13 +34,13 @@ jobs:
         id: compare_versions
         run: |
           CURRENT_VERSION="${{ steps.get_version.outputs.version }}"
-          LATEST_TAG=$(git describe --tags --match "libbitsub-v*" --abbrev=0 2>/dev/null || echo "none")
+          LATEST_TAG=$(git describe --tags --match "v*" --abbrev=0 2>/dev/null || echo "none")
 
           if [ "$LATEST_TAG" = "none" ]; then
             echo "changed=true" >> $GITHUB_OUTPUT
             echo "First release: $CURRENT_VERSION"
           else
-            LATEST_VERSION=${LATEST_TAG#libbitsub-v}
+            LATEST_VERSION=${LATEST_TAG#v}
             if [ "$CURRENT_VERSION" = "$LATEST_VERSION" ]; then
               echo "changed=false" >> $GITHUB_OUTPUT
               echo "Version unchanged: $CURRENT_VERSION"
@@ -147,8 +147,8 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
         with:
-          tag_name: libbitsub-v${{ needs.check-version.outputs.version }}
-          name: libbitsub v${{ needs.check-version.outputs.version }}
+          tag_name: ${{ needs.check-version.outputs.version }}
+          name: v${{ needs.check-version.outputs.version }}
           body: |
             ## libbitsub v${{ needs.check-version.outputs.version }}
 

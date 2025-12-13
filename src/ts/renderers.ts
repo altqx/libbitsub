@@ -478,7 +478,7 @@ export class PgsRenderer extends BaseVideoSubtitleRenderer {
   /** Yield to main thread to prevent UI blocking */
   private yieldToMain(): Promise<void> {
     // Use scheduler.yield if available (Chrome 115+)
-    const globalScheduler = (globalThis as any).scheduler
+    const globalScheduler = (globalThis as unknown as { scheduler?: { yield?: () => Promise<void> } }).scheduler
     if (globalScheduler && typeof globalScheduler.yield === 'function') {
       return globalScheduler.yield()
     }
@@ -669,7 +669,7 @@ export class VobSubRenderer extends BaseVideoSubtitleRenderer {
 
   /** Yield to main thread to prevent UI blocking */
   private yieldToMain(): Promise<void> {
-    const globalScheduler = (globalThis as any).scheduler
+    const globalScheduler = (globalThis as unknown as { scheduler?: { yield?: () => Promise<void> } }).scheduler
     if (globalScheduler && typeof globalScheduler.yield === 'function') {
       return globalScheduler.yield()
     }

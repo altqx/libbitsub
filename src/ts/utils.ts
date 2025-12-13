@@ -7,14 +7,15 @@ import { isWorkerAvailable } from './worker'
 
 /** Binary search for timestamp index. */
 export function binarySearchTimestamp(timestamps: Float64Array, timeMs: number): number {
-  if (timestamps.length === 0) return -1
+  const len = timestamps.length
+  if (len === 0) return -1
 
   let left = 0
-  let right = timestamps.length - 1
+  let right = len - 1
   let result = -1
 
   while (left <= right) {
-    const mid = Math.floor((left + right) / 2)
+    const mid = (left + right) >>> 1
     if (timestamps[mid] <= timeMs) {
       result = mid
       left = mid + 1

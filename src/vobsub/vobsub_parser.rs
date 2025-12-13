@@ -1,6 +1,7 @@
 //! VobSub parser exposed to JavaScript via WASM.
 
 use js_sys::{Float64Array, Uint8Array};
+use memchr::memchr;
 use std::collections::HashMap;
 use wasm_bindgen::prelude::*;
 
@@ -56,27 +57,39 @@ impl VobSubParser {
         // Default palette
         let palette = VobSubPalette::default();
 
-        // Scan for packets
-        let mut timestamps: Vec<VobSubTimestamp> = Vec::new();
+        // Pre-allocate with estimate (roughly 1 subtitle per 10KB)
+        let estimated_count = (sub_data.len() / 10000).max(32);
+        let mut timestamps: Vec<VobSubTimestamp> = Vec::with_capacity(estimated_count);
         let mut offset = 0;
+        let len = sub_data.len();
 
-        while offset < sub_data.len().saturating_sub(4) {
-            // Look for MPEG-2 PS pack start code
-            if sub_data[offset] == 0x00
-                && sub_data[offset + 1] == 0x00
-                && sub_data[offset + 2] == 0x01
-                && sub_data[offset + 3] == 0xBA
-            {
-                if let Some((packet, _)) = parse_subtitle_packet(sub_data, offset, &palette) {
-                    if packet.width > 0 && packet.height > 0 {
-                        timestamps.push(VobSubTimestamp {
-                            timestamp_ms: packet.timestamp_ms,
-                            file_position: offset as u64,
-                        });
+        // Look for MPEG-2 PS pack start code
+        while offset < len.saturating_sub(4) {
+            // Find next potential start code (0x00 0x00 0x01 0xBA)
+            if let Some(pos) = memchr(0x00, &sub_data[offset..]) {
+                let candidate = offset + pos;
+
+                // Check for full start code: 00 00 01 BA
+                if candidate + 3 < len
+                    && sub_data[candidate + 1] == 0x00
+                    && sub_data[candidate + 2] == 0x01
+                    && sub_data[candidate + 3] == 0xBA
+                {
+                    if let Some((packet, _)) = parse_subtitle_packet(sub_data, candidate, &palette)
+                    {
+                        if packet.width > 0 && packet.height > 0 {
+                            timestamps.push(VobSubTimestamp {
+                                timestamp_ms: packet.timestamp_ms,
+                                file_position: candidate as u64,
+                            });
+                        }
                     }
                 }
+                offset = candidate + 1;
+            } else {
+                // No more 0x00 bytes found
+                break;
             }
-            offset += 1;
         }
 
         // Sort and store
