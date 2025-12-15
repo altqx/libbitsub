@@ -34,7 +34,7 @@ jobs:
         id: compare_versions
         run: |
           CURRENT_VERSION="${{ steps.get_version.outputs.version }}"
-          LATEST_TAG=$(git describe --tags --match "v*" --abbrev=0 2>/dev/null || echo "none")
+          LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "none")
 
           if [ "$LATEST_TAG" = "none" ]; then
             echo "changed=true" >> $GITHUB_OUTPUT
