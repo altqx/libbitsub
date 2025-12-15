@@ -1,7 +1,7 @@
 {
   "name": "@altq/libbitsub",
   "version": "1.1.0",
-  "license": "GPL-3.0-only",
+  "license": "MIT OR Apache-2.0",
   "exports": "./src/index.ts",
   "publish": {
     "exclude": [

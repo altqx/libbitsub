@@ -2,7 +2,7 @@
   "name": "libbitsub",
   "version": "1.1.0",
   "author": "altqx",
-  "license": "GPL-3.0-only",
+  "license": "MIT OR Apache-2.0",
   "description": "High-performance WASM renderer for graphical subtitles (PGS and VobSub)",
   "keywords": [
     "libbitsub",
