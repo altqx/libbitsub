@@ -24,10 +24,18 @@ https://gist.github.com/user-attachments/assets/55ac8e11-1964-4fb9-923e-dcac82dc
 
 https://gist.github.com/user-attachments/assets/a89ae9fe-23e4-4bc3-8cad-16a3f0fea665
 
-## Installation
+### Installation
 
+**npm / bun**
 ```bash
+npm install libbitsub
+# or
 bun add libbitsub
+```
+
+**JSR (Deno)**
+```bash
+deno add jsr:@altq/libbitsub
 ```
 
 ### Setup for Web Workers (Recommended)
