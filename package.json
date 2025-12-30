@@ -50,5 +50,8 @@
   "peerDependencies": {},
   "engines": {
     "node": ">=18"
+  },
+  "dependencies": {
+    "@webgpu/types": "^0.1.68"
   }
 }

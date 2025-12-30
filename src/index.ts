@@ -20,6 +20,7 @@ export { PgsParser, VobSubParserLowLevel, UnifiedSubtitleParser } from './wrappe
 export {
   initWasm,
   isWasmInitialized,
+  isWebGPUSupported,
   type SubtitleData,
   type SubtitleCompositionData,
   type SubtitleDisplaySettings

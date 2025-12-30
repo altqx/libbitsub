@@ -50,12 +50,16 @@ export interface VideoSubtitleOptions {
   subUrl: string
   /** Worker URL (kept for API compatibility, not used in WASM version) */
   workerUrl?: string
+  /** Prefer WebGPU renderer if available (default: true) */
+  preferWebGPU?: boolean
   /** Callback when subtitle loading starts */
   onLoading?: () => void
   /** Callback when subtitle loading completes */
   onLoaded?: () => void
   /** Callback when subtitle loading fails */
   onError?: (error: Error) => void
+  /** Callback when WebGPU is unavailable and falling back to Canvas2D */
+  onWebGPUFallback?: () => void
 }
 
 /** Options for VobSub video subtitle renderer. */

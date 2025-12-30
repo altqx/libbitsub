@@ -8,6 +8,7 @@ Started as a fork of Arcus92's [libpgs-js](https://github.com/Arcus92/libpgs-js)
 
 - **PGS (Blu-ray)** subtitle parsing and rendering
 - **VobSub (DVD)** subtitle parsing and rendering
+- **WebGPU rendering** GPU-accelerated rendering with automatic Canvas2D fallback
 - **High-performance** Rust-based rendering engine compiled to WebAssembly
 - **Zero-copy** data transfer between JS and WASM where possible
 - **Caching** for decoded bitmaps to optimize repeated rendering
@@ -207,20 +208,46 @@ setInterval(() => {
 
 **Stats Reference:**
 
-| Property | Type | Description |
-|----------|------|-------------|
-| `framesRendered` | number | Total frames rendered since initialization |
-| `framesDropped` | number | Frames dropped due to slow rendering (>16.67ms) |
-| `avgRenderTime` | number | Average render time in milliseconds (rolling 60-sample window) |
-| `maxRenderTime` | number | Maximum render time in milliseconds |
-| `minRenderTime` | number | Minimum render time in milliseconds |
-| `lastRenderTime` | number | Most recent render time in milliseconds |
-| `renderFps` | number | Current renders per second (based on last 1 second) |
-| `usingWorker` | boolean | Whether rendering is using Web Worker (off-main-thread) |
-| `cachedFrames` | number | Number of decoded frames currently cached |
-| `pendingRenders` | number | Number of frames currently being decoded asynchronously |
-| `totalEntries` | number | Total subtitle entries/display sets in the loaded file |
-| `currentIndex` | number | Index of the currently displayed subtitle |
+| Property         | Type    | Description                                                    |
+| ---------------- | ------- | -------------------------------------------------------------- |
+| `framesRendered` | number  | Total frames rendered since initialization                     |
+| `framesDropped`  | number  | Frames dropped due to slow rendering (>16.67ms)                |
+| `avgRenderTime`  | number  | Average render time in milliseconds (rolling 60-sample window) |
+| `maxRenderTime`  | number  | Maximum render time in milliseconds                            |
+| `minRenderTime`  | number  | Minimum render time in milliseconds                            |
+| `lastRenderTime` | number  | Most recent render time in milliseconds                        |
+| `renderFps`      | number  | Current renders per second (based on last 1 second)            |
+| `usingWorker`    | boolean | Whether rendering is using Web Worker (off-main-thread)        |
+| `cachedFrames`   | number  | Number of decoded frames currently cached                      |
+| `pendingRenders` | number  | Number of frames currently being decoded asynchronously        |
+| `totalEntries`   | number  | Total subtitle entries/display sets in the loaded file         |
+| `currentIndex`   | number  | Index of the currently displayed subtitle                      |
+
+### WebGPU Rendering
+
+libbitsub automatically uses WebGPU for GPU-accelerated rendering when available, with automatic fallback to Canvas2D:
+
+```typescript
+import { PgsRenderer, isWebGPUSupported } from 'libbitsub'
+
+// Check WebGPU support
+if (isWebGPUSupported()) {
+  console.log('WebGPU available - GPU-accelerated rendering enabled')
+}
+
+// Configure WebGPU preference
+const renderer = new PgsRenderer({
+  video: videoElement,
+  subUrl: '/subtitles/movie.sup',
+  preferWebGPU: true, // default: true
+  onWebGPUFallback: () => console.log('Fell back to Canvas2D')
+})
+```
+
+**Options:**
+
+- `preferWebGPU` (boolean): Enable WebGPU rendering if available. Default: `true`
+- `onWebGPUFallback` (function): Callback when WebGPU is unavailable and falls back to Canvas2D
 
 ## Low-Level API (Programmatic Use)
 
@@ -398,18 +425,18 @@ interface SubtitleDisplaySettings {
 
 ```typescript
 interface SubtitleRendererStats {
-  framesRendered: number    // Total frames rendered since initialization
-  framesDropped: number     // Frames dropped due to slow rendering
-  avgRenderTime: number     // Average render time in milliseconds
-  maxRenderTime: number     // Maximum render time in milliseconds
-  minRenderTime: number     // Minimum render time in milliseconds
-  lastRenderTime: number    // Last render time in milliseconds
-  renderFps: number         // Current FPS (renders per second)
-  usingWorker: boolean      // Whether rendering is using web worker
-  cachedFrames: number      // Number of cached frames
-  pendingRenders: number    // Number of pending renders
-  totalEntries: number      // Total subtitle entries/display sets
-  currentIndex: number      // Current subtitle index being displayed
+  framesRendered: number // Total frames rendered since initialization
+  framesDropped: number // Frames dropped due to slow rendering
+  avgRenderTime: number // Average render time in milliseconds
+  maxRenderTime: number // Maximum render time in milliseconds
+  minRenderTime: number // Minimum render time in milliseconds
+  lastRenderTime: number // Last render time in milliseconds
+  renderFps: number // Current FPS (renders per second)
+  usingWorker: boolean // Whether rendering is using web worker
+  cachedFrames: number // Number of cached frames
+  pendingRenders: number // Number of pending renders
+  totalEntries: number // Total subtitle entries/display sets
+  currentIndex: number // Current subtitle index being displayed
 }
 ```
 

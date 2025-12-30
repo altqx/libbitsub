@@ -18,6 +18,9 @@ export type {
 // Re-export WASM management
 export { initWasm, isWasmInitialized } from './ts/wasm'
 
+// Re-export WebGPU utilities
+export { isWebGPUSupported } from './ts/webgpu-renderer'
+
 // Re-export parsers
 export { PgsParser, VobSubParserLowLevel, UnifiedSubtitleParser } from './ts/parsers'
 
