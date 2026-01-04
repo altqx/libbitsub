@@ -277,7 +277,7 @@ export class WebGPURenderer {
   private createTextureInfo(width: number, height: number): TextureInfo {
     const texture = this.device!.createTexture({
       size: [width, height],
-      format: 'bgra8unorm',
+      format: this.format,
       usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT
     })
 
@@ -349,19 +349,24 @@ export class WebGPURenderer {
         this.textures[i] = texInfo
       }
 
-      // Convert RGBA data to BGRA
-      const bgraData = new Uint8Array(data.length)
-      for (let j = 0; j < data.length; j += 4) {
-        bgraData[j] = data[j + 2]     // B <- R
-        bgraData[j + 1] = data[j + 1] // G <- G
-        bgraData[j + 2] = data[j]     // R <- B
-        bgraData[j + 3] = data[j + 3] // A <- A
+      let uploadData: Uint8Array
+      if (this.format === 'bgra8unorm') {
+        const bgraData = new Uint8Array(data.length)
+        for (let j = 0; j < data.length; j += 4) {
+          bgraData[j] = data[j + 2]     // B <- R
+          bgraData[j + 1] = data[j + 1] // G <- G
+          bgraData[j + 2] = data[j]     // R <- B
+          bgraData[j + 3] = data[j + 3] // A <- A
+        }
+        uploadData = bgraData
+      } else {
+        uploadData = new Uint8Array(data.buffer, data.byteOffset, data.byteLength)
       }
 
-      // Upload BGRA data to texture
+      // Upload pixel data to texture
       this.device.queue.writeTexture(
         { texture: texInfo.texture },
-        bgraData.buffer,
+        uploadData.buffer,
         { bytesPerRow: width * 4 },
         { width, height }
       )
