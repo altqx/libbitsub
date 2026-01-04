@@ -277,7 +277,7 @@ export class WebGPURenderer {
   private createTextureInfo(width: number, height: number): TextureInfo {
     const texture = this.device!.createTexture({
       size: [width, height],
-      format: this.format,
+      format: 'bgra8unorm',
       usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT
     })
 
