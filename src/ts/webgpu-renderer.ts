@@ -66,13 +66,8 @@ fn fragmentMain(input: FragmentInput) -> @location(0) vec4f {
   // Sample RGBA texture
   let color = textureSample(tex, texSampler, input.texCoord);
   
-  // Swap R and B channels to fix color order.
-  // The subtitle bitmap data is in RGBA order from libbitsub, but on some platforms
-  // the texture data gets interpreted differently. This swizzle ensures correct colors.
-  let corrected = vec4f(color.b, color.g, color.r, color.a);
-  
   // Output with premultiplied alpha
-  return vec4f(corrected.rgb * corrected.a, corrected.a);
+  return vec4f(color.rgb * color.a, color.a);
 }
 `
 
@@ -282,7 +277,7 @@ export class WebGPURenderer {
   private createTextureInfo(width: number, height: number): TextureInfo {
     const texture = this.device!.createTexture({
       size: [width, height],
-      format: 'rgba8unorm',
+      format: this.format,
       usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT
     })
 
@@ -354,11 +349,20 @@ export class WebGPURenderer {
         this.textures[i] = texInfo
       }
 
-      // Upload RGBA data to texture
+      // Convert RGBA data to BGRA
+      const bgraData = new Uint8Array(data.length)
+      for (let j = 0; j < data.length; j += 4) {
+        bgraData[j] = data[j + 2]     // B <- R
+        bgraData[j + 1] = data[j + 1] // G <- G
+        bgraData[j + 2] = data[j]     // R <- B
+        bgraData[j + 3] = data[j + 3] // A <- A
+      }
+
+      // Upload BGRA data to texture
       this.device.queue.writeTexture(
         { texture: texInfo.texture },
-        data.buffer,
-        { bytesPerRow: width * 4, offset: data.byteOffset },
+        bgraData.buffer,
+        { bytesPerRow: width * 4 },
         { width, height }
       )
 
