@@ -66,8 +66,13 @@ fn fragmentMain(input: FragmentInput) -> @location(0) vec4f {
   // Sample RGBA texture
   let color = textureSample(tex, texSampler, input.texCoord);
   
+  // Swap R and B channels to fix color order.
+  // The subtitle bitmap data is in RGBA order from libbitsub, but on some platforms
+  // the texture data gets interpreted differently. This swizzle ensures correct colors.
+  let corrected = vec4f(color.b, color.g, color.r, color.a);
+  
   // Output with premultiplied alpha
-  return vec4f(color.rgb * color.a, color.a);
+  return vec4f(corrected.rgb * corrected.a, corrected.a);
 }
 `
 
