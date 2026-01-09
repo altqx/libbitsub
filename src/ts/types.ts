@@ -47,7 +47,9 @@ export interface VideoSubtitleOptions {
   /** The video element to sync with */
   video: HTMLVideoElement
   /** URL to the subtitle file */
-  subUrl: string
+  subUrl?: string
+  /** Direct subtitle content (ArrayBuffer) */
+  subContent?: ArrayBuffer
   /** Worker URL (kept for API compatibility, not used in WASM version) */
   workerUrl?: string
   /** Prefer WebGPU renderer if available (default: true) */
@@ -66,6 +68,8 @@ export interface VideoSubtitleOptions {
 export interface VideoVobSubOptions extends VideoSubtitleOptions {
   /** URL to the .idx file (optional, defaults to subUrl with .idx extension) */
   idxUrl?: string
+  /** Direct .idx content (string) */
+  idxContent?: string
 }
 
 /** Display settings for subtitle rendering. */

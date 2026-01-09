@@ -50,7 +50,8 @@ export interface SubtitleRendererStats {
  */
 abstract class BaseVideoSubtitleRenderer {
   protected video: HTMLVideoElement
-  protected subUrl: string
+  protected subUrl?: string
+  protected subContent?: ArrayBuffer
   protected canvas: HTMLCanvasElement | null = null
   protected ctx: CanvasRenderingContext2D | null = null
   protected animationFrameId: number | null = null
@@ -85,6 +86,7 @@ abstract class BaseVideoSubtitleRenderer {
   constructor(options: VideoSubtitleOptions) {
     this.video = options.video
     this.subUrl = options.subUrl
+    this.subContent = options.subContent
     this.preferWebGPU = options.preferWebGPU !== false // Default to true
     this.onWebGPUFallback = options.onWebGPUFallback
   }
@@ -512,10 +514,17 @@ export class PgsRenderer extends BaseVideoSubtitleRenderer {
     try {
       this.onLoading?.()
 
-      const response = await fetch(this.subUrl)
-      if (!response.ok) throw new Error(`Failed to fetch subtitle: ${response.status}`)
+      let arrayBuffer: ArrayBuffer
+      if (this.subContent) {
+        arrayBuffer = this.subContent
+      } else if (this.subUrl) {
+        const response = await fetch(this.subUrl)
+        if (!response.ok) throw new Error(`Failed to fetch subtitle: ${response.status}`)
+        arrayBuffer = await response.arrayBuffer()
+      } else {
+        throw new Error('No subtitle content or URL provided')
+      }
 
-      const arrayBuffer = await response.arrayBuffer()
       const data = new Uint8Array(arrayBuffer)
 
       if (this.state.useWorker) {
@@ -670,7 +679,8 @@ export class PgsRenderer extends BaseVideoSubtitleRenderer {
  */
 export class VobSubRenderer extends BaseVideoSubtitleRenderer {
   private vobsubParser: VobSubParserLowLevel | null = null
-  private idxUrl: string
+  private idxUrl?: string
+  private idxContent?: string
   private state = createWorkerState()
   private onLoading?: () => void
   private onLoaded?: () => void
@@ -683,7 +693,8 @@ export class VobSubRenderer extends BaseVideoSubtitleRenderer {
 
   constructor(options: VideoVobSubOptions) {
     super(options)
-    this.idxUrl = options.idxUrl || options.subUrl.replace(/\\.sub$/i, '.idx')
+    this.idxUrl = options.idxUrl || (options.subUrl ? options.subUrl.replace(/\\.sub$/i, '.idx') : undefined)
+    this.idxContent = options.idxContent
     this.onLoading = options.onLoading
     this.onLoaded = options.onLoaded
     this.onError = options.onError
@@ -694,15 +705,60 @@ export class VobSubRenderer extends BaseVideoSubtitleRenderer {
     try {
       this.onLoading?.()
 
-      console.log(`[libbitsub] Loading VobSub: ${this.subUrl}, ${this.idxUrl}`)
+      console.log(`[libbitsub] Loading VobSub`)
 
-      const [subResponse, idxResponse] = await Promise.all([fetch(this.subUrl), fetch(this.idxUrl)])
+      let subArrayBuffer: ArrayBuffer | undefined
+      let idxData: string | undefined
 
-      if (!subResponse.ok) throw new Error(`Failed to fetch .sub file: ${subResponse.status}`)
-      if (!idxResponse.ok) throw new Error(`Failed to fetch .idx file: ${idxResponse.status}`)
+      // Resolve SUB content
+      if (this.subContent) {
+        subArrayBuffer = this.subContent
+      }
 
-      const subArrayBuffer = await subResponse.arrayBuffer()
-      const idxData = await idxResponse.text()
+      // Resolve IDX content
+      if (this.idxContent) {
+        idxData = this.idxContent
+      }
+
+      // Fetch missing parts
+      const promises: Promise<void>[] = []
+
+      if (!subArrayBuffer) {
+        if (!this.subUrl) throw new Error('No SUB content or URL provided')
+        promises.push(
+          fetch(this.subUrl)
+            .then((r) => {
+              if (!r.ok) throw new Error(`Failed to fetch .sub file: ${r.status}`)
+              return r.arrayBuffer()
+            })
+            .then((b) => {
+              subArrayBuffer = b
+            })
+        )
+      }
+
+      if (!idxData) {
+        if (!this.idxUrl) throw new Error('No IDX content or URL provided')
+        promises.push(
+          fetch(this.idxUrl)
+            .then((r) => {
+              if (!r.ok) throw new Error(`Failed to fetch .idx file: ${r.status}`)
+              return r.text()
+            })
+            .then((t) => {
+              idxData = t
+            })
+        )
+      }
+
+      if (promises.length > 0) {
+        await Promise.all(promises)
+      }
+
+      if (!subArrayBuffer || !idxData) {
+        throw new Error('Failed to load VobSub data')
+      }
+
       const subData = new Uint8Array(subArrayBuffer)
 
       console.log(

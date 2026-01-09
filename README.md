@@ -98,7 +98,7 @@ The high-level API automatically handles video synchronization, canvas overlay, 
 ```typescript
 import { PgsRenderer } from 'libbitsub'
 
-// Create renderer with video element
+// Create renderer with video element (URL-based loading)
 const renderer = new PgsRenderer({
   video: videoElement,
   subUrl: '/subtitles/movie.sup',
@@ -109,8 +109,20 @@ const renderer = new PgsRenderer({
   onError: (error) => console.error('Failed to load:', error)
 })
 
+// Or load directly from ArrayBuffer
+const response = await fetch('/subtitles/movie.sup')
+const subtitleData = await response.arrayBuffer()
+
+const renderer = new PgsRenderer({
+  video: videoElement,
+  subContent: subtitleData, // Load directly from ArrayBuffer
+  onLoading: () => console.log('Loading subtitles...'),
+  onLoaded: () => console.log('Subtitles loaded!'),
+  onError: (error) => console.error('Failed to load:', error)
+})
+
 // The renderer automatically:
-// - Fetches the subtitle file
+// - Fetches the subtitle file (if using subUrl) or uses provided ArrayBuffer
 // - Creates a canvas overlay on the video
 // - Syncs rendering with video playback
 // - Handles resize events
@@ -124,13 +136,33 @@ renderer.dispose()
 ```typescript
 import { VobSubRenderer } from 'libbitsub'
 
-// Create renderer with video element
+// Create renderer with video element (URL-based loading)
 const renderer = new VobSubRenderer({
   video: videoElement,
   subUrl: '/subtitles/movie.sub',
   idxUrl: '/subtitles/movie.idx', // Optional, defaults to .sub path with .idx extension
   workerUrl: '/libbitsub.js', // Optional
   // Lifecycle callbacks (optional)
+  onLoading: () => setIsLoading(true),
+  onLoaded: () => setIsLoading(false),
+  onError: (error) => {
+    setIsLoading(false)
+    console.error('Subtitle error:', error)
+  }
+})
+
+// Or load directly from ArrayBuffer
+const [subResponse, idxResponse] = await Promise.all([
+  fetch('/subtitles/movie.sub'),
+  fetch('/subtitles/movie.idx')
+])
+const subData = await subResponse.arrayBuffer()
+const idxData = await idxResponse.text()
+
+const renderer = new VobSubRenderer({
+  video: videoElement,
+  subContent: subData,   // Load .sub directly from ArrayBuffer
+  idxContent: idxData,   // Load .idx directly from string
   onLoading: () => setIsLoading(true),
   onLoaded: () => setIsLoading(false),
   onError: (error) => {
@@ -402,11 +434,14 @@ parser.dispose()
 ```typescript
 interface VideoSubtitleOptions {
   video: HTMLVideoElement // Video element to sync with
-  subUrl: string // URL to subtitle file
+  subUrl?: string // URL to subtitle file (provide this OR subContent)
+  subContent?: ArrayBuffer // Direct subtitle content (provide this OR subUrl)
   workerUrl?: string // Worker URL (for API compatibility)
+  preferWebGPU?: boolean // Prefer WebGPU renderer if available (default: true)
   onLoading?: () => void // Called when subtitle loading starts
   onLoaded?: () => void // Called when subtitle loading completes
   onError?: (error: Error) => void // Called when subtitle loading fails
+  onWebGPUFallback?: () => void // Called when WebGPU is unavailable
 }
 ```
 
@@ -414,7 +449,8 @@ interface VideoSubtitleOptions {
 
 ```typescript
 interface VideoVobSubOptions extends VideoSubtitleOptions {
-  idxUrl?: string // URL to .idx file (optional)
+  idxUrl?: string // URL to .idx file (optional, defaults to subUrl with .idx extension)
+  idxContent?: string // Direct .idx content (provide this OR idxUrl)
 }
 ```
 
