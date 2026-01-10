@@ -3,5 +3,4 @@
 /pkg-bundler
 /dist
 /node_modules
-Cargo.lock
 *.wasm
