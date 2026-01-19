@@ -192,8 +192,8 @@ fn extract_pts(data: &[u8], offset: usize) -> u32 {
     }
 
     let pts32_30 = ((data[offset] >> 1) & 0x07) as u64;
-    let pts29_15 = (((data[offset + 1] as u64) << 7) | ((data[offset + 2] >> 1) as u64)) as u64;
-    let pts14_0 = (((data[offset + 3] as u64) << 7) | ((data[offset + 4] >> 1) as u64)) as u64;
+    let pts29_15 = ((data[offset + 1] as u64) << 7) | ((data[offset + 2] >> 1) as u64);
+    let pts14_0 = ((data[offset + 3] as u64) << 7) | ((data[offset + 4] >> 1) as u64);
 
     // Combine into 33-bit value
     let pts = (pts32_30 << 30) | (pts29_15 << 15) | pts14_0;

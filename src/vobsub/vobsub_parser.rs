@@ -77,17 +77,13 @@ impl VobSubParser {
                     && sub_data[candidate + 1] == 0x00
                     && sub_data[candidate + 2] == 0x01
                     && sub_data[candidate + 3] == 0xBA
-                {
-                    if let Some((packet, _)) = parse_subtitle_packet(sub_data, candidate, &palette)
-                    {
-                        if packet.width > 0 && packet.height > 0 {
+                    && let Some((packet, _)) = parse_subtitle_packet(sub_data, candidate, &palette)
+                        && packet.width > 0 && packet.height > 0 {
                             timestamps.push(VobSubTimestamp {
                                 timestamp_ms: packet.timestamp_ms,
                                 file_position: candidate as u64,
                             });
                         }
-                    }
-                }
                 offset = candidate + 1;
             } else {
                 // No more 0x00 bytes found

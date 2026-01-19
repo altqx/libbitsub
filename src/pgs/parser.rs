@@ -234,11 +234,10 @@ impl PgsParser {
     /// Find the boundary index (epoch start or acquisition point) before the given index.
     fn find_boundary_index(&self, index: usize) -> usize {
         for i in (0..=index).rev() {
-            if let Some(comp) = &self.display_sets[i].composition {
-                if comp.is_epoch_start() || comp.is_acquisition_point() {
+            if let Some(comp) = &self.display_sets[i].composition
+                && (comp.is_epoch_start() || comp.is_acquisition_point()) {
                     return i;
                 }
-            }
         }
         0
     }

@@ -84,12 +84,11 @@ pub fn parse_idx(idx_content: &str) -> IdxParseResult {
 
         // Parse size
         if let Some(rest) = trimmed.strip_prefix("size:") {
-            if let Some((w_str, h_str)) = rest.trim().split_once('x') {
-                if let (Ok(w), Ok(h)) = (w_str.trim().parse::<u16>(), h_str.trim().parse::<u16>()) {
+            if let Some((w_str, h_str)) = rest.trim().split_once('x')
+                && let (Ok(w), Ok(h)) = (w_str.trim().parse::<u16>(), h_str.trim().parse::<u16>()) {
                     result.metadata.width = w;
                     result.metadata.height = h;
                 }
-            }
             continue;
         }
 
@@ -98,14 +97,13 @@ pub fn parse_idx(idx_content: &str) -> IdxParseResult {
             let colors: Vec<&str> = rest.split(',').map(|s| s.trim()).collect();
             for (i, color_hex) in colors.iter().enumerate().take(16) {
                 let hex = color_hex.trim_start_matches('#');
-                if hex.len() == 6 {
-                    if let Ok(rgb) = u32::from_str_radix(hex, 16) {
+                if hex.len() == 6
+                    && let Ok(rgb) = u32::from_str_radix(hex, 16) {
                         let r = ((rgb >> 16) & 0xFF) as u8;
                         let g = ((rgb >> 8) & 0xFF) as u8;
                         let b = (rgb & 0xFF) as u8;
                         result.palette.rgba[i] = rgb_to_rgba(r, g, b, 255);
                     }
-                }
             }
             continue;
         }
@@ -116,18 +114,17 @@ pub fn parse_idx(idx_content: &str) -> IdxParseResult {
             if !parts.is_empty() {
                 result.metadata.language = Some(parts[0].trim().to_string());
             }
-            if let Some(idx_part) = parts.get(1) {
-                if let Some(idx_str) = idx_part.trim().strip_prefix("index:") {
+            if let Some(idx_part) = parts.get(1)
+                && let Some(idx_str) = idx_part.trim().strip_prefix("index:") {
                     result.metadata.id = Some(idx_str.trim().to_string());
                 }
-            }
             continue;
         }
 
         // Parse timestamp entries
         // Format: timestamp: HH:MM:SS:mmm, filepos: XXXXXXXX
-        if let Some(rest) = trimmed.strip_prefix("timestamp:") {
-            if let Some((time_part, filepos_part)) = rest.split_once(',') {
+        if let Some(rest) = trimmed.strip_prefix("timestamp:")
+            && let Some((time_part, filepos_part)) = rest.split_once(',') {
                 let time_str = time_part.trim();
                 let filepos_str = filepos_part
                     .trim()
@@ -137,8 +134,8 @@ pub fn parse_idx(idx_content: &str) -> IdxParseResult {
                 if let Some(filepos_hex) = filepos_str {
                     // Parse timestamp HH:MM:SS:mmm
                     let parts: Vec<&str> = time_str.split(':').collect();
-                    if parts.len() == 4 {
-                        if let (Ok(h), Ok(m), Ok(s), Ok(ms)) = (
+                    if parts.len() == 4
+                        && let (Ok(h), Ok(m), Ok(s), Ok(ms)) = (
                             parts[0].parse::<u32>(),
                             parts[1].parse::<u32>(),
                             parts[2].parse::<u32>(),
@@ -154,10 +151,8 @@ pub fn parse_idx(idx_content: &str) -> IdxParseResult {
                                 });
                             }
                         }
-                    }
                 }
             }
-        }
     }
 
     result
