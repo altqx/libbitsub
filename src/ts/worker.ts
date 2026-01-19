@@ -258,6 +258,18 @@ self.onmessage = async function(event) {
                 vobSubParser?.free(); vobSubParser = null;
                 postResponse({ type: 'disposed' }, [], _id);
                 break;
+            case 'setVobSubDebandEnabled':
+                vobSubParser?.setDebandEnabled(request.enabled);
+                postResponse({ type: 'debandSet' }, [], _id);
+                break;
+            case 'setVobSubDebandThreshold':
+                vobSubParser?.setDebandThreshold(request.threshold);
+                postResponse({ type: 'debandSet' }, [], _id);
+                break;
+            case 'setVobSubDebandRange':
+                vobSubParser?.setDebandRange(request.range);
+                postResponse({ type: 'debandSet' }, [], _id);
+                break;
         }
     } catch (error) {
         postResponse({ type: 'error', message: error instanceof Error ? error.message : String(error) }, [], _id);

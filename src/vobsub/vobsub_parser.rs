@@ -6,8 +6,8 @@ use std::collections::HashMap;
 use wasm_bindgen::prelude::*;
 
 use super::{
-    IdxParseResult, SubtitlePacket, VobSubPalette, VobSubTimestamp, decode_vobsub_rle, parse_idx,
-    parse_subtitle_packet,
+    DebandConfig, IdxParseResult, SubtitlePacket, VobSubPalette, VobSubTimestamp,
+    apply_deband, decode_vobsub_rle, parse_idx, parse_subtitle_packet,
 };
 use crate::utils::binary_search_timestamp;
 
@@ -22,6 +22,8 @@ pub struct VobSubParser {
     timestamps_ms: Vec<u32>,
     /// Cache for decoded subtitle packets
     packet_cache: HashMap<usize, Option<SubtitlePacket>>,
+    /// Debanding configuration
+    deband_config: DebandConfig,
 }
 
 #[wasm_bindgen]
@@ -34,6 +36,7 @@ impl VobSubParser {
             sub_data: None,
             timestamps_ms: Vec::new(),
             packet_cache: HashMap::new(),
+            deband_config: DebandConfig::default(),
         }
     }
 
@@ -234,7 +237,17 @@ impl VobSubParser {
         palette: &VobSubPalette,
         metadata: &super::VobSubMetadata,
     ) -> VobSubFrame {
-        let rgba = decode_vobsub_rle(packet, palette);
+        let mut rgba = decode_vobsub_rle(packet, palette);
+
+        // Apply debanding if enabled
+        if self.deband_config.enabled {
+            rgba = apply_deband(
+                &rgba,
+                packet.width as usize,
+                packet.height as usize,
+                &self.deband_config,
+            );
+        }
 
         VobSubFrame {
             screen_width: metadata.width,
@@ -251,6 +264,30 @@ impl VobSubParser {
     #[wasm_bindgen(js_name = clearCache)]
     pub fn clear_cache(&mut self) {
         self.packet_cache.clear();
+    }
+
+    /// Enable or disable debanding.
+    #[wasm_bindgen(js_name = setDebandEnabled)]
+    pub fn set_deband_enabled(&mut self, enabled: bool) {
+        self.deband_config.enabled = enabled;
+    }
+
+    /// Set the deband threshold (0.0-255.0, default: 64.0).
+    #[wasm_bindgen(js_name = setDebandThreshold)]
+    pub fn set_deband_threshold(&mut self, threshold: f32) {
+        self.deband_config.threshold = threshold.clamp(0.0, 255.0);
+    }
+
+    /// Set the deband sample range in pixels (default: 15).
+    #[wasm_bindgen(js_name = setDebandRange)]
+    pub fn set_deband_range(&mut self, range: u32) {
+        self.deband_config.range = range.clamp(1, 64);
+    }
+
+    /// Check if debanding is enabled.
+    #[wasm_bindgen(getter, js_name = debandEnabled)]
+    pub fn deband_enabled(&self) -> bool {
+        self.deband_config.enabled
     }
 }
 

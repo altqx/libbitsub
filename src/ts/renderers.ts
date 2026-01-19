@@ -933,6 +933,44 @@ export class VobSubRenderer extends BaseVideoSubtitleRenderer {
     }
   }
 
+  /** Enable or disable debanding filter */
+  setDebandEnabled(enabled: boolean): void {
+    if (this.state.useWorker && this.state.workerReady) {
+      sendToWorker({ type: 'setVobSubDebandEnabled', enabled }).catch(() => {})
+    }
+    this.vobsubParser?.setDebandEnabled(enabled)
+    // Clear cache to force re-render with new settings
+    this.state.frameCache.clear()
+    this.lastRenderedIndex = -1
+  }
+
+  /** Set debanding threshold (0-255, default: 64) */
+  setDebandThreshold(threshold: number): void {
+    if (this.state.useWorker && this.state.workerReady) {
+      sendToWorker({ type: 'setVobSubDebandThreshold', threshold }).catch(() => {})
+    }
+    this.vobsubParser?.setDebandThreshold(threshold)
+    // Clear cache to force re-render with new settings
+    this.state.frameCache.clear()
+    this.lastRenderedIndex = -1
+  }
+
+  /** Set debanding sample range in pixels (1-64, default: 15) */
+  setDebandRange(range: number): void {
+    if (this.state.useWorker && this.state.workerReady) {
+      sendToWorker({ type: 'setVobSubDebandRange', range }).catch(() => {})
+    }
+    this.vobsubParser?.setDebandRange(range)
+    // Clear cache to force re-render with new settings
+    this.state.frameCache.clear()
+    this.lastRenderedIndex = -1
+  }
+
+  /** Check if debanding is enabled */
+  get debandEnabled(): boolean {
+    return this.vobsubParser?.debandEnabled ?? false
+  }
+
   dispose(): void {
     super.dispose()
     this.state.frameCache.clear()

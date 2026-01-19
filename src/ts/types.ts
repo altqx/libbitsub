@@ -113,6 +113,9 @@ export type WorkerRequest =
   | { type: 'clearVobSubCache' }
   | { type: 'disposePgs' }
   | { type: 'disposeVobSub' }
+  | { type: 'setVobSubDebandEnabled'; enabled: boolean }
+  | { type: 'setVobSubDebandThreshold'; threshold: number }
+  | { type: 'setVobSubDebandRange'; range: number }
 
 export type WorkerResponse =
   | { type: 'initComplete'; success: boolean; error?: string }
@@ -126,6 +129,7 @@ export type WorkerResponse =
   | { type: 'vobSubTimestamps'; timestamps: Float64Array }
   | { type: 'cleared' }
   | { type: 'disposed' }
+  | { type: 'debandSet' }
   | { type: 'error'; message: string }
 
 /** Shared worker state for video renderers. */

@@ -2,10 +2,13 @@
 //!
 //! This module implements the VobSub subtitle format (.idx + .sub files).
 
+mod deband;
 mod idx_parser;
 mod rle;
 mod sub_parser;
 mod vobsub_parser;
+
+pub use deband::*;
 
 pub use idx_parser::*;
 pub use rle::*;

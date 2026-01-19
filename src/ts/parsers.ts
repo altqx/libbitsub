@@ -259,6 +259,34 @@ export class VobSubParserLowLevel {
   }
 
   /**
+   * Enable or disable debanding filter.
+   */
+  setDebandEnabled(enabled: boolean): void {
+    this.parser?.setDebandEnabled(enabled)
+  }
+
+  /**
+   * Set debanding threshold (0-255, default: 64).
+   */
+  setDebandThreshold(threshold: number): void {
+    this.parser?.setDebandThreshold(threshold)
+  }
+
+  /**
+   * Set debanding sample range in pixels (1-64, default: 15).
+   */
+  setDebandRange(range: number): void {
+    this.parser?.setDebandRange(range)
+  }
+
+  /**
+   * Check if debanding is enabled.
+   */
+  get debandEnabled(): boolean {
+    return this.parser?.debandEnabled ?? false
+  }
+
+  /**
    * Dispose of resources.
    */
   dispose(): void {

@@ -195,6 +195,60 @@ renderer.setDisplaySettings({
 renderer.resetDisplaySettings()
 ```
 
+### Debanding (VobSub)
+
+VobSub subtitles often exhibit banding artifacts due to their limited 4-color palette. libbitsub includes a neo_f3kdb-style debanding filter that smooths color transitions:
+
+```typescript
+import { VobSubRenderer } from 'libbitsub'
+
+const renderer = new VobSubRenderer({
+  video: videoElement,
+  subUrl: '/subtitles/movie.sub'
+})
+
+// Enable debanding with default settings
+renderer.setDebandEnabled(true)
+
+// Fine-tune debanding parameters
+renderer.setDebandThreshold(64.0)  // Higher = more aggressive smoothing
+renderer.setDebandRange(15)        // Pixel radius for sampling
+
+// Check if debanding is active
+console.log(renderer.debandEnabled) // true
+```
+
+**Low-Level API:**
+
+```typescript
+import { VobSubParserLowLevel } from 'libbitsub'
+
+const parser = new VobSubParserLowLevel()
+parser.loadFromData(idxContent, subData)
+
+// Configure debanding before rendering
+parser.setDebandEnabled(true)
+parser.setDebandThreshold(48.0)
+parser.setDebandRange(12)
+
+// Rendered frames will have debanding applied
+const frame = parser.renderAtIndex(0)
+```
+
+**Debanding Settings:**
+
+| Property    | Type    | Default | Range     | Description                                      |
+| ----------- | ------- | ------- | --------- | ------------------------------------------------ |
+| `enabled`   | boolean | `false` | -         | Enable/disable the debanding filter              |
+| `threshold` | number  | `64.0`  | 0.0-255.0 | Difference threshold; higher = more smoothing    |
+| `range`     | number  | `15`    | 1-64      | Sample radius in pixels; higher = wider sampling |
+
+**Notes:**
+- Debanding is applied post-decode on the RGBA output
+- Uses cross-shaped sampling with factor-based blending (neo_f3kdb sample_mode 6 style)
+- Transparent pixels are skipped for performance
+- Deterministic output (same input = same output)
+
 **Settings Reference:**
 
 - `scale` (number): Scale factor for subtitles.
@@ -398,6 +452,10 @@ parser.dispose()
 - `setDisplaySettings(settings: Partial<SubtitleDisplaySettings>): void` - Update display settings
 - `resetDisplaySettings(): void` - Reset display settings to defaults
 - `getStats(): SubtitleRendererStats` - Get performance statistics
+- `setDebandEnabled(enabled: boolean): void` - Enable/disable debanding filter
+- `setDebandThreshold(threshold: number): void` - Set debanding threshold (0.0-255.0)
+- `setDebandRange(range: number): void` - Set debanding sample range (1-64)
+- `debandEnabled: boolean` - Check if debanding is enabled
 - `dispose(): void` - Clean up all resources
 
 ### Low-Level (Programmatic)
@@ -417,6 +475,10 @@ parser.dispose()
 
 - `loadFromData(idxContent: string, subData: Uint8Array): void` - Load IDX + SUB
 - `loadFromSubOnly(subData: Uint8Array): void` - Load SUB only
+- `setDebandEnabled(enabled: boolean): void` - Enable/disable debanding filter
+- `setDebandThreshold(threshold: number): void` - Set debanding threshold (0.0-255.0)
+- `setDebandRange(range: number): void` - Set debanding sample range (1-64)
+- `debandEnabled: boolean` - Check if debanding is enabled
 - Same rendering methods as PgsParser
 
 #### `UnifiedSubtitleParser`
