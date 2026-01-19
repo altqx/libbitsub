@@ -283,7 +283,7 @@ export class VobSubParserLowLevel {
    * Check if debanding is enabled.
    */
   get debandEnabled(): boolean {
-    return this.parser?.debandEnabled ?? false
+    return this.parser?.debandEnabled ?? true
   }
 
   /**

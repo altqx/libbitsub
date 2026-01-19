@@ -817,6 +817,7 @@ export class VobSubRenderer extends BaseVideoSubtitleRenderer {
 
       scheduleTask(() => {
         this.vobsubParser!.loadFromData(idxData, subData)
+        this.vobsubParser!.setDebandEnabled(true)
         this.state.timestamps = this.vobsubParser!.getTimestamps()
         console.log(`[libbitsub] VobSub loaded (main thread): ${this.vobsubParser!.count} subtitle entries`)
         this.isLoaded = true
@@ -968,7 +969,7 @@ export class VobSubRenderer extends BaseVideoSubtitleRenderer {
 
   /** Check if debanding is enabled */
   get debandEnabled(): boolean {
-    return this.vobsubParser?.debandEnabled ?? false
+    return this.vobsubParser?.debandEnabled ?? true
   }
 
   dispose(): void {
