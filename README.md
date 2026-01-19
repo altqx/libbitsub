@@ -27,6 +27,7 @@ https://gist.github.com/user-attachments/assets/a89ae9fe-23e4-4bc3-8cad-16a3f0fe
 ### Installation
 
 **npm / bun**
+
 ```bash
 npm install libbitsub
 # or
@@ -34,6 +35,7 @@ bun add libbitsub
 ```
 
 **JSR (Deno)**
+
 ```bash
 deno add jsr:@altq/libbitsub
 ```
@@ -152,17 +154,14 @@ const renderer = new VobSubRenderer({
 })
 
 // Or load directly from ArrayBuffer
-const [subResponse, idxResponse] = await Promise.all([
-  fetch('/subtitles/movie.sub'),
-  fetch('/subtitles/movie.idx')
-])
+const [subResponse, idxResponse] = await Promise.all([fetch('/subtitles/movie.sub'), fetch('/subtitles/movie.idx')])
 const subData = await subResponse.arrayBuffer()
 const idxData = await idxResponse.text()
 
 const renderer = new VobSubRenderer({
   video: videoElement,
-  subContent: subData,   // Load .sub directly from ArrayBuffer
-  idxContent: idxData,   // Load .idx directly from string
+  subContent: subData, // Load .sub directly from ArrayBuffer
+  idxContent: idxData, // Load .idx directly from string
   onLoading: () => setIsLoading(true),
   onLoaded: () => setIsLoading(false),
   onError: (error) => {
@@ -207,12 +206,12 @@ const renderer = new VobSubRenderer({
   subUrl: '/subtitles/movie.sub'
 })
 
-// Enable debanding with default settings
-renderer.setDebandEnabled(true)
+// Debanding is enabled by default; call to disable if needed
+// renderer.setDebandEnabled(false)
 
 // Fine-tune debanding parameters
-renderer.setDebandThreshold(64.0)  // Higher = more aggressive smoothing
-renderer.setDebandRange(15)        // Pixel radius for sampling
+renderer.setDebandThreshold(64.0) // Higher = more aggressive smoothing
+renderer.setDebandRange(15) // Pixel radius for sampling
 
 // Check if debanding is active
 console.log(renderer.debandEnabled) // true
@@ -239,11 +238,12 @@ const frame = parser.renderAtIndex(0)
 
 | Property    | Type    | Default | Range     | Description                                      |
 | ----------- | ------- | ------- | --------- | ------------------------------------------------ |
-| `enabled`   | boolean | `false` | -         | Enable/disable the debanding filter              |
+| `enabled`   | boolean | `true`  | -         | Enable/disable the debanding filter              |
 | `threshold` | number  | `64.0`  | 0.0-255.0 | Difference threshold; higher = more smoothing    |
 | `range`     | number  | `15`    | 1-64      | Sample radius in pixels; higher = wider sampling |
 
 **Notes:**
+
 - Debanding is applied post-decode on the RGBA output
 - Uses cross-shaped sampling with factor-based blending (neo_f3kdb sample_mode 6 style)
 - Transparent pixels are skipped for performance

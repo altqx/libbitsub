@@ -353,9 +353,9 @@ export class WebGPURenderer {
       if (this.format === 'bgra8unorm') {
         const bgraData = new Uint8Array(data.length)
         for (let j = 0; j < data.length; j += 4) {
-          bgraData[j] = data[j + 2]     // B <- R
+          bgraData[j] = data[j + 2] // B <- R
           bgraData[j + 1] = data[j + 1] // G <- G
-          bgraData[j + 2] = data[j]     // R <- B
+          bgraData[j + 2] = data[j] // R <- B
           bgraData[j + 3] = data[j + 3] // A <- A
         }
         uploadData = bgraData

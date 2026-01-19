@@ -6,8 +6,8 @@ use std::collections::HashMap;
 use wasm_bindgen::prelude::*;
 
 use super::{
-    DebandConfig, IdxParseResult, SubtitlePacket, VobSubPalette, VobSubTimestamp,
-    apply_deband, decode_vobsub_rle, parse_idx, parse_subtitle_packet,
+    DebandConfig, IdxParseResult, SubtitlePacket, VobSubPalette, VobSubTimestamp, apply_deband,
+    decode_vobsub_rle, parse_idx, parse_subtitle_packet,
 };
 use crate::utils::binary_search_timestamp;
 
@@ -78,12 +78,14 @@ impl VobSubParser {
                     && sub_data[candidate + 2] == 0x01
                     && sub_data[candidate + 3] == 0xBA
                     && let Some((packet, _)) = parse_subtitle_packet(sub_data, candidate, &palette)
-                        && packet.width > 0 && packet.height > 0 {
-                            timestamps.push(VobSubTimestamp {
-                                timestamp_ms: packet.timestamp_ms,
-                                file_position: candidate as u64,
-                            });
-                        }
+                    && packet.width > 0
+                    && packet.height > 0
+                {
+                    timestamps.push(VobSubTimestamp {
+                        timestamp_ms: packet.timestamp_ms,
+                        file_position: candidate as u64,
+                    });
+                }
                 offset = candidate + 1;
             } else {
                 // No more 0x00 bytes found

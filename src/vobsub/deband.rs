@@ -109,10 +109,10 @@ fn sample_cross(
     };
 
     [
-        sample_at(0, -oy),  // up
-        sample_at(0, oy),   // down
-        sample_at(-ox, 0),  // left
-        sample_at(ox, 0),   // right
+        sample_at(0, -oy), // up
+        sample_at(0, oy),  // down
+        sample_at(-ox, 0), // left
+        sample_at(ox, 0),  // right
     ]
 }
 
@@ -192,7 +192,10 @@ mod tests {
     #[test]
     fn test_transparent_skip() {
         let rgba = vec![255, 0, 0, 0]; // Fully transparent
-        let config = DebandConfig { enabled: true, ..Default::default() };
+        let config = DebandConfig {
+            enabled: true,
+            ..Default::default()
+        };
         let result = apply_deband(&rgba, 1, 1, &config);
         assert_eq!(result[3], 0); // Alpha preserved
     }
