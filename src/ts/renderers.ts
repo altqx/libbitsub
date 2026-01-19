@@ -817,7 +817,6 @@ export class VobSubRenderer extends BaseVideoSubtitleRenderer {
 
       scheduleTask(() => {
         this.vobsubParser!.loadFromData(idxData, subData)
-        this.vobsubParser!.setDebandEnabled(true)
         this.state.timestamps = this.vobsubParser!.getTimestamps()
         console.log(`[libbitsub] VobSub loaded (main thread): ${this.vobsubParser!.count} subtitle entries`)
         this.isLoaded = true

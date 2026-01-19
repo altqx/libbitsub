@@ -19,7 +19,7 @@ pub struct DebandConfig {
 impl Default for DebandConfig {
     fn default() -> Self {
         Self {
-            enabled: false,
+            enabled: true,
             threshold: 64.0,
             range: 15,
             seed: 0x1337,

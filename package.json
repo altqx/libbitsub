@@ -11,7 +11,9 @@
     "subtitle",
     "wasm",
     "rust",
-    "rendering"
+    "rendering",
+    "video",
+    "player"
   ],
   "main": "dist/index.js",
   "module": "dist/index.js",

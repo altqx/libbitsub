@@ -207,13 +207,11 @@ self.onmessage = async function(event) {
             case 'loadVobSub':
                 vobSubParser = new wasmModule.VobSubParser();
                 vobSubParser.loadFromData(request.idxContent, new Uint8Array(request.subData));
-                try { vobSubParser.setDebandEnabled(true); } catch (e) { /* ignore if not supported */ }
                 postResponse({ type: 'vobSubLoaded', count: vobSubParser.count }, [], _id);
                 break;
             case 'loadVobSubOnly':
                 vobSubParser = new wasmModule.VobSubParser();
                 vobSubParser.loadFromSubOnly(new Uint8Array(request.subData));
-                try { vobSubParser.setDebandEnabled(true); } catch (e) { /* ignore if not supported */ }
                 postResponse({ type: 'vobSubLoaded', count: vobSubParser.count }, [], _id);
                 break;
             case 'renderPgsAtIndex': {
