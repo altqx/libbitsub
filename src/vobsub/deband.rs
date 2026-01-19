@@ -176,7 +176,7 @@ mod tests {
     #[test]
     fn test_default_config() {
         let config = DebandConfig::default();
-        assert!(!config.enabled);
+        assert!(config.enabled);
         assert_eq!(config.threshold, 64.0);
         assert_eq!(config.range, 15);
     }
