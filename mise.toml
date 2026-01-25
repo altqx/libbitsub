@@ -1,0 +1,27 @@
+[tools]
+bun = "latest"
+rust = "latest"
+"cargo:wasm-pack" = "latest"
+
+[env]
+RUSTUP_TOOLCHAIN = "stable"
+
+[tasks.setup]
+description = "Install wasm32 target"
+run = "rustup target add wasm32-unknown-unknown"
+
+[tasks.build]
+description = "Build WASM and TypeScript"
+run = "bun run build"
+
+[tasks.clean]
+description = "Clean build artifacts"
+run = "bun run clean"
+
+[tasks.test]
+description = "Run Rust tests"
+run = "cargo test"
+
+[tasks.format]
+description = "Format code"
+run = "bun run format"
