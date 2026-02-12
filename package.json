@@ -1,6 +1,6 @@
 {
   "name": "libbitsub",
-  "version": "1.4.1",
+  "version": "1.5.0",
   "author": "altqx",
   "license": "MIT OR Apache-2.0",
   "description": "High-performance WASM renderer for graphical subtitles (PGS and VobSub)",
@@ -46,7 +46,7 @@
     "format": "cargo fmt && prettier . --write"
   },
   "devDependencies": {
-    "prettier": "^3.7.4",
+    "prettier": "^3.8.1",
     "typescript": "^5.9.3"
   },
   "peerDependencies": {},
@@ -54,6 +54,6 @@
     "node": ">=18"
   },
   "dependencies": {
-    "@webgpu/types": "^0.1.68"
+    "@webgpu/types": "^0.1.69"
   }
 }
