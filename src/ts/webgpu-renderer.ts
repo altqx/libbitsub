@@ -63,11 +63,8 @@ struct FragmentInput {
 
 @fragment
 fn fragmentMain(input: FragmentInput) -> @location(0) vec4f {
-  // Sample RGBA texture
-  let color = textureSample(tex, texSampler, input.texCoord);
-  
-  // Output with premultiplied alpha
-  return vec4f(color.rgb * color.a, color.a);
+  // Sample pre-multiplied alpha texture (premultiplied on CPU upload)
+  return textureSample(tex, texSampler, input.texCoord);
 }
 `
 
@@ -349,24 +346,32 @@ export class WebGPURenderer {
         this.textures[i] = texInfo
       }
 
-      let uploadData: Uint8Array
+      // Premultiply alpha on CPU so linear texture filtering produces correct results
+      const uploadData = new Uint8Array(data.length)
       if (this.format === 'bgra8unorm') {
-        const bgraData = new Uint8Array(data.length)
         for (let j = 0; j < data.length; j += 4) {
-          bgraData[j] = data[j + 2] // B <- R
-          bgraData[j + 1] = data[j + 1] // G <- G
-          bgraData[j + 2] = data[j] // R <- B
-          bgraData[j + 3] = data[j + 3] // A <- A
+          const a = data[j + 3]
+          const af = a / 255
+          uploadData[j] = (data[j + 2] * af + 0.5) | 0 // B <- R * a
+          uploadData[j + 1] = (data[j + 1] * af + 0.5) | 0 // G <- G * a
+          uploadData[j + 2] = (data[j] * af + 0.5) | 0 // R <- B * a
+          uploadData[j + 3] = a
         }
-        uploadData = bgraData
       } else {
-        uploadData = new Uint8Array(data.buffer, data.byteOffset, data.byteLength)
+        for (let j = 0; j < data.length; j += 4) {
+          const a = data[j + 3]
+          const af = a / 255
+          uploadData[j] = (data[j] * af + 0.5) | 0
+          uploadData[j + 1] = (data[j + 1] * af + 0.5) | 0
+          uploadData[j + 2] = (data[j + 2] * af + 0.5) | 0
+          uploadData[j + 3] = a
+        }
       }
 
-      // Upload pixel data to texture
+      // Upload premultiplied pixel data to texture
       this.device.queue.writeTexture(
         { texture: texInfo.texture },
-        uploadData.buffer,
+        uploadData,
         { bytesPerRow: width * 4 },
         { width, height }
       )
