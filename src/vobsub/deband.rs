@@ -184,7 +184,10 @@ mod tests {
     #[test]
     fn test_disabled_passthrough() {
         let rgba = vec![255, 0, 0, 255, 0, 255, 0, 255];
-        let config = DebandConfig::default(); // disabled by default
+        let config = DebandConfig {
+            enabled: false,
+            ..Default::default()
+        };
         let result = apply_deband(&rgba, 2, 1, &config);
         assert_eq!(result, rgba);
     }
