@@ -125,6 +125,14 @@ jobs:
         with:
           name: libbitsub-dist
 
+      - name: Setup Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Publish to JSR
+        run: deno publish --no-check --sloppy-imports
+
       - name: Setup Node.js for npm publish
         uses: actions/setup-node@v4
         with:
@@ -135,14 +143,6 @@ jobs:
         run: npm publish --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-
-      - name: Setup Deno
-        uses: denoland/setup-deno@v2
-        with:
-          deno-version: v2.x
-
-      - name: Publish to JSR
-        run: deno publish --no-check --sloppy-imports
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
