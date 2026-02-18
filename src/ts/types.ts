@@ -60,8 +60,10 @@ export interface VideoSubtitleOptions {
   onLoaded?: () => void
   /** Callback when subtitle loading fails */
   onError?: (error: Error) => void
-  /** Callback when WebGPU is unavailable and falling back to Canvas2D */
+  /** Callback when WebGPU is unavailable and falling back to WebGL2 or Canvas2D */
   onWebGPUFallback?: () => void
+  /** Callback when WebGL2 is unavailable and falling back to Canvas2D */
+  onWebGL2Fallback?: () => void
 }
 
 /** Options for VobSub video subtitle renderer. */

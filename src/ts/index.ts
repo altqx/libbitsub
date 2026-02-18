@@ -32,3 +32,7 @@ export { PgsParser, VobSubParserLowLevel, UnifiedSubtitleParser } from './parser
 
 // Renderers
 export { PgsRenderer, VobSubRenderer } from './renderers'
+
+// GPU renderers (advanced use)
+export { WebGPURenderer, isWebGPUSupported } from './webgpu-renderer'
+export { WebGL2Renderer, isWebGL2Supported } from './webgl2-renderer'

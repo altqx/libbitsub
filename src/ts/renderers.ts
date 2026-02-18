@@ -9,6 +9,7 @@ import { getOrCreateWorker, sendToWorker } from './worker'
 import { binarySearchTimestamp, convertFrameData, createWorkerState } from './utils'
 import { PgsParser, VobSubParserLowLevel } from './parsers'
 import { WebGPURenderer, isWebGPUSupported } from './webgpu-renderer'
+import { WebGL2Renderer, isWebGL2Supported } from './webgl2-renderer'
 
 /** Default display settings */
 const DEFAULT_DISPLAY_SETTINGS: SubtitleDisplaySettings = {
@@ -67,11 +68,16 @@ abstract class BaseVideoSubtitleRenderer {
   /** Display settings for subtitle rendering */
   protected displaySettings: SubtitleDisplaySettings = { ...DEFAULT_DISPLAY_SETTINGS }
 
-  // WebGPU renderer (optional, falls back to Canvas2D if unavailable)
+  // WebGPU renderer (optional, falls back to WebGL2 then Canvas2D)
   protected webgpuRenderer: WebGPURenderer | null = null
   protected useWebGPU: boolean = false
   protected preferWebGPU: boolean = true
   protected onWebGPUFallback?: () => void
+
+  // WebGL2 renderer (optional, falls back to Canvas2D)
+  protected webgl2Renderer: WebGL2Renderer | null = null
+  protected useWebGL2: boolean = false
+  protected onWebGL2Fallback?: () => void
 
   // Performance tracking
   protected perfStats = {
@@ -89,6 +95,7 @@ abstract class BaseVideoSubtitleRenderer {
     this.subContent = options.subContent
     this.preferWebGPU = options.preferWebGPU !== false // Default to true
     this.onWebGPUFallback = options.onWebGPUFallback
+    this.onWebGL2Fallback = options.onWebGL2Fallback
   }
 
   /** Get current display settings */
@@ -182,9 +189,11 @@ abstract class BaseVideoSubtitleRenderer {
       parent.appendChild(this.canvas)
     }
 
-    // Try WebGPU first if preferred
+    // Try WebGPU first if preferred, then WebGL2, then Canvas2D
     if (this.preferWebGPU && isWebGPUSupported()) {
       this.initWebGPU()
+    } else if (isWebGL2Supported()) {
+      this.initWebGL2()
     } else {
       this.initCanvas2D()
     }
@@ -217,12 +226,42 @@ abstract class BaseVideoSubtitleRenderer {
       this.useWebGPU = true
       console.log('[libbitsub] Using WebGPU renderer')
     } catch (error) {
-      console.warn('[libbitsub] WebGPU init failed, falling back to Canvas2D:', error)
+      console.warn('[libbitsub] WebGPU init failed, falling back to WebGL2:', error)
       this.webgpuRenderer?.destroy()
       this.webgpuRenderer = null
       this.useWebGPU = false
-      this.initCanvas2D()
       this.onWebGPUFallback?.()
+      // Try WebGL2 before Canvas2D
+      if (isWebGL2Supported()) {
+        this.initWebGL2()
+      } else {
+        this.initCanvas2D()
+      }
+    }
+  }
+
+  /** Initialize WebGL2 renderer. */
+  private async initWebGL2(): Promise<void> {
+    try {
+      this.webgl2Renderer = new WebGL2Renderer()
+      await this.webgl2Renderer.init()
+
+      if (!this.canvas) return
+
+      const bounds = this.getVideoContentBounds()
+      const width = Math.max(1, bounds.width * window.devicePixelRatio)
+      const height = Math.max(1, bounds.height * window.devicePixelRatio)
+
+      await this.webgl2Renderer.setCanvas(this.canvas, width, height)
+      this.useWebGL2 = true
+      console.log('[libbitsub] Using WebGL2 renderer')
+    } catch (error) {
+      console.warn('[libbitsub] WebGL2 init failed, falling back to Canvas2D:', error)
+      this.webgl2Renderer?.destroy()
+      this.webgl2Renderer = null
+      this.useWebGL2 = false
+      this.onWebGL2Fallback?.()
+      this.initCanvas2D()
     }
   }
 
@@ -231,6 +270,7 @@ abstract class BaseVideoSubtitleRenderer {
     if (!this.canvas) return
     this.ctx = this.canvas.getContext('2d')
     this.useWebGPU = false
+    this.useWebGL2 = false
     console.log('[libbitsub] Using Canvas2D renderer')
   }
 
@@ -295,9 +335,11 @@ abstract class BaseVideoSubtitleRenderer {
     this.canvas.style.width = `${bounds.width}px`
     this.canvas.style.height = `${bounds.height}px`
 
-    // Update WebGPU renderer size if active
+    // Update GPU renderer size if active
     if (this.useWebGPU && this.webgpuRenderer) {
       this.webgpuRenderer.updateSize(pixelWidth, pixelHeight)
+    } else if (this.useWebGL2 && this.webgl2Renderer) {
+      this.webgl2Renderer.updateSize(pixelWidth, pixelHeight)
     }
 
     this.lastRenderedIndex = -1
@@ -378,9 +420,11 @@ abstract class BaseVideoSubtitleRenderer {
       }
     }
 
-    // Use WebGPU or Canvas2D based on availability
+    // Use best available renderer
     if (this.useWebGPU && this.webgpuRenderer) {
       this.renderFrameWebGPU(data, index)
+    } else if (this.useWebGL2 && this.webgl2Renderer) {
+      this.renderFrameWebGL2(data, index)
     } else {
       this.renderFrameCanvas2D(data, index)
     }
@@ -411,6 +455,29 @@ abstract class BaseVideoSubtitleRenderer {
     const offsetY = (verticalOffset / 100) * this.canvas.height
 
     this.webgpuRenderer.render(data.compositionData, data.width, data.height, scaleX, scaleY, offsetY)
+  }
+
+  /** Render using WebGL2. */
+  private renderFrameWebGL2(data: SubtitleData | undefined, index: number): void {
+    if (!this.webgl2Renderer || !this.canvas) return
+
+    if (index < 0 || !data || data.compositionData.length === 0) {
+      this.webgl2Renderer.clear()
+      this.lastRenderedData = null
+      return
+    }
+
+    this.lastRenderedData = data
+
+    const baseScaleX = this.canvas.width / data.width
+    const baseScaleY = this.canvas.height / data.height
+
+    const { scale, verticalOffset } = this.displaySettings
+    const scaleX = baseScaleX * scale
+    const scaleY = baseScaleY * scale
+    const offsetY = (verticalOffset / 100) * this.canvas.height
+
+    this.webgl2Renderer.render(data.compositionData, data.width, data.height, scaleX, scaleY, offsetY)
   }
 
   /** Render using Canvas2D. */
@@ -475,10 +542,14 @@ abstract class BaseVideoSubtitleRenderer {
     this.resizeObserver?.disconnect()
     this.resizeObserver = null
 
-    // Clean up WebGPU renderer
+    // Clean up GPU renderers
     if (this.webgpuRenderer) {
       this.webgpuRenderer.destroy()
       this.webgpuRenderer = null
+    }
+    if (this.webgl2Renderer) {
+      this.webgl2Renderer.destroy()
+      this.webgl2Renderer = null
     }
 
     this.canvas?.parentElement?.removeChild(this.canvas)
@@ -488,6 +559,7 @@ abstract class BaseVideoSubtitleRenderer {
     this.tempCtx = null
     this.lastRenderedData = null
     this.useWebGPU = false
+    this.useWebGL2 = false
   }
 }
 
