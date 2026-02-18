@@ -49,19 +49,27 @@ interface TextureInfo {
   texture: WebGLTexture
   width: number
   height: number
+  /** Reference to the last uploaded source pixel data – used to skip redundant premultiplication + re-upload. */
+  sourceData: Uint8ClampedArray | null
 }
+
+/** Cached result of the WebGL2 support check (null = not yet tested). */
+let _webgl2Supported: boolean | null = null
 
 /**
  * Check if WebGL2 is supported in the current browser.
+ * Result is cached after the first call.
  */
 export function isWebGL2Supported(): boolean {
-  if (typeof document === 'undefined') return false
+  if (_webgl2Supported !== null) return _webgl2Supported
+  if (typeof document === 'undefined') return (_webgl2Supported = false)
   try {
     const canvas = document.createElement('canvas')
-    return !!canvas.getContext('webgl2')
+    _webgl2Supported = !!canvas.getContext('webgl2')
   } catch {
-    return false
+    _webgl2Supported = false
   }
+  return _webgl2Supported
 }
 
 /**
@@ -219,7 +227,7 @@ export class WebGL2Renderer {
     // Allocate storage
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, width, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, null)
 
-    const info: TextureInfo = { texture, width, height }
+    const info: TextureInfo = { texture, width, height, sourceData: null }
     this.textures[index] = info
     return info
   }
@@ -253,21 +261,23 @@ export class WebGL2Renderer {
 
       if (width <= 0 || height <= 0) continue
 
-      // Premultiply alpha on CPU so linear texture filtering produces correct results
-      const uploadData = new Uint8Array(data.length)
-      for (let j = 0; j < data.length; j += 4) {
-        const a = data[j + 3]
-        const af = a / 255
-        uploadData[j] = (data[j] * af + 0.5) | 0
-        uploadData[j + 1] = (data[j + 1] * af + 0.5) | 0
-        uploadData[j + 2] = (data[j + 2] * af + 0.5) | 0
-        uploadData[j + 3] = a
-      }
-
-      // Upload premultiplied pixel data to GPU texture
       const info = this._ensureTexture(i, width, height)
       gl.bindTexture(gl.TEXTURE_2D, info.texture)
-      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, uploadData)
+
+      // Only premultiply and re-upload if the source ImageData buffer has changed
+      if (info.sourceData !== data) {
+        const uploadData = new Uint8Array(data.length)
+        for (let j = 0; j < data.length; j += 4) {
+          const a = data[j + 3]
+          const af = a / 255
+          uploadData[j] = (data[j] * af + 0.5) | 0
+          uploadData[j + 1] = (data[j + 1] * af + 0.5) | 0
+          uploadData[j + 2] = (data[j + 2] * af + 0.5) | 0
+          uploadData[j + 3] = a
+        }
+        gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, uploadData)
+        info.sourceData = data
+      }
 
       // Calculate scaled position and size (mirrors WebGPU renderer maths)
       const scaledWidth = width * scaleX
@@ -281,6 +291,15 @@ export class WebGL2Renderer {
 
       // Draw 6 vertices for the two-triangle quad
       gl.drawArrays(gl.TRIANGLES, 0, 6)
+    }
+
+    // Free GPU textures in slots beyond the current composition count
+    if (this.textures.length > compositions.length) {
+      for (let i = compositions.length; i < this.textures.length; i++) {
+        const stale = this.textures[i]
+        if (stale) gl.deleteTexture(stale.texture)
+      }
+      this.textures.length = compositions.length
     }
   }
 

@@ -73,6 +73,10 @@ interface TextureInfo {
   view: GPUTextureView
   width: number
   height: number
+  /** Reference to the last uploaded source pixel data – used to skip redundant premultiplication + re-upload. */
+  sourceData: Uint8ClampedArray | null
+  /** Cached bind group – valid as long as texture view and quad buffer haven't changed. */
+  bindGroup: GPUBindGroup | null
 }
 
 /**
@@ -282,7 +286,9 @@ export class WebGPURenderer {
       texture,
       view: texture.createView(),
       width,
-      height
+      height,
+      sourceData: null,
+      bindGroup: null
     }
   }
 
@@ -339,42 +345,43 @@ export class WebGPURenderer {
 
       let texInfo = this.textures[i]!
 
-      // Recreate texture if size changed
+      // Recreate texture if size changed; clear cached bind group and source reference
       if (texInfo.width !== width || texInfo.height !== height) {
         this.pendingDestroyTextures.push(texInfo.texture)
         texInfo = this.createTextureInfo(width, height)
         this.textures[i] = texInfo
       }
 
-      // Premultiply alpha on CPU so linear texture filtering produces correct results
-      const uploadData = new Uint8Array(data.length)
-      if (this.format === 'bgra8unorm') {
-        for (let j = 0; j < data.length; j += 4) {
-          const a = data[j + 3]
-          const af = a / 255
-          uploadData[j] = (data[j + 2] * af + 0.5) | 0 // B <- R * a
-          uploadData[j + 1] = (data[j + 1] * af + 0.5) | 0 // G <- G * a
-          uploadData[j + 2] = (data[j] * af + 0.5) | 0 // R <- B * a
-          uploadData[j + 3] = a
+      // Only premultiply and re-upload when the source ImageData buffer has changed
+      if (texInfo.sourceData !== data) {
+        const uploadData = new Uint8Array(data.length)
+        if (this.format === 'bgra8unorm') {
+          for (let j = 0; j < data.length; j += 4) {
+            const a = data[j + 3]
+            const af = a / 255
+            uploadData[j] = (data[j + 2] * af + 0.5) | 0 // B <- R * a
+            uploadData[j + 1] = (data[j + 1] * af + 0.5) | 0 // G
+            uploadData[j + 2] = (data[j] * af + 0.5) | 0 // R <- B * a
+            uploadData[j + 3] = a
+          }
+        } else {
+          for (let j = 0; j < data.length; j += 4) {
+            const a = data[j + 3]
+            const af = a / 255
+            uploadData[j] = (data[j] * af + 0.5) | 0
+            uploadData[j + 1] = (data[j + 1] * af + 0.5) | 0
+            uploadData[j + 2] = (data[j + 2] * af + 0.5) | 0
+            uploadData[j + 3] = a
+          }
         }
-      } else {
-        for (let j = 0; j < data.length; j += 4) {
-          const a = data[j + 3]
-          const af = a / 255
-          uploadData[j] = (data[j] * af + 0.5) | 0
-          uploadData[j + 1] = (data[j + 1] * af + 0.5) | 0
-          uploadData[j + 2] = (data[j + 2] * af + 0.5) | 0
-          uploadData[j + 3] = a
-        }
+        this.device.queue.writeTexture(
+          { texture: texInfo.texture },
+          uploadData,
+          { bytesPerRow: width * 4 },
+          { width, height }
+        )
+        texInfo.sourceData = data
       }
-
-      // Upload premultiplied pixel data to texture
-      this.device.queue.writeTexture(
-        { texture: texInfo.texture },
-        uploadData,
-        { bytesPerRow: width * 4 },
-        { width, height }
-      )
 
       // Calculate scaled position and size
       const scaledWidth = width * scaleX
@@ -401,18 +408,20 @@ export class WebGPURenderer {
       const quadBuffer = this.quadDataBuffers[i]!
       this.device.queue.writeBuffer(quadBuffer, 0, quadData)
 
-      // Create bind group for this composition
-      const bindGroup = this.device.createBindGroup({
-        layout: this.bindGroupLayout!,
-        entries: [
-          { binding: 0, resource: { buffer: this.uniformBuffer! } },
-          { binding: 1, resource: { buffer: quadBuffer } },
-          { binding: 2, resource: this.sampler! },
-          { binding: 3, resource: texInfo.view }
-        ]
-      })
+      // Reuse cached bind group; it is only invalidated when the texture is recreated (size change)
+      if (!texInfo.bindGroup) {
+        texInfo.bindGroup = this.device.createBindGroup({
+          layout: this.bindGroupLayout!,
+          entries: [
+            { binding: 0, resource: { buffer: this.uniformBuffer! } },
+            { binding: 1, resource: { buffer: quadBuffer } },
+            { binding: 2, resource: this.sampler! },
+            { binding: 3, resource: texInfo.view }
+          ]
+        })
+      }
 
-      renderPass.setBindGroup(0, bindGroup)
+      renderPass.setBindGroup(0, texInfo.bindGroup)
       renderPass.draw(6) // 6 vertices for quad
     }
 
@@ -424,6 +433,20 @@ export class WebGPURenderer {
       tex.destroy()
     }
     this.pendingDestroyTextures = []
+
+    // Free GPU resources in slots beyond the current composition count
+    if (this.textures.length > compositions.length) {
+      for (let i = compositions.length; i < this.textures.length; i++) {
+        this.textures[i].texture.destroy()
+      }
+      this.textures.length = compositions.length
+    }
+    if (this.quadDataBuffers.length > compositions.length) {
+      for (let i = compositions.length; i < this.quadDataBuffers.length; i++) {
+        this.quadDataBuffers[i].destroy()
+      }
+      this.quadDataBuffers.length = compositions.length
+    }
   }
 
   /**
