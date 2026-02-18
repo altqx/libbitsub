@@ -52,8 +52,6 @@ export interface VideoSubtitleOptions {
   subContent?: ArrayBuffer
   /** Worker URL (kept for API compatibility, not used in WASM version) */
   workerUrl?: string
-  /** Prefer WebGPU renderer if available (default: true) */
-  preferWebGPU?: boolean
   /** Callback when subtitle loading starts */
   onLoading?: () => void
   /** Callback when subtitle loading completes */

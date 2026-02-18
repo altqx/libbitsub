@@ -8,7 +8,7 @@ Started as a fork of Arcus92's [libpgs-js](https://github.com/Arcus92/libpgs-js)
 
 - **PGS (Blu-ray)** subtitle parsing and rendering
 - **VobSub (DVD)** subtitle parsing and rendering
-- **WebGPU rendering** GPU-accelerated rendering with automatic Canvas2D fallback
+- **WebGPU / WebGL2 rendering** GPU-accelerated rendering with automatic fallback: WebGPU → WebGL2 → Canvas2D
 - **High-performance** Rust-based rendering engine compiled to WebAssembly
 - **Zero-copy** data transfer between JS and WASM where possible
 - **Caching** for decoded bitmaps to optimize repeated rendering
@@ -319,31 +319,44 @@ setInterval(() => {
 | `totalEntries`   | number  | Total subtitle entries/display sets in the loaded file         |
 | `currentIndex`   | number  | Index of the currently displayed subtitle                      |
 
-### WebGPU Rendering
+### GPU-Accelerated Rendering
 
-libbitsub automatically uses WebGPU for GPU-accelerated rendering when available, with automatic fallback to Canvas2D:
+libbitsub automatically selects the best available GPU renderer at startup, following this fallback chain:
+
+**WebGPU → WebGL2 → Canvas2D**
 
 ```typescript
-import { PgsRenderer, isWebGPUSupported } from 'libbitsub'
+import { PgsRenderer, isWebGPUSupported, isWebGL2Supported } from 'libbitsub'
 
-// Check WebGPU support
+// Check renderer support
 if (isWebGPUSupported()) {
-  console.log('WebGPU available - GPU-accelerated rendering enabled')
+  console.log('WebGPU available')
+} else if (isWebGL2Supported()) {
+  console.log('WebGL2 available')
+} else {
+  console.log('Falling back to Canvas2D')
 }
 
-// Configure WebGPU preference
 const renderer = new PgsRenderer({
   video: videoElement,
   subUrl: '/subtitles/movie.sup',
-  preferWebGPU: true, // default: true
-  onWebGPUFallback: () => console.log('Fell back to Canvas2D')
+  onWebGPUFallback: () => console.log('WebGPU unavailable, trying WebGL2'),
+  onWebGL2Fallback: () => console.log('WebGL2 unavailable, using Canvas2D')
 })
 ```
 
 **Options:**
 
-- `preferWebGPU` (boolean): Enable WebGPU rendering if available. Default: `true`
-- `onWebGPUFallback` (function): Callback when WebGPU is unavailable and falls back to Canvas2D
+- `onWebGPUFallback` (function): Callback when WebGPU initialisation fails
+- `onWebGL2Fallback` (function): Callback when WebGL2 initialisation fails
+
+**Renderer capabilities:**
+
+| Renderer | Premultiplied alpha | Linear sampling | Browser support |
+| -------- | ------------------- | --------------- | --------------- |
+| WebGPU   | ✅                  | ✅              | Chrome 113+, Firefox 141+, Edge 113+ |
+| WebGL2   | ✅                  | ✅              | All modern browsers |
+| Canvas2D | —                   | ✅              | Universal |
 
 ## Low-Level API (Programmatic Use)
 
@@ -501,11 +514,11 @@ interface VideoSubtitleOptions {
   subUrl?: string // URL to subtitle file (provide this OR subContent)
   subContent?: ArrayBuffer // Direct subtitle content (provide this OR subUrl)
   workerUrl?: string // Worker URL (for API compatibility)
-  preferWebGPU?: boolean // Prefer WebGPU renderer if available (default: true)
   onLoading?: () => void // Called when subtitle loading starts
   onLoaded?: () => void // Called when subtitle loading completes
   onError?: (error: Error) => void // Called when subtitle loading fails
-  onWebGPUFallback?: () => void // Called when WebGPU is unavailable
+  onWebGPUFallback?: () => void // Called when WebGPU init fails
+  onWebGL2Fallback?: () => void // Called when WebGL2 init fails
 }
 ```
 

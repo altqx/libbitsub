@@ -71,7 +71,6 @@ abstract class BaseVideoSubtitleRenderer {
   // WebGPU renderer (optional, falls back to WebGL2 then Canvas2D)
   protected webgpuRenderer: WebGPURenderer | null = null
   protected useWebGPU: boolean = false
-  protected preferWebGPU: boolean = true
   protected onWebGPUFallback?: () => void
 
   // WebGL2 renderer (optional, falls back to Canvas2D)
@@ -93,7 +92,6 @@ abstract class BaseVideoSubtitleRenderer {
     this.video = options.video
     this.subUrl = options.subUrl
     this.subContent = options.subContent
-    this.preferWebGPU = options.preferWebGPU !== false // Default to true
     this.onWebGPUFallback = options.onWebGPUFallback
     this.onWebGL2Fallback = options.onWebGL2Fallback
   }
@@ -189,8 +187,8 @@ abstract class BaseVideoSubtitleRenderer {
       parent.appendChild(this.canvas)
     }
 
-    // Try WebGPU first if preferred, then WebGL2, then Canvas2D
-    if (this.preferWebGPU && isWebGPUSupported()) {
+    // Try WebGPU first, then WebGL2, then Canvas2D
+    if (isWebGPUSupported()) {
       this.initWebGPU()
     } else if (isWebGL2Supported()) {
       this.initWebGL2()
