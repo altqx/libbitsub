@@ -237,6 +237,56 @@ const renderer = new PgsRenderer({
 })
 ```
 
+### Example: event-driven prefetch and cue inspection
+
+```ts
+import { PgsRenderer } from 'libbitsub'
+
+const renderer = new PgsRenderer({
+  video: videoElement,
+  subUrl: '/subtitles/movie.sup',
+  prefetchWindow: { before: 1, after: 2 },
+  onEvent: async (event) => {
+    switch (event.type) {
+      case 'loaded': {
+        console.log('track metadata', event.metadata)
+        await renderer.prefetchAroundTime(videoElement.currentTime)
+        break
+      }
+
+      case 'cue-change': {
+        if (!event.cue) {
+          console.log('no active subtitle cue')
+          break
+        }
+
+        const cue = renderer.getCueMetadata(event.cue.index)
+        console.log('active cue', {
+          index: cue?.index,
+          startTime: cue?.startTime,
+          endTime: cue?.endTime,
+          bounds: cue?.bounds,
+          compositionCount: cue?.compositionCount
+        })
+        break
+      }
+
+      case 'cache-change': {
+        console.log('cache', `${event.cachedFrames}/${event.cacheLimit}`, 'pending', event.pendingRenders)
+        break
+      }
+    }
+  }
+})
+
+videoElement.addEventListener('seeked', () => {
+  renderer.prefetchAroundTime(videoElement.currentTime).catch(console.error)
+})
+
+// later
+renderer.dispose()
+```
+
 Emitted events:
 
 | Event | Payload |
