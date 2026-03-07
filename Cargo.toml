@@ -15,15 +15,15 @@ crate-type = ["cdylib", "rlib"]
 default = ["console_error_panic_hook"]
 
 [dependencies]
-wasm-bindgen = "0.2.111"
-js-sys = "0.3.88"
+wasm-bindgen = "0.2.114"
+js-sys = "0.3.91"
 console_error_panic_hook = { version = "0.1.7", optional = true }
 wee_alloc = { version = "0.4.5", optional = true }
 byteorder = "1.5.0"
 memchr = "2.8.0"
 
 [dev-dependencies]
-wasm-bindgen-test = "0.3.61"
+wasm-bindgen-test = "0.3.64"
 
 [profile.release]
 opt-level = "z"
