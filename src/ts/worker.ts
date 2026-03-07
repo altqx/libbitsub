@@ -11,31 +11,29 @@ let workerInitPromise: Promise<Worker> | null = null
 let messageId = 0
 
 const pendingCallbacks = new Map<
-  number,
-  {
-    resolve: (response: WorkerResponse) => void
-    reject: (error: Error) => void
-  }
+    number,
+    {
+        resolve: (response: WorkerResponse) => void
+        reject: (error: Error) => void
+    }
 >()
 
 /** Check if Web Workers are available. */
 export function isWorkerAvailable(): boolean {
-  return typeof Worker !== 'undefined' && typeof window !== 'undefined' && typeof Blob !== 'undefined'
+    return typeof Worker !== 'undefined' && typeof window !== 'undefined' && typeof Blob !== 'undefined'
 }
 
 /** Create inline worker script with embedded WASM loader. */
 function createWorkerScript(): string {
-  return `
+    return `
 let wasmModule = null;
-let pgsParser = null;
-let vobSubParser = null;
-
-// Minimal WASM bindings (inlined from wasm-bindgen output)
 let wasm;
 let cachedUint8Memory = null;
 let WASM_VECTOR_LEN = 0;
 let cachedTextEncoder = new TextEncoder();
 let cachedTextDecoder = new TextDecoder('utf-8', { ignoreBOM: true, fatal: true });
+const pgsParsers = new Map();
+const vobSubParsers = new Map();
 
 function getUint8Memory() {
     if (cachedUint8Memory === null || cachedUint8Memory.byteLength === 0) {
@@ -51,15 +49,13 @@ function passArray8ToWasm(arg) {
     return ptr;
 }
 
-const encodeString = (typeof cachedTextEncoder.encodeInto === 'function'
-    ? function (arg, view) {
-        return cachedTextEncoder.encodeInto(arg, view);
-    }
-    : function (arg, view) {
-        const buf = cachedTextEncoder.encode(arg);
-        view.set(buf);
-        return { read: arg.length, written: buf.length };
-    });
+const encodeString = typeof cachedTextEncoder.encodeInto === 'function'
+    ? function(arg, view) { return cachedTextEncoder.encodeInto(arg, view); }
+    : function(arg, view) {
+            const buf = cachedTextEncoder.encode(arg);
+            view.set(buf);
+            return { read: arg.length, written: buf.length };
+        };
 
 function passStringToWasm(arg) {
     let len = arg.length;
@@ -86,30 +82,57 @@ function getStringFromWasm(ptr, len) {
     return cachedTextDecoder.decode(getUint8Memory().subarray(ptr, ptr + len));
 }
 
+function buildPgsMetadata(parser) {
+    return {
+        format: 'pgs',
+        cueCount: parser.count,
+        screenWidth: parser.screenWidth || 0,
+        screenHeight: parser.screenHeight || 0
+    };
+}
+
+function buildVobSubMetadata(parser) {
+    return {
+        format: 'vobsub',
+        cueCount: parser.count,
+        screenWidth: parser.screenWidth || 0,
+        screenHeight: parser.screenHeight || 0,
+        language: parser.language || '',
+        trackId: parser.trackId || '',
+        hasIdxMetadata: !!parser.hasIdxMetadata
+    };
+}
+
+function disposeSession(sessionId) {
+    const pgsParser = pgsParsers.get(sessionId);
+    if (pgsParser) {
+        pgsParser.free();
+        pgsParsers.delete(sessionId);
+    }
+    const vobSubParser = vobSubParsers.get(sessionId);
+    if (vobSubParser) {
+        vobSubParser.free();
+        vobSubParsers.delete(sessionId);
+    }
+}
+
 async function initWasm(wasmUrl) {
     if (wasm) return;
-    
-    console.log('[libbitsub worker] Fetching WASM from:', wasmUrl);
+
     const response = await fetch(wasmUrl);
     if (!response.ok) {
         throw new Error('Failed to fetch WASM: ' + response.status);
     }
-    
-    // Try to load the JS glue file
+
     const jsGlueUrl = wasmUrl.replace('_bg.wasm', '.js').replace('.wasm', '.js');
-    console.log('[libbitsub worker] Loading JS glue from:', jsGlueUrl);
-    
+
     try {
         const mod = await import(/* webpackIgnore: true */ jsGlueUrl);
         const wasmBytes = await response.arrayBuffer();
         await mod.default(wasmBytes);
         wasmModule = mod;
         wasm = mod.__wasm || mod;
-        console.log('[libbitsub worker] WASM initialized via JS glue');
-    } catch (jsError) {
-        console.warn('[libbitsub worker] JS glue import failed, using direct instantiation:', jsError.message);
-        
-        // Fallback: direct WASM instantiation (limited functionality)
+    } catch {
         const wasmBytes = await response.arrayBuffer();
         const result = await WebAssembly.instantiate(wasmBytes, {
             __wbindgen_placeholder__: {
@@ -119,8 +142,7 @@ async function initWasm(wasmUrl) {
             }
         });
         wasm = result.instance.exports;
-        
-        // Create minimal module interface
+
         wasmModule = {
             PgsParser: class {
                 constructor() { this.ptr = wasm.pgsparser_new(); }
@@ -128,37 +150,43 @@ async function initWasm(wasmUrl) {
                     const ptr = passArray8ToWasm(data);
                     return wasm.pgsparser_parse(this.ptr, ptr, WASM_VECTOR_LEN);
                 }
-                getTimestamps() {
-                    return wasm.pgsparser_getTimestamps(this.ptr);
-                }
+                getTimestamps() { return wasm.pgsparser_getTimestamps(this.ptr); }
                 renderAtIndex(idx) { return wasm.pgsparser_renderAtIndex(this.ptr, idx); }
                 findIndexAtTimestamp(ts) { return wasm.pgsparser_findIndexAtTimestamp(this.ptr, ts); }
                 clearCache() { wasm.pgsparser_clearCache(this.ptr); }
                 free() { wasm.pgsparser_free(this.ptr); }
                 get count() { return wasm.pgsparser_count(this.ptr); }
+                get screenWidth() { return wasm.pgsparser_screenWidth(this.ptr); }
+                get screenHeight() { return wasm.pgsparser_screenHeight(this.ptr); }
             },
             VobSubParser: class {
                 constructor() { this.ptr = wasm.vobsubparser_new(); }
                 loadFromData(idx, sub) {
                     const idxPtr = passStringToWasm(idx);
+                    const idxLen = WASM_VECTOR_LEN;
                     const subPtr = passArray8ToWasm(sub);
-                    wasm.vobsubparser_loadFromData(this.ptr, idxPtr, WASM_VECTOR_LEN, subPtr, sub.length);
+                    wasm.vobsubparser_loadFromData(this.ptr, idxPtr, idxLen, subPtr, sub.length);
                 }
                 loadFromSubOnly(sub) {
                     const ptr = passArray8ToWasm(sub);
                     wasm.vobsubparser_loadFromSubOnly(this.ptr, ptr, WASM_VECTOR_LEN);
                 }
-                getTimestamps() {
-                    return wasm.vobsubparser_getTimestamps(this.ptr);
-                }
+                getTimestamps() { return wasm.vobsubparser_getTimestamps(this.ptr); }
                 renderAtIndex(idx) { return wasm.vobsubparser_renderAtIndex(this.ptr, idx); }
                 findIndexAtTimestamp(ts) { return wasm.vobsubparser_findIndexAtTimestamp(this.ptr, ts); }
                 clearCache() { wasm.vobsubparser_clearCache(this.ptr); }
                 free() { wasm.vobsubparser_free(this.ptr); }
+                setDebandEnabled(enabled) { wasm.vobsubparser_setDebandEnabled(this.ptr, enabled); }
+                setDebandThreshold(threshold) { wasm.vobsubparser_setDebandThreshold(this.ptr, threshold); }
+                setDebandRange(range) { wasm.vobsubparser_setDebandRange(this.ptr, range); }
                 get count() { return wasm.vobsubparser_count(this.ptr); }
+                get screenWidth() { return wasm.vobsubparser_screenWidth(this.ptr); }
+                get screenHeight() { return wasm.vobsubparser_screenHeight(this.ptr); }
+                get language() { return wasm.vobsubparser_language(this.ptr); }
+                get trackId() { return wasm.vobsubparser_trackId(this.ptr); }
+                get hasIdxMetadata() { return !!wasm.vobsubparser_hasIdxMetadata(this.ptr); }
             }
         };
-        console.log('[libbitsub worker] WASM initialized via direct instantiation');
     }
 }
 
@@ -173,6 +201,7 @@ function convertFrame(frame, isVobSub) {
         }
         return { width: frame.screenWidth, height: frame.screenHeight, compositions };
     }
+
     for (let i = 0; i < frame.compositionCount; i++) {
         const comp = frame.getComposition(i);
         if (!comp) continue;
@@ -183,93 +212,130 @@ function convertFrame(frame, isVobSub) {
             compositions.push({ rgba: rgbaCopy, x: comp.x, y: comp.y, width: comp.width, height: comp.height });
         }
     }
+
     return { width: frame.width, height: frame.height, compositions };
 }
 
 function postResponse(response, transfer, id) {
     if (id !== undefined) response._id = id;
-    self.postMessage(response, transfer?.length ? transfer : undefined);
+    self.postMessage(response, transfer && transfer.length > 0 ? transfer : undefined);
 }
 
 self.onmessage = async function(event) {
     const { _id, ...request } = event.data;
+
     try {
         switch (request.type) {
-            case 'init':
+            case 'init': {
                 await initWasm(request.wasmUrl);
                 postResponse({ type: 'initComplete', success: true }, [], _id);
                 break;
-            case 'loadPgs':
-                pgsParser = new wasmModule.PgsParser();
-                const pgsCount = pgsParser.parse(new Uint8Array(request.data));
-                postResponse({ type: 'pgsLoaded', count: pgsCount, byteLength: request.data.byteLength }, [], _id);
+            }
+            case 'loadPgs': {
+                disposeSession(request.sessionId);
+                const parser = new wasmModule.PgsParser();
+                const count = parser.parse(new Uint8Array(request.data));
+                pgsParsers.set(request.sessionId, parser);
+                postResponse({ type: 'pgsLoaded', count, byteLength: request.data.byteLength, metadata: buildPgsMetadata(parser) }, [], _id);
                 break;
-            case 'loadVobSub':
-                vobSubParser = new wasmModule.VobSubParser();
-                vobSubParser.loadFromData(request.idxContent, new Uint8Array(request.subData));
-                postResponse({ type: 'vobSubLoaded', count: vobSubParser.count }, [], _id);
+            }
+            case 'loadVobSub': {
+                disposeSession(request.sessionId);
+                const parser = new wasmModule.VobSubParser();
+                parser.loadFromData(request.idxContent, new Uint8Array(request.subData));
+                vobSubParsers.set(request.sessionId, parser);
+                postResponse({ type: 'vobSubLoaded', count: parser.count, metadata: buildVobSubMetadata(parser) }, [], _id);
                 break;
-            case 'loadVobSubOnly':
-                vobSubParser = new wasmModule.VobSubParser();
-                vobSubParser.loadFromSubOnly(new Uint8Array(request.subData));
-                postResponse({ type: 'vobSubLoaded', count: vobSubParser.count }, [], _id);
+            }
+            case 'loadVobSubOnly': {
+                disposeSession(request.sessionId);
+                const parser = new wasmModule.VobSubParser();
+                parser.loadFromSubOnly(new Uint8Array(request.subData));
+                vobSubParsers.set(request.sessionId, parser);
+                postResponse({ type: 'vobSubLoaded', count: parser.count, metadata: buildVobSubMetadata(parser) }, [], _id);
                 break;
+            }
             case 'renderPgsAtIndex': {
-                if (!pgsParser) { postResponse({ type: 'pgsFrame', frame: null }, [], _id); break; }
-                const frame = pgsParser.renderAtIndex(request.index);
+                const parser = pgsParsers.get(request.sessionId);
+                if (!parser) { postResponse({ type: 'pgsFrame', frame: null }, [], _id); break; }
+                const frame = parser.renderAtIndex(request.index);
                 if (!frame) { postResponse({ type: 'pgsFrame', frame: null }, [], _id); break; }
                 const frameData = convertFrame(frame, false);
-                postResponse({ type: 'pgsFrame', frame: frameData }, frameData.compositions.map(c => c.rgba.buffer), _id);
+                postResponse({ type: 'pgsFrame', frame: frameData }, frameData.compositions.map((c) => c.rgba.buffer), _id);
                 break;
             }
             case 'renderVobSubAtIndex': {
-                if (!vobSubParser) { postResponse({ type: 'vobSubFrame', frame: null }, [], _id); break; }
-                const frame = vobSubParser.renderAtIndex(request.index);
+                const parser = vobSubParsers.get(request.sessionId);
+                if (!parser) { postResponse({ type: 'vobSubFrame', frame: null }, [], _id); break; }
+                const frame = parser.renderAtIndex(request.index);
                 if (!frame) { postResponse({ type: 'vobSubFrame', frame: null }, [], _id); break; }
                 const frameData = convertFrame(frame, true);
-                postResponse({ type: 'vobSubFrame', frame: frameData }, frameData.compositions.map(c => c.rgba.buffer), _id);
+                postResponse({ type: 'vobSubFrame', frame: frameData }, frameData.compositions.map((c) => c.rgba.buffer), _id);
                 break;
             }
-            case 'findPgsIndex':
-                postResponse({ type: 'pgsIndex', index: pgsParser?.findIndexAtTimestamp(request.timeMs) ?? -1 }, [], _id);
+            case 'findPgsIndex': {
+                const parser = pgsParsers.get(request.sessionId);
+                postResponse({ type: 'pgsIndex', index: parser ? parser.findIndexAtTimestamp(request.timeMs) : -1 }, [], _id);
                 break;
-            case 'findVobSubIndex':
-                postResponse({ type: 'vobSubIndex', index: vobSubParser?.findIndexAtTimestamp(request.timeMs) ?? -1 }, [], _id);
+            }
+            case 'findVobSubIndex': {
+                const parser = vobSubParsers.get(request.sessionId);
+                postResponse({ type: 'vobSubIndex', index: parser ? parser.findIndexAtTimestamp(request.timeMs) : -1 }, [], _id);
                 break;
-            case 'getPgsTimestamps':
-                postResponse({ type: 'pgsTimestamps', timestamps: pgsParser?.getTimestamps() ?? new Float64Array(0) }, [], _id);
+            }
+            case 'getPgsTimestamps': {
+                const parser = pgsParsers.get(request.sessionId);
+                postResponse({ type: 'pgsTimestamps', timestamps: parser ? parser.getTimestamps() : new Float64Array(0) }, [], _id);
                 break;
-            case 'getVobSubTimestamps':
-                postResponse({ type: 'vobSubTimestamps', timestamps: vobSubParser?.getTimestamps() ?? new Float64Array(0) }, [], _id);
+            }
+            case 'getVobSubTimestamps': {
+                const parser = vobSubParsers.get(request.sessionId);
+                postResponse({ type: 'vobSubTimestamps', timestamps: parser ? parser.getTimestamps() : new Float64Array(0) }, [], _id);
                 break;
-            case 'clearPgsCache':
-                pgsParser?.clearCache();
+            }
+            case 'clearPgsCache': {
+                pgsParsers.get(request.sessionId)?.clearCache();
                 postResponse({ type: 'cleared' }, [], _id);
                 break;
-            case 'clearVobSubCache':
-                vobSubParser?.clearCache();
+            }
+            case 'clearVobSubCache': {
+                vobSubParsers.get(request.sessionId)?.clearCache();
                 postResponse({ type: 'cleared' }, [], _id);
                 break;
-            case 'disposePgs':
-                pgsParser?.free(); pgsParser = null;
+            }
+            case 'disposePgs': {
+                const parser = pgsParsers.get(request.sessionId);
+                if (parser) {
+                    parser.free();
+                    pgsParsers.delete(request.sessionId);
+                }
                 postResponse({ type: 'disposed' }, [], _id);
                 break;
-            case 'disposeVobSub':
-                vobSubParser?.free(); vobSubParser = null;
+            }
+            case 'disposeVobSub': {
+                const parser = vobSubParsers.get(request.sessionId);
+                if (parser) {
+                    parser.free();
+                    vobSubParsers.delete(request.sessionId);
+                }
                 postResponse({ type: 'disposed' }, [], _id);
                 break;
-            case 'setVobSubDebandEnabled':
-                vobSubParser?.setDebandEnabled(request.enabled);
+            }
+            case 'setVobSubDebandEnabled': {
+                vobSubParsers.get(request.sessionId)?.setDebandEnabled(request.enabled);
                 postResponse({ type: 'debandSet' }, [], _id);
                 break;
-            case 'setVobSubDebandThreshold':
-                vobSubParser?.setDebandThreshold(request.threshold);
+            }
+            case 'setVobSubDebandThreshold': {
+                vobSubParsers.get(request.sessionId)?.setDebandThreshold(request.threshold);
                 postResponse({ type: 'debandSet' }, [], _id);
                 break;
-            case 'setVobSubDebandRange':
-                vobSubParser?.setDebandRange(request.range);
+            }
+            case 'setVobSubDebandRange': {
+                vobSubParsers.get(request.sessionId)?.setDebandRange(request.range);
                 postResponse({ type: 'debandSet' }, [], _id);
                 break;
+            }
         }
     } catch (error) {
         postResponse({ type: 'error', message: error instanceof Error ? error.message : String(error) }, [], _id);
@@ -279,61 +345,53 @@ self.onmessage = async function(event) {
 
 /** Create or get the shared worker instance. */
 export function getOrCreateWorker(): Promise<Worker> {
-  if (sharedWorker) return Promise.resolve(sharedWorker)
-  if (workerInitPromise) return workerInitPromise
+    if (sharedWorker) return Promise.resolve(sharedWorker)
+    if (workerInitPromise) return workerInitPromise
 
-  workerInitPromise = new Promise((resolve, reject) => {
-    try {
-      console.log('[libbitsub] Creating worker...')
-      const blob = new Blob([createWorkerScript()], { type: 'application/javascript' })
-      const workerUrl = URL.createObjectURL(blob)
-      const worker = new Worker(workerUrl, { type: 'module' })
+    workerInitPromise = new Promise((resolve, reject) => {
+        try {
+            const blob = new Blob([createWorkerScript()], { type: 'application/javascript' })
+            const workerUrl = URL.createObjectURL(blob)
+            const worker = new Worker(workerUrl, { type: 'module' })
 
-      worker.onmessage = (event: MessageEvent<WorkerResponse & { _id?: number }>) => {
-        const { _id, ...response } = event.data
-        if (_id !== undefined) {
-          const callback = pendingCallbacks.get(_id)
-          if (callback) {
-            pendingCallbacks.delete(_id)
-            callback.resolve(response as WorkerResponse)
-          }
+            worker.onmessage = (event: MessageEvent<WorkerResponse & { _id?: number }>) => {
+                const { _id, ...response } = event.data
+                if (_id !== undefined) {
+                    const callback = pendingCallbacks.get(_id)
+                    if (callback) {
+                        pendingCallbacks.delete(_id)
+                        callback.resolve(response as WorkerResponse)
+                    }
+                }
+            }
+
+            worker.onerror = (error) => {
+                if (workerInitPromise) {
+                    workerInitPromise = null
+                    reject(error instanceof ErrorEvent ? new Error(error.message) : new Error(String(error)))
+                }
+            }
+
+            sharedWorker = worker
+
+            sendToWorker({ type: 'init', wasmUrl: getWasmUrl() })
+                .then(() => {
+                    URL.revokeObjectURL(workerUrl)
+                    resolve(worker)
+                })
+                .catch((err) => {
+                    URL.revokeObjectURL(workerUrl)
+                    sharedWorker = null
+                    workerInitPromise = null
+                    reject(err)
+                })
+        } catch (error) {
+            workerInitPromise = null
+            reject(error instanceof Error ? error : new Error(String(error)))
         }
-      }
+    })
 
-      worker.onerror = (error) => {
-        console.error('[libbitsub] Worker error:', error)
-        if (workerInitPromise) {
-          workerInitPromise = null
-          reject(error)
-        }
-      }
-
-      sharedWorker = worker
-
-      const wasmUrl = getWasmUrl()
-      console.log('[libbitsub] Initializing worker with WASM URL:', wasmUrl)
-
-      sendToWorker({ type: 'init', wasmUrl })
-        .then(() => {
-          console.log('[libbitsub] Worker initialized successfully')
-          URL.revokeObjectURL(workerUrl)
-          resolve(worker)
-        })
-        .catch((err) => {
-          console.error('[libbitsub] Worker initialization failed:', err)
-          URL.revokeObjectURL(workerUrl)
-          sharedWorker = null
-          workerInitPromise = null
-          reject(err)
-        })
-    } catch (error) {
-      console.error('[libbitsub] Failed to create worker:', error)
-      workerInitPromise = null
-      reject(error)
-    }
-  })
-
-  return workerInitPromise
+    return workerInitPromise
 }
 
 /** Default timeout for worker operations (30 seconds for large files) */
@@ -341,35 +399,33 @@ const WORKER_TIMEOUT = 30000
 
 /** Send a message to the worker with timeout support. */
 export function sendToWorker(request: WorkerRequest, timeout = WORKER_TIMEOUT): Promise<WorkerResponse> {
-  return new Promise((resolve, reject) => {
-    if (!sharedWorker) {
-      reject(new Error('Worker not initialized'))
-      return
-    }
+    return new Promise((resolve, reject) => {
+        if (!sharedWorker) {
+            reject(new Error('Worker not initialized'))
+            return
+        }
 
-    const id = ++messageId
+        const id = ++messageId
+        const timeoutId = setTimeout(() => {
+            pendingCallbacks.delete(id)
+            reject(new Error(`Worker operation timed out after ${timeout}ms`))
+        }, timeout)
 
-    // Set up timeout
-    const timeoutId = setTimeout(() => {
-      pendingCallbacks.delete(id)
-      reject(new Error(`Worker operation timed out after ${timeout}ms`))
-    }, timeout)
+        pendingCallbacks.set(id, {
+            resolve: (response) => {
+                clearTimeout(timeoutId)
+                resolve(response)
+            },
+            reject: (error) => {
+                clearTimeout(timeoutId)
+                reject(error)
+            }
+        })
 
-    pendingCallbacks.set(id, {
-      resolve: (response) => {
-        clearTimeout(timeoutId)
-        resolve(response)
-      },
-      reject: (error) => {
-        clearTimeout(timeoutId)
-        reject(error)
-      }
+        const transfers: Transferable[] = []
+        if ('data' in request && request.data instanceof ArrayBuffer) transfers.push(request.data)
+        if ('subData' in request && request.subData instanceof ArrayBuffer) transfers.push(request.subData)
+
+        sharedWorker.postMessage({ ...request, _id: id }, transfers)
     })
-
-    const transfers: Transferable[] = []
-    if ('data' in request && request.data instanceof ArrayBuffer) transfers.push(request.data)
-    if ('subData' in request && request.subData instanceof ArrayBuffer) transfers.push(request.subData)
-
-    sharedWorker.postMessage({ ...request, _id: id }, transfers)
-  })
 }

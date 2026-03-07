@@ -92,6 +92,107 @@ impl SubtitleRenderer {
         }
     }
 
+    /// Get the presentation width for the loaded subtitle track.
+    #[wasm_bindgen(getter, js_name = screenWidth)]
+    pub fn screen_width(&self) -> u16 {
+        match self.format {
+            Some(SubtitleFormat::Pgs) => self.pgs_parser.as_ref().map_or(0, |p| p.screen_width()),
+            Some(SubtitleFormat::VobSub) => self.vobsub_parser.as_ref().map_or(0, |p| p.screen_width()),
+            None => 0,
+        }
+    }
+
+    /// Get the presentation height for the loaded subtitle track.
+    #[wasm_bindgen(getter, js_name = screenHeight)]
+    pub fn screen_height(&self) -> u16 {
+        match self.format {
+            Some(SubtitleFormat::Pgs) => self.pgs_parser.as_ref().map_or(0, |p| p.screen_height()),
+            Some(SubtitleFormat::VobSub) => self.vobsub_parser.as_ref().map_or(0, |p| p.screen_height()),
+            None => 0,
+        }
+    }
+
+    /// Get the cue start time in milliseconds.
+    #[wasm_bindgen(js_name = getCueStartTime)]
+    pub fn get_cue_start_time(&mut self, index: usize) -> f64 {
+        match self.format {
+            Some(SubtitleFormat::Pgs) => self
+                .pgs_parser
+                .as_ref()
+                .map_or(-1.0, |p| p.get_cue_start_time(index)),
+            Some(SubtitleFormat::VobSub) => self
+                .vobsub_parser
+                .as_ref()
+                .map_or(-1.0, |p| p.get_cue_start_time(index)),
+            None => -1.0,
+        }
+    }
+
+    /// Get the cue end time in milliseconds.
+    #[wasm_bindgen(js_name = getCueEndTime)]
+    pub fn get_cue_end_time(&mut self, index: usize) -> f64 {
+        match self.format {
+            Some(SubtitleFormat::Pgs) => self
+                .pgs_parser
+                .as_ref()
+                .map_or(-1.0, |p| p.get_cue_end_time(index)),
+            Some(SubtitleFormat::VobSub) => self
+                .vobsub_parser
+                .as_mut()
+                .map_or(-1.0, |p| p.get_cue_end_time(index)),
+            None => -1.0,
+        }
+    }
+
+    /// Get the cue duration in milliseconds.
+    #[wasm_bindgen(js_name = getCueDuration)]
+    pub fn get_cue_duration(&mut self, index: usize) -> f64 {
+        let start_time = self.get_cue_start_time(index);
+        let end_time = self.get_cue_end_time(index);
+
+        if start_time < 0.0 || end_time < 0.0 {
+            return -1.0;
+        }
+
+        (end_time - start_time).max(0.0)
+    }
+
+    /// Get the VobSub language code if available.
+    #[wasm_bindgen(getter)]
+    pub fn language(&self) -> String {
+        match self.format {
+            Some(SubtitleFormat::VobSub) => self
+                .vobsub_parser
+                .as_ref()
+                .map_or_else(String::new, |p| p.language()),
+            _ => String::new(),
+        }
+    }
+
+    /// Get the VobSub track ID if available.
+    #[wasm_bindgen(getter, js_name = trackId)]
+    pub fn track_id(&self) -> String {
+        match self.format {
+            Some(SubtitleFormat::VobSub) => self
+                .vobsub_parser
+                .as_ref()
+                .map_or_else(String::new, |p| p.track_id()),
+            _ => String::new(),
+        }
+    }
+
+    /// Check whether IDX metadata was used for VobSub.
+    #[wasm_bindgen(getter, js_name = hasIdxMetadata)]
+    pub fn has_idx_metadata(&self) -> bool {
+        match self.format {
+            Some(SubtitleFormat::VobSub) => self
+                .vobsub_parser
+                .as_ref()
+                .is_some_and(|p| p.has_idx_metadata()),
+            _ => false,
+        }
+    }
+
     /// Get all timestamps in milliseconds.
     #[wasm_bindgen(js_name = getTimestamps)]
     pub fn get_timestamps(&self) -> js_sys::Float64Array {

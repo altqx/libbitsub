@@ -35,13 +35,14 @@ const FRAGMENT_SHADER_SRC = /* glsl */ `#version 300 es
 precision mediump float;
 
 uniform sampler2D u_texture;
+uniform float u_opacity;
 
 in vec2 v_texCoord;
 out vec4 outColor;
 
 void main() {
   // Texture is pre-multiplied alpha; output as-is for premultiplied blending
-  outColor = texture(u_texture, v_texCoord);
+  outColor = texture(u_texture, v_texCoord) * u_opacity;
 }
 `
 
@@ -86,6 +87,7 @@ export class WebGL2Renderer {
   private uResolution: WebGLUniformLocation | null = null
   private uDestRect: WebGLUniformLocation | null = null
   private uTexture: WebGLUniformLocation | null = null
+  private uOpacity: WebGLUniformLocation | null = null
 
   // Texture pool for compositions (indexed by slot)
   private textures: (TextureInfo | undefined)[] = []
@@ -154,6 +156,7 @@ export class WebGL2Renderer {
     this.uResolution = gl.getUniformLocation(program, 'u_resolution')
     this.uDestRect = gl.getUniformLocation(program, 'u_destRect')
     this.uTexture = gl.getUniformLocation(program, 'u_texture')
+    this.uOpacity = gl.getUniformLocation(program, 'u_opacity')
 
     // VAO (required in WebGL2 even without vertex attributes)
     this.vao = gl.createVertexArray()
@@ -162,6 +165,7 @@ export class WebGL2Renderer {
     // Set initial state
     gl.uniform2f(this.uResolution, width, height)
     gl.uniform1i(this.uTexture, 0)
+    gl.uniform1f(this.uOpacity, 1)
 
     // Premultiplied alpha blending: src=ONE, dst=ONE_MINUS_SRC_ALPHA
     gl.enable(gl.BLEND)
@@ -241,7 +245,9 @@ export class WebGL2Renderer {
     screenHeight: number,
     scaleX: number,
     scaleY: number,
-    offsetY: number
+    shiftX: number,
+    shiftY: number,
+    opacity: number
   ): void {
     if (!this.gl || !this.program || !this._canvas) return
 
@@ -253,6 +259,7 @@ export class WebGL2Renderer {
     gl.clear(gl.COLOR_BUFFER_BIT)
 
     gl.activeTexture(gl.TEXTURE0)
+    gl.uniform1f(this.uOpacity, opacity)
 
     for (let i = 0; i < compositions.length; i++) {
       const comp = compositions[i]
@@ -282,12 +289,10 @@ export class WebGL2Renderer {
       // Calculate scaled position and size (mirrors WebGPU renderer maths)
       const scaledWidth = width * scaleX
       const scaledHeight = height * scaleY
-      const baseX = x * (this._width / screenWidth)
-      const baseY = y * (this._height / screenHeight)
-      const centeredX = baseX + (width * (this._width / screenWidth) - scaledWidth) / 2
-      const adjustedY = baseY + offsetY + (height * (this._height / screenHeight) - scaledHeight)
+      const adjustedX = x * (this._width / screenWidth) + shiftX
+      const adjustedY = y * (this._height / screenHeight) + shiftY
 
-      gl.uniform4f(this.uDestRect, centeredX, adjustedY, scaledWidth, scaledHeight)
+      gl.uniform4f(this.uDestRect, adjustedX, adjustedY, scaledWidth, scaledHeight)
 
       // Draw 6 vertices for the two-triangle quad
       gl.drawArrays(gl.TRIANGLES, 0, 6)

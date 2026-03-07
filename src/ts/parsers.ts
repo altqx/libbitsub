@@ -4,9 +4,13 @@
  */
 
 import type {
+  AutoSubtitleSource,
   SubtitleData,
+  SubtitleCueMetadata,
   SubtitleCompositionData,
+  SubtitleParserMetadata,
   SubtitleFrame,
+  SubtitleFormatName,
   VobSubFrame,
   RenderResult,
   WasmPgsParser,
@@ -14,6 +18,7 @@ import type {
   WasmSubtitleRenderer
 } from './types'
 import { getWasm } from './wasm'
+import { detectSubtitleFormat, getSubtitleBounds } from './utils'
 
 /**
  * Low-level PGS subtitle parser using WASM.
@@ -22,6 +27,7 @@ import { getWasm } from './wasm'
 export class PgsParser {
   private parser: WasmPgsParser | null = null
   private timestamps: Float64Array = new Float64Array(0)
+  private cueMetadataCache = new Map<number, SubtitleCueMetadata | null>()
 
   constructor() {
     const wasm = getWasm()
@@ -35,6 +41,7 @@ export class PgsParser {
     if (!this.parser) throw new Error('Parser not initialized')
     const count = this.parser.parse(data)
     this.timestamps = this.parser.getTimestamps()
+    this.cueMetadataCache.clear()
     return count
   }
 
@@ -70,6 +77,43 @@ export class PgsParser {
     if (!frame) return undefined
 
     return this.convertFrame(frame)
+  }
+
+  /** Get parser-level metadata. */
+  getMetadata(): SubtitleParserMetadata {
+    return {
+      format: 'pgs',
+      cueCount: this.count,
+      screenWidth: this.parser?.screenWidth ?? 0,
+      screenHeight: this.parser?.screenHeight ?? 0
+    }
+  }
+
+  /** Get cue metadata for the given index. */
+  getCueMetadata(index: number): SubtitleCueMetadata | null {
+    if (!this.parser || index < 0 || index >= this.count) return null
+    if (this.cueMetadataCache.has(index)) return this.cueMetadataCache.get(index) ?? null
+
+    const startTime = this.parser.getCueStartTime(index)
+    const endTime = this.parser.getCueEndTime(index)
+    const frame = this.renderAtIndex(index)
+
+    const cueMetadata: SubtitleCueMetadata = {
+      index,
+      format: 'pgs',
+      startTime,
+      endTime,
+      duration: Math.max(0, endTime - startTime),
+      screenWidth: this.parser.screenWidth,
+      screenHeight: this.parser.screenHeight,
+      bounds: frame ? getSubtitleBounds(frame) : null,
+      compositionCount: this.parser.getCueCompositionCount(index),
+      paletteId: this.parser.getCuePaletteId(index),
+      compositionState: this.parser.getCueCompositionState(index)
+    }
+
+    this.cueMetadataCache.set(index, cueMetadata)
+    return cueMetadata
   }
 
   /**
@@ -127,6 +171,7 @@ export class PgsParser {
    */
   clearCache(): void {
     this.parser?.clearCache()
+    this.cueMetadataCache.clear()
   }
 
   /**
@@ -136,6 +181,7 @@ export class PgsParser {
     this.parser?.free()
     this.parser = null
     this.timestamps = new Float64Array(0)
+    this.cueMetadataCache.clear()
   }
 }
 
@@ -146,6 +192,7 @@ export class PgsParser {
 export class VobSubParserLowLevel {
   private parser: WasmVobSubParser | null = null
   private timestamps: Float64Array = new Float64Array(0)
+  private cueMetadataCache = new Map<number, SubtitleCueMetadata | null>()
 
   constructor() {
     const wasm = getWasm()
@@ -159,6 +206,7 @@ export class VobSubParserLowLevel {
     if (!this.parser) throw new Error('Parser not initialized')
     this.parser.loadFromData(idxContent, subData)
     this.timestamps = this.parser.getTimestamps()
+    this.cueMetadataCache.clear()
   }
 
   /**
@@ -168,6 +216,7 @@ export class VobSubParserLowLevel {
     if (!this.parser) throw new Error('Parser not initialized')
     this.parser.loadFromSubOnly(subData)
     this.timestamps = this.parser.getTimestamps()
+    this.cueMetadataCache.clear()
   }
 
   /**
@@ -202,6 +251,47 @@ export class VobSubParserLowLevel {
     if (!frame) return undefined
 
     return this.convertFrame(frame)
+  }
+
+  /** Get parser-level metadata. */
+  getMetadata(): SubtitleParserMetadata {
+    return {
+      format: 'vobsub',
+      cueCount: this.count,
+      screenWidth: this.parser?.screenWidth ?? 0,
+      screenHeight: this.parser?.screenHeight ?? 0,
+      language: this.parser?.language || null,
+      trackId: this.parser?.trackId || null,
+      hasIdxMetadata: this.parser?.hasIdxMetadata ?? false
+    }
+  }
+
+  /** Get cue metadata for the given index. */
+  getCueMetadata(index: number): SubtitleCueMetadata | null {
+    if (!this.parser || index < 0 || index >= this.count) return null
+    if (this.cueMetadataCache.has(index)) return this.cueMetadataCache.get(index) ?? null
+
+    const startTime = this.parser.getCueStartTime(index)
+    const endTime = this.parser.getCueEndTime(index)
+    const frame = this.renderAtIndex(index)
+
+    const cueMetadata: SubtitleCueMetadata = {
+      index,
+      format: 'vobsub',
+      startTime,
+      endTime,
+      duration: this.parser.getCueDuration(index),
+      screenWidth: this.parser.screenWidth,
+      screenHeight: this.parser.screenHeight,
+      bounds: frame ? getSubtitleBounds(frame) : null,
+      compositionCount: frame?.compositionData.length ?? 0,
+      language: this.parser.language || null,
+      trackId: this.parser.trackId || null,
+      filePosition: this.parser.getCueFilePosition(index)
+    }
+
+    this.cueMetadataCache.set(index, cueMetadata)
+    return cueMetadata
   }
 
   /**
@@ -256,6 +346,7 @@ export class VobSubParserLowLevel {
    */
   clearCache(): void {
     this.parser?.clearCache()
+    this.cueMetadataCache.clear()
   }
 
   /**
@@ -293,6 +384,7 @@ export class VobSubParserLowLevel {
     this.parser?.free()
     this.parser = null
     this.timestamps = new Float64Array(0)
+    this.cueMetadataCache.clear()
   }
 }
 
@@ -302,6 +394,7 @@ export class VobSubParserLowLevel {
 export class UnifiedSubtitleParser {
   private renderer: WasmSubtitleRenderer | null = null
   private timestamps: Float64Array = new Float64Array(0)
+  private cueMetadataCache = new Map<number, SubtitleCueMetadata | null>()
 
   constructor() {
     const wasm = getWasm()
@@ -315,6 +408,7 @@ export class UnifiedSubtitleParser {
     if (!this.renderer) throw new Error('Renderer not initialized')
     const count = this.renderer.loadPgs(data)
     this.timestamps = this.renderer.getTimestamps()
+    this.cueMetadataCache.clear()
     return count
   }
 
@@ -325,6 +419,7 @@ export class UnifiedSubtitleParser {
     if (!this.renderer) throw new Error('Renderer not initialized')
     this.renderer.loadVobSub(idxContent, subData)
     this.timestamps = this.renderer.getTimestamps()
+    this.cueMetadataCache.clear()
   }
 
   /**
@@ -334,6 +429,33 @@ export class UnifiedSubtitleParser {
     if (!this.renderer) throw new Error('Renderer not initialized')
     this.renderer.loadVobSubOnly(subData)
     this.timestamps = this.renderer.getTimestamps()
+    this.cueMetadataCache.clear()
+  }
+
+  /** Load subtitle data with automatic format detection. */
+  loadAuto(source: AutoSubtitleSource): SubtitleFormatName {
+    const format = detectSubtitleFormat(source)
+    if (!format) {
+      throw new Error('Unable to detect subtitle format')
+    }
+
+    if (format === 'pgs') {
+      const data = source.data ?? source.subData
+      if (!data) throw new Error('No binary subtitle data provided for PGS')
+      this.loadPgs(data instanceof Uint8Array ? data : new Uint8Array(data))
+      return 'pgs'
+    }
+
+    const subBinary = source.subData ?? source.data
+    if (!subBinary) throw new Error('No SUB binary data provided for VobSub')
+
+    if (source.idxContent) {
+      this.loadVobSub(source.idxContent, subBinary instanceof Uint8Array ? subBinary : new Uint8Array(subBinary))
+    } else {
+      this.loadVobSubOnly(subBinary instanceof Uint8Array ? subBinary : new Uint8Array(subBinary))
+    }
+
+    return 'vobsub'
   }
 
   /**
@@ -378,6 +500,48 @@ export class UnifiedSubtitleParser {
     if (!result) return undefined
 
     return this.convertResult(result)
+  }
+
+  /** Get parser-level metadata. */
+  getMetadata(): SubtitleParserMetadata | null {
+    if (!this.renderer || !this.format) return null
+
+    return {
+      format: this.format,
+      cueCount: this.count,
+      screenWidth: this.renderer.screenWidth,
+      screenHeight: this.renderer.screenHeight,
+      language: this.format === 'vobsub' ? this.renderer.language || null : null,
+      trackId: this.format === 'vobsub' ? this.renderer.trackId || null : null,
+      hasIdxMetadata: this.format === 'vobsub' ? this.renderer.hasIdxMetadata : undefined
+    }
+  }
+
+  /** Get cue metadata for the given index. */
+  getCueMetadata(index: number): SubtitleCueMetadata | null {
+    if (!this.renderer || !this.format || index < 0 || index >= this.count) return null
+    if (this.cueMetadataCache.has(index)) return this.cueMetadataCache.get(index) ?? null
+
+    const startTime = this.renderer.getCueStartTime(index)
+    const endTime = this.renderer.getCueEndTime(index)
+    const frame = this.renderAtIndex(index)
+
+    const cueMetadata: SubtitleCueMetadata = {
+      index,
+      format: this.format,
+      startTime,
+      endTime,
+      duration: this.renderer.getCueDuration(index),
+      screenWidth: this.renderer.screenWidth,
+      screenHeight: this.renderer.screenHeight,
+      bounds: frame ? getSubtitleBounds(frame) : null,
+      compositionCount: frame?.compositionData.length ?? 0,
+      language: this.format === 'vobsub' ? this.renderer.language || null : null,
+      trackId: this.format === 'vobsub' ? this.renderer.trackId || null : null
+    }
+
+    this.cueMetadataCache.set(index, cueMetadata)
+    return cueMetadata
   }
 
   /**
@@ -434,6 +598,7 @@ export class UnifiedSubtitleParser {
    */
   clearCache(): void {
     this.renderer?.clearCache()
+    this.cueMetadataCache.clear()
   }
 
   /**
@@ -444,5 +609,6 @@ export class UnifiedSubtitleParser {
     this.renderer?.free()
     this.renderer = null
     this.timestamps = new Float64Array(0)
+    this.cueMetadataCache.clear()
   }
 }

@@ -100,6 +100,24 @@ impl PgsParser {
         self.display_sets.len()
     }
 
+    /// Get the presentation width for this subtitle track.
+    #[wasm_bindgen(getter, js_name = screenWidth)]
+    pub fn screen_width(&self) -> u16 {
+        self.display_sets
+            .iter()
+            .find_map(|ds| ds.composition.as_ref().map(|composition| composition.width))
+            .unwrap_or(0)
+    }
+
+    /// Get the presentation height for this subtitle track.
+    #[wasm_bindgen(getter, js_name = screenHeight)]
+    pub fn screen_height(&self) -> u16 {
+        self.display_sets
+            .iter()
+            .find_map(|ds| ds.composition.as_ref().map(|composition| composition.height))
+            .unwrap_or(0)
+    }
+
     /// Get all timestamps in milliseconds as a Float64Array.
     #[wasm_bindgen(js_name = getTimestamps)]
     pub fn get_timestamps(&self) -> Float64Array {
@@ -117,6 +135,55 @@ impl PgsParser {
             return -1;
         }
         binary_search_timestamp(&self.timestamps_ms, time_ms as u32) as i32
+    }
+
+    /// Get the cue start time in milliseconds.
+    #[wasm_bindgen(js_name = getCueStartTime)]
+    pub fn get_cue_start_time(&self, index: usize) -> f64 {
+        self.timestamps_ms.get(index).copied().map_or(-1.0, |ts| ts as f64)
+    }
+
+    /// Get the cue end time in milliseconds.
+    #[wasm_bindgen(js_name = getCueEndTime)]
+    pub fn get_cue_end_time(&self, index: usize) -> f64 {
+        let Some(&start_time) = self.timestamps_ms.get(index) else {
+            return -1.0;
+        };
+
+        let end_time = self
+            .timestamps_ms
+            .get(index + 1)
+            .copied()
+            .unwrap_or_else(|| start_time.saturating_add(5000));
+
+        end_time as f64
+    }
+
+    /// Get the number of composition objects in a cue.
+    #[wasm_bindgen(js_name = getCueCompositionCount)]
+    pub fn get_cue_composition_count(&self, index: usize) -> u32 {
+        self.display_sets
+            .get(index)
+            .and_then(|ds| ds.composition.as_ref())
+            .map_or(0, |composition| composition.composition_objects.len() as u32)
+    }
+
+    /// Get the cue palette ID.
+    #[wasm_bindgen(js_name = getCuePaletteId)]
+    pub fn get_cue_palette_id(&self, index: usize) -> i32 {
+        self.display_sets
+            .get(index)
+            .and_then(|ds| ds.composition.as_ref())
+            .map_or(-1, |composition| composition.palette_id as i32)
+    }
+
+    /// Get the cue composition state.
+    #[wasm_bindgen(js_name = getCueCompositionState)]
+    pub fn get_cue_composition_state(&self, index: usize) -> i32 {
+        self.display_sets
+            .get(index)
+            .and_then(|ds| ds.composition.as_ref())
+            .map_or(-1, |composition| composition.composition_state as i32)
     }
 
     /// Render subtitle at the given index and return RGBA data.

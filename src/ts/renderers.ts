@@ -3,10 +3,29 @@
  * Handles canvas overlay, video sync, and subtitle fetching.
  */
 
-import type { SubtitleData, SubtitleDisplaySettings, VideoSubtitleOptions, VideoVobSubOptions } from './types'
+import type {
+  AutoVideoSubtitleOptions,
+  SubtitleCueMetadata,
+  SubtitleData,
+  SubtitleDisplaySettings,
+  SubtitleParserMetadata,
+  SubtitleRendererBackend,
+  SubtitleRendererEvent,
+  VideoSubtitleOptions,
+  VideoVobSubOptions
+} from './types'
 import { initWasm } from './wasm'
 import { getOrCreateWorker, sendToWorker } from './worker'
-import { binarySearchTimestamp, convertFrameData, createWorkerState } from './utils'
+import {
+  binarySearchTimestamp,
+  convertFrameData,
+  createWorkerSessionId,
+  createWorkerState,
+  detectSubtitleFormat,
+  getSubtitleBounds,
+  setCacheLimit as applyCacheLimit,
+  setCachedFrame
+} from './utils'
 import { PgsParser, VobSubParserLowLevel } from './parsers'
 import { WebGPURenderer, isWebGPUSupported } from './webgpu-renderer'
 import { WebGL2Renderer, isWebGL2Supported } from './webgl2-renderer'
@@ -14,7 +33,12 @@ import { WebGL2Renderer, isWebGL2Supported } from './webgl2-renderer'
 /** Default display settings */
 const DEFAULT_DISPLAY_SETTINGS: SubtitleDisplaySettings = {
   scale: 1.0,
-  verticalOffset: 0
+  verticalOffset: 0,
+  horizontalOffset: 0,
+  horizontalAlign: 'center',
+  bottomPadding: 0,
+  safeArea: 0,
+  opacity: 1.0
 }
 
 /** Performance statistics for subtitle renderer */
@@ -51,6 +75,7 @@ export interface SubtitleRendererStats {
  */
 abstract class BaseVideoSubtitleRenderer {
   protected video: HTMLVideoElement
+  protected readonly format: 'pgs' | 'vobsub'
   protected subUrl?: string
   protected subContent?: ArrayBuffer
   protected canvas: HTMLCanvasElement | null = null
@@ -64,9 +89,20 @@ abstract class BaseVideoSubtitleRenderer {
   protected tempCanvas: HTMLCanvasElement | null = null
   protected tempCtx: CanvasRenderingContext2D | null = null
   protected lastRenderedData: SubtitleData | null = null
+  protected lastCueIndex: number | null = null
+  protected currentCueMetadata: SubtitleCueMetadata | null = null
+  protected parserMetadata: SubtitleParserMetadata | null = null
 
   /** Display settings for subtitle rendering */
   protected displaySettings: SubtitleDisplaySettings = { ...DEFAULT_DISPLAY_SETTINGS }
+  protected cacheLimit: number = 24
+  protected prefetchBefore: number = 0
+  protected prefetchAfter: number = 0
+  protected onEvent?: (event: SubtitleRendererEvent) => void
+  protected currentRendererBackend: SubtitleRendererBackend | null = null
+
+  private loadedMetadataHandler: (() => void) | null = null
+  private seekedHandler: (() => void) | null = null
 
   // WebGPU renderer (optional, falls back to WebGL2 then Canvas2D)
   protected webgpuRenderer: WebGPURenderer | null = null
@@ -88,12 +124,18 @@ abstract class BaseVideoSubtitleRenderer {
     lastFrameTime: 0
   }
 
-  constructor(options: VideoSubtitleOptions) {
+  constructor(options: VideoSubtitleOptions, format: 'pgs' | 'vobsub') {
     this.video = options.video
+    this.format = format
     this.subUrl = options.subUrl
     this.subContent = options.subContent
     this.onWebGPUFallback = options.onWebGPUFallback
     this.onWebGL2Fallback = options.onWebGL2Fallback
+    this.onEvent = options.onEvent
+    this.displaySettings = { ...DEFAULT_DISPLAY_SETTINGS, ...options.displaySettings }
+    this.cacheLimit = Math.max(0, Math.floor(options.cacheLimit ?? 24))
+    this.prefetchBefore = Math.max(0, Math.floor(options.prefetchWindow?.before ?? 0))
+    this.prefetchAfter = Math.max(0, Math.floor(options.prefetchWindow?.after ?? 0))
   }
 
   /** Get current display settings */
@@ -103,6 +145,26 @@ abstract class BaseVideoSubtitleRenderer {
 
   /** Get performance statistics */
   abstract getStats(): SubtitleRendererStats
+
+  /** Get parser metadata for the active subtitle track. */
+  getMetadata(): SubtitleParserMetadata | null {
+    return this.parserMetadata
+  }
+
+  /** Get the most recently displayed cue metadata. */
+  getCurrentCueMetadata(): SubtitleCueMetadata | null {
+    return this.currentCueMetadata
+  }
+
+  /** Get cue metadata for the specified index. */
+  getCueMetadata(index: number): SubtitleCueMetadata | null {
+    return this.buildCueMetadata(index)
+  }
+
+  /** Get the configured frame-cache limit. */
+  getCacheLimit(): number {
+    return this.cacheLimit
+  }
 
   /** Get base stats common to all renderers */
   protected getBaseStats(): Omit<
@@ -132,15 +194,20 @@ abstract class BaseVideoSubtitleRenderer {
 
   /** Set display settings and force re-render */
   setDisplaySettings(settings: Partial<SubtitleDisplaySettings>): void {
-    const changed =
-      settings.scale !== this.displaySettings.scale || settings.verticalOffset !== this.displaySettings.verticalOffset
+    const nextSettings = {
+      ...this.displaySettings,
+      ...settings
+    }
 
-    if (settings.scale !== undefined) {
-      this.displaySettings.scale = Math.max(0.1, Math.min(3.0, settings.scale))
-    }
-    if (settings.verticalOffset !== undefined) {
-      this.displaySettings.verticalOffset = Math.max(-50, Math.min(50, settings.verticalOffset))
-    }
+    nextSettings.scale = Math.max(0.1, Math.min(3.0, nextSettings.scale))
+    nextSettings.verticalOffset = Math.max(-50, Math.min(50, nextSettings.verticalOffset))
+    nextSettings.horizontalOffset = Math.max(-50, Math.min(50, nextSettings.horizontalOffset))
+    nextSettings.bottomPadding = Math.max(0, Math.min(50, nextSettings.bottomPadding))
+    nextSettings.safeArea = Math.max(0, Math.min(25, nextSettings.safeArea))
+    nextSettings.opacity = Math.max(0, Math.min(1, nextSettings.opacity))
+
+    const changed = JSON.stringify(nextSettings) !== JSON.stringify(this.displaySettings)
+    this.displaySettings = nextSettings
 
     // Force re-render if settings changed
     if (changed) {
@@ -158,7 +225,9 @@ abstract class BaseVideoSubtitleRenderer {
 
   /** Start initialization. */
   protected startInit(): void {
-    this.init()
+    this.init().catch((error) => {
+      this.emitEvent({ type: 'error', format: this.format, error: error instanceof Error ? error : new Error(String(error)) })
+    })
   }
 
   /** Initialize the renderer. */
@@ -200,12 +269,50 @@ abstract class BaseVideoSubtitleRenderer {
 
     this.resizeObserver = new ResizeObserver(() => this.updateCanvasSize())
     this.resizeObserver.observe(this.video)
-    this.video.addEventListener('loadedmetadata', () => this.updateCanvasSize())
-    this.video.addEventListener('seeked', () => {
+    this.loadedMetadataHandler = () => this.updateCanvasSize()
+    this.seekedHandler = () => {
       this.lastRenderedIndex = -1
       this.lastRenderedTime = -1
       this.onSeek()
-    })
+    }
+    this.video.addEventListener('loadedmetadata', this.loadedMetadataHandler)
+    this.video.addEventListener('seeked', this.seekedHandler)
+  }
+
+  protected emitEvent(event: SubtitleRendererEvent): void {
+    this.onEvent?.(event)
+  }
+
+  protected setParserMetadata(metadata: SubtitleParserMetadata | null): void {
+    this.parserMetadata = metadata
+    if (metadata) {
+      this.emitEvent({ type: 'loaded', format: this.format, metadata })
+    }
+  }
+
+  protected emitWorkerState(enabled: boolean, ready: boolean, sessionId: string | null, fallback = false): void {
+    this.emitEvent({ type: 'worker-state', enabled, ready, sessionId, fallback })
+  }
+
+  protected emitCacheChange(cachedFrames: number, pendingRenders: number): void {
+    this.emitEvent({ type: 'cache-change', cachedFrames, pendingRenders, cacheLimit: this.cacheLimit })
+  }
+
+  protected emitCueChange(cue: SubtitleCueMetadata | null): void {
+    if (this.lastCueIndex === cue?.index && cue?.index !== undefined) {
+      this.currentCueMetadata = cue
+      return
+    }
+
+    this.lastCueIndex = cue?.index ?? null
+    this.currentCueMetadata = cue
+    this.emitEvent({ type: 'cue-change', cue })
+  }
+
+  protected emitRendererBackend(renderer: SubtitleRendererBackend): void {
+    if (this.currentRendererBackend === renderer) return
+    this.currentRendererBackend = renderer
+    this.emitEvent({ type: 'renderer-change', renderer })
   }
 
   /** Initialize WebGPU renderer. */
@@ -222,9 +329,8 @@ abstract class BaseVideoSubtitleRenderer {
 
       await this.webgpuRenderer.setCanvas(this.canvas, width, height)
       this.useWebGPU = true
-      console.log('[libbitsub] Using WebGPU renderer')
+      this.emitRendererBackend('webgpu')
     } catch (error) {
-      console.warn('[libbitsub] WebGPU init failed, falling back to WebGL2:', error)
       this.webgpuRenderer?.destroy()
       this.webgpuRenderer = null
       this.useWebGPU = false
@@ -252,9 +358,8 @@ abstract class BaseVideoSubtitleRenderer {
 
       await this.webgl2Renderer.setCanvas(this.canvas, width, height)
       this.useWebGL2 = true
-      console.log('[libbitsub] Using WebGL2 renderer')
+      this.emitRendererBackend('webgl2')
     } catch (error) {
-      console.warn('[libbitsub] WebGL2 init failed, falling back to Canvas2D:', error)
       this.webgl2Renderer?.destroy()
       this.webgl2Renderer = null
       this.useWebGL2 = false
@@ -269,7 +374,7 @@ abstract class BaseVideoSubtitleRenderer {
     this.ctx = this.canvas.getContext('2d')
     this.useWebGPU = false
     this.useWebGL2 = false
-    console.log('[libbitsub] Using Canvas2D renderer')
+    this.emitRendererBackend('canvas2d')
   }
 
   /** Called when video seeks. */
@@ -348,6 +453,7 @@ abstract class BaseVideoSubtitleRenderer {
   protected abstract renderAtTime(time: number): SubtitleData | undefined
   protected abstract findCurrentIndex(time: number): number
   protected abstract renderAtIndex(index: number): SubtitleData | undefined
+  protected abstract buildCueMetadata(index: number): SubtitleCueMetadata | null
 
   /** Check if a render is pending for the given index (async loading in progress) */
   protected abstract isPendingRender(index: number): boolean
@@ -390,6 +496,12 @@ abstract class BaseVideoSubtitleRenderer {
 
           this.lastRenderedIndex = currentIndex
           this.lastRenderedTime = currentTime
+          this.emitCueChange(currentIndex >= 0 ? this.buildCueMetadata(currentIndex) : null)
+          this.emitEvent({ type: 'stats', stats: this.getStats() })
+          if (currentIndex >= 0 && (this.prefetchBefore > 0 || this.prefetchAfter > 0)) {
+            const prefetch = (this as unknown as { prefetchAroundTime?: (time: number) => Promise<void> }).prefetchAroundTime
+            prefetch?.call(this, currentTime).catch(() => {})
+          }
         }
       }
 
@@ -428,6 +540,70 @@ abstract class BaseVideoSubtitleRenderer {
     }
   }
 
+  protected computeLayout(data: SubtitleData): {
+    scaleX: number
+    scaleY: number
+    shiftX: number
+    shiftY: number
+    opacity: number
+  } {
+    if (!this.canvas) {
+      return { scaleX: 1, scaleY: 1, shiftX: 0, shiftY: 0, opacity: this.displaySettings.opacity }
+    }
+
+    const baseScaleX = this.canvas.width / data.width
+    const baseScaleY = this.canvas.height / data.height
+    const bounds = getSubtitleBounds(data)
+    const { scale, verticalOffset, horizontalOffset, horizontalAlign, bottomPadding, safeArea, opacity } =
+      this.displaySettings
+
+    if (!bounds) {
+      return {
+        scaleX: baseScaleX * scale,
+        scaleY: baseScaleY * scale,
+        shiftX: (horizontalOffset / 100) * this.canvas.width,
+        shiftY: (verticalOffset / 100) * this.canvas.height - (bottomPadding / 100) * this.canvas.height,
+        opacity
+      }
+    }
+
+    const groupWidth = bounds.width * baseScaleX
+    const groupHeight = bounds.height * baseScaleY
+    const scaledGroupWidth = groupWidth * scale
+    const scaledGroupHeight = groupHeight * scale
+
+    let anchorShiftX = 0
+    if (horizontalAlign === 'center') {
+      anchorShiftX = (groupWidth - scaledGroupWidth) / 2
+    } else if (horizontalAlign === 'right') {
+      anchorShiftX = groupWidth - scaledGroupWidth
+    }
+
+    let shiftX = anchorShiftX + (horizontalOffset / 100) * this.canvas.width
+    let shiftY = groupHeight - scaledGroupHeight + (verticalOffset / 100) * this.canvas.height
+    shiftY -= (bottomPadding / 100) * this.canvas.height
+
+    const safeX = (safeArea / 100) * this.canvas.width
+    const safeY = (safeArea / 100) * this.canvas.height
+    const finalMinX = bounds.x * baseScaleX + shiftX
+    const finalMinY = bounds.y * baseScaleY + shiftY
+    const finalMaxX = finalMinX + scaledGroupWidth
+    const finalMaxY = finalMinY + scaledGroupHeight
+
+    if (finalMinX < safeX) shiftX += safeX - finalMinX
+    if (finalMaxX > this.canvas.width - safeX) shiftX -= finalMaxX - (this.canvas.width - safeX)
+    if (finalMinY < safeY) shiftY += safeY - finalMinY
+    if (finalMaxY > this.canvas.height - safeY) shiftY -= finalMaxY - (this.canvas.height - safeY)
+
+    return {
+      scaleX: baseScaleX * scale,
+      scaleY: baseScaleY * scale,
+      shiftX,
+      shiftY,
+      opacity
+    }
+  }
+
   /** Render using WebGPU. */
   private renderFrameWebGPU(data: SubtitleData | undefined, index: number): void {
     if (!this.webgpuRenderer || !this.canvas) return
@@ -443,16 +619,18 @@ abstract class BaseVideoSubtitleRenderer {
     this.lastRenderedData = data
 
     // Calculate base scale factors
-    const baseScaleX = this.canvas.width / data.width
-    const baseScaleY = this.canvas.height / data.height
+    const layout = this.computeLayout(data)
 
-    // Apply display settings
-    const { scale, verticalOffset } = this.displaySettings
-    const scaleX = baseScaleX * scale
-    const scaleY = baseScaleY * scale
-    const offsetY = (verticalOffset / 100) * this.canvas.height
-
-    this.webgpuRenderer.render(data.compositionData, data.width, data.height, scaleX, scaleY, offsetY)
+    this.webgpuRenderer.render(
+      data.compositionData,
+      data.width,
+      data.height,
+      layout.scaleX,
+      layout.scaleY,
+      layout.shiftX,
+      layout.shiftY,
+      layout.opacity
+    )
   }
 
   /** Render using WebGL2. */
@@ -467,15 +645,18 @@ abstract class BaseVideoSubtitleRenderer {
 
     this.lastRenderedData = data
 
-    const baseScaleX = this.canvas.width / data.width
-    const baseScaleY = this.canvas.height / data.height
+    const layout = this.computeLayout(data)
 
-    const { scale, verticalOffset } = this.displaySettings
-    const scaleX = baseScaleX * scale
-    const scaleY = baseScaleY * scale
-    const offsetY = (verticalOffset / 100) * this.canvas.height
-
-    this.webgl2Renderer.render(data.compositionData, data.width, data.height, scaleX, scaleY, offsetY)
+    this.webgl2Renderer.render(
+      data.compositionData,
+      data.width,
+      data.height,
+      layout.scaleX,
+      layout.scaleY,
+      layout.shiftX,
+      layout.shiftY,
+      layout.opacity
+    )
   }
 
   /** Render using Canvas2D. */
@@ -494,15 +675,10 @@ abstract class BaseVideoSubtitleRenderer {
     // Store for potential reuse
     this.lastRenderedData = data
 
-    // Calculate base scale factors
-    const baseScaleX = this.canvas.width / data.width
-    const baseScaleY = this.canvas.height / data.height
+    const layout = this.computeLayout(data)
 
-    // Apply display settings
-    const { scale, verticalOffset } = this.displaySettings
-    const scaleX = baseScaleX * scale
-    const scaleY = baseScaleY * scale
-    const offsetY = (verticalOffset / 100) * this.canvas.height
+    this.ctx.save()
+    this.ctx.globalAlpha = layout.opacity
 
     for (const comp of data.compositionData) {
       if (!this.tempCanvas || !this.tempCtx) continue
@@ -517,15 +693,15 @@ abstract class BaseVideoSubtitleRenderer {
 
       // Calculate position with scale and offset applied
       // Center the scaled content horizontally
-      const scaledWidth = comp.pixelData.width * scaleX
-      const scaledHeight = comp.pixelData.height * scaleY
-      const baseX = comp.x * baseScaleX
-      const baseY = comp.y * baseScaleY
-      const centeredX = baseX + (comp.pixelData.width * baseScaleX - scaledWidth) / 2
-      const adjustedY = baseY + offsetY + (comp.pixelData.height * baseScaleY - scaledHeight)
+      const scaledWidth = comp.pixelData.width * layout.scaleX
+      const scaledHeight = comp.pixelData.height * layout.scaleY
+      const adjustedX = comp.x * (this.canvas.width / data.width) + layout.shiftX
+      const adjustedY = comp.y * (this.canvas.height / data.height) + layout.shiftY
 
-      this.ctx.drawImage(this.tempCanvas, centeredX, adjustedY, scaledWidth, scaledHeight)
+      this.ctx.drawImage(this.tempCanvas, adjustedX, adjustedY, scaledWidth, scaledHeight)
     }
+
+    this.ctx.restore()
   }
 
   /** Dispose of all resources. */
@@ -539,6 +715,14 @@ abstract class BaseVideoSubtitleRenderer {
 
     this.resizeObserver?.disconnect()
     this.resizeObserver = null
+    if (this.loadedMetadataHandler) {
+      this.video.removeEventListener('loadedmetadata', this.loadedMetadataHandler)
+      this.loadedMetadataHandler = null
+    }
+    if (this.seekedHandler) {
+      this.video.removeEventListener('seeked', this.seekedHandler)
+      this.seekedHandler = null
+    }
 
     // Clean up GPU renderers
     if (this.webgpuRenderer) {
@@ -556,6 +740,8 @@ abstract class BaseVideoSubtitleRenderer {
     this.tempCanvas = null
     this.tempCtx = null
     this.lastRenderedData = null
+    this.currentCueMetadata = null
+    this.parserMetadata = null
     this.useWebGPU = false
     this.useWebGL2 = false
   }
@@ -573,15 +759,17 @@ export class PgsRenderer extends BaseVideoSubtitleRenderer {
   private onError?: (error: Error) => void
 
   constructor(options: VideoSubtitleOptions) {
-    super(options)
+    super(options, 'pgs')
     this.onLoading = options.onLoading
     this.onLoaded = options.onLoaded
     this.onError = options.onError
+    applyCacheLimit(this.state, this.cacheLimit)
     this.startInit()
   }
 
   protected async loadSubtitles(): Promise<void> {
     try {
+      this.emitEvent({ type: 'loading', format: 'pgs' })
       this.onLoading?.()
 
       let arrayBuffer: ArrayBuffer
@@ -599,27 +787,33 @@ export class PgsRenderer extends BaseVideoSubtitleRenderer {
 
       if (this.state.useWorker) {
         try {
+          this.state.sessionId = createWorkerSessionId()
           await getOrCreateWorker()
-          const loadResponse = await sendToWorker({ type: 'loadPgs', data: data.buffer.slice(0) })
+          this.emitWorkerState(true, false, this.state.sessionId)
+          const loadResponse = await sendToWorker({
+            type: 'loadPgs',
+            sessionId: this.state.sessionId,
+            data: data.buffer.slice(0)
+          })
 
           if (loadResponse.type === 'pgsLoaded') {
             this.state.workerReady = true
-            const tsResponse = await sendToWorker({ type: 'getPgsTimestamps' })
+            this.state.metadata = loadResponse.metadata
+            const tsResponse = await sendToWorker({ type: 'getPgsTimestamps', sessionId: this.state.sessionId })
             if (tsResponse.type === 'pgsTimestamps') {
               this.state.timestamps = tsResponse.timestamps
             }
             this.isLoaded = true
-            console.log(
-              `[libbitsub] PGS loaded (worker): ${loadResponse.count} display sets from ${loadResponse.byteLength} bytes`
-            )
+            this.setParserMetadata(loadResponse.metadata)
+            this.emitWorkerState(true, true, this.state.sessionId)
             this.onLoaded?.()
             return // Success, don't fall through to main thread
           } else if (loadResponse.type === 'error') {
             throw new Error(loadResponse.message)
           }
         } catch (workerError) {
-          console.warn('[libbitsub] Worker failed, falling back to main thread:', workerError)
           this.state.useWorker = false
+          this.emitWorkerState(false, false, this.state.sessionId, true)
         }
       }
 
@@ -627,8 +821,9 @@ export class PgsRenderer extends BaseVideoSubtitleRenderer {
       await this.loadOnMainThread(data)
       this.onLoaded?.()
     } catch (error) {
-      console.error('Failed to load PGS subtitles:', error)
-      this.onError?.(error instanceof Error ? error : new Error(String(error)))
+      const resolvedError = error instanceof Error ? error : new Error(String(error))
+      this.emitEvent({ type: 'error', format: 'pgs', error: resolvedError })
+      this.onError?.(resolvedError)
     }
   }
 
@@ -649,8 +844,9 @@ export class PgsRenderer extends BaseVideoSubtitleRenderer {
       scheduleTask(() => {
         const count = this.pgsParser!.load(data)
         this.state.timestamps = this.pgsParser!.getTimestamps()
+        this.state.metadata = this.pgsParser!.getMetadata()
         this.isLoaded = true
-        console.log(`[libbitsub] PGS loaded (main thread): ${count} display sets from ${data.byteLength} bytes`)
+        this.setParserMetadata(this.state.metadata)
         resolve()
       })
     })
@@ -680,20 +876,24 @@ export class PgsRenderer extends BaseVideoSubtitleRenderer {
   }
 
   protected renderAtIndex(index: number): SubtitleData | undefined {
-    if (this.state.useWorker && this.state.workerReady) {
-      if (this.state.frameCache.has(index)) {
-        return this.state.frameCache.get(index) ?? undefined
-      }
+    if (this.state.frameCache.has(index)) {
+      return this.state.frameCache.get(index) ?? undefined
+    }
 
+    if (this.state.useWorker && this.state.workerReady) {
       if (!this.state.pendingRenders.has(index)) {
-        const renderPromise = sendToWorker({ type: 'renderPgsAtIndex', index }).then((response) =>
-          response.type === 'pgsFrame' && response.frame ? convertFrameData(response.frame) : null
-        )
+        const renderPromise = sendToWorker({
+          type: 'renderPgsAtIndex',
+          sessionId: this.state.sessionId!,
+          index
+        }).then((response) => (response.type === 'pgsFrame' && response.frame ? convertFrameData(response.frame) : null))
 
         this.state.pendingRenders.set(index, renderPromise)
+        this.emitCacheChange(this.state.frameCache.size, this.state.pendingRenders.size)
         renderPromise.then((result) => {
-          this.state.frameCache.set(index, result)
+          setCachedFrame(this.state, index, result)
           this.state.pendingRenders.delete(index)
+          this.emitCacheChange(this.state.frameCache.size, this.state.pendingRenders.size)
           // Force re-render on next frame by resetting lastRenderedIndex
           if (this.findCurrentIndex(this.video.currentTime) === index) {
             this.lastRenderedIndex = -1
@@ -703,7 +903,36 @@ export class PgsRenderer extends BaseVideoSubtitleRenderer {
       // Return undefined to indicate async loading in progress
       return undefined
     }
-    return this.pgsParser?.renderAtIndex(index)
+
+    const rendered = this.pgsParser?.renderAtIndex(index) ?? null
+    setCachedFrame(this.state, index, rendered)
+    this.emitCacheChange(this.state.frameCache.size, this.state.pendingRenders.size)
+    return rendered ?? undefined
+  }
+
+  protected buildCueMetadata(index: number): SubtitleCueMetadata | null {
+    if (this.pgsParser) {
+      return this.pgsParser.getCueMetadata(index)
+    }
+
+    const metadata = this.state.metadata
+    if (!metadata || index < 0 || index >= this.state.timestamps.length) return null
+
+    const startTime = this.state.timestamps[index]
+    const endTime = this.state.timestamps[index + 1] ?? startTime + 5000
+    const frame = this.state.frameCache.get(index) ?? null
+
+    return {
+      index,
+      format: 'pgs',
+      startTime,
+      endTime,
+      duration: Math.max(0, endTime - startTime),
+      screenWidth: metadata.screenWidth,
+      screenHeight: metadata.screenHeight,
+      bounds: frame ? getSubtitleBounds(frame) : null,
+      compositionCount: frame?.compositionData.length ?? 0
+    }
   }
 
   protected isPendingRender(index: number): boolean {
@@ -713,10 +942,46 @@ export class PgsRenderer extends BaseVideoSubtitleRenderer {
   protected onSeek(): void {
     this.state.frameCache.clear()
     this.state.pendingRenders.clear()
+    this.emitCacheChange(this.state.frameCache.size, this.state.pendingRenders.size)
     if (this.state.useWorker && this.state.workerReady) {
-      sendToWorker({ type: 'clearPgsCache' }).catch(() => {})
+      sendToWorker({ type: 'clearPgsCache', sessionId: this.state.sessionId! }).catch(() => {})
     }
     this.pgsParser?.clearCache()
+  }
+
+  setCacheLimit(limit: number): void {
+    this.cacheLimit = applyCacheLimit(this.state, limit)
+    this.emitCacheChange(this.state.frameCache.size, this.state.pendingRenders.size)
+  }
+
+  clearFrameCache(): void {
+    this.state.frameCache.clear()
+    this.state.pendingRenders.clear()
+    this.lastRenderedIndex = -1
+    if (this.state.useWorker && this.state.workerReady) {
+      sendToWorker({ type: 'clearPgsCache', sessionId: this.state.sessionId! }).catch(() => {})
+    }
+    this.pgsParser?.clearCache()
+    this.emitCacheChange(this.state.frameCache.size, this.state.pendingRenders.size)
+  }
+
+  async prefetchRange(startIndex: number, endIndex: number): Promise<void> {
+    const safeStart = Math.max(0, Math.min(startIndex, endIndex))
+    const safeEnd = Math.min(Math.max(startIndex, endIndex), this.state.timestamps.length - 1)
+
+    for (let index = safeStart; index <= safeEnd; index++) {
+      if (this.state.frameCache.has(index)) continue
+      const result = this.renderAtIndex(index)
+      if (result === undefined && this.state.pendingRenders.has(index)) {
+        await this.state.pendingRenders.get(index)
+      }
+    }
+  }
+
+  async prefetchAroundTime(time: number, before = this.prefetchBefore, after = this.prefetchAfter): Promise<void> {
+    const currentIndex = this.findCurrentIndex(time)
+    if (currentIndex < 0) return
+    await this.prefetchRange(currentIndex - before, currentIndex + after)
   }
 
   /** Get performance statistics for PGS renderer */
@@ -736,10 +1001,11 @@ export class PgsRenderer extends BaseVideoSubtitleRenderer {
     this.state.frameCache.clear()
     this.state.pendingRenders.clear()
     if (this.state.useWorker && this.state.workerReady) {
-      sendToWorker({ type: 'disposePgs' }).catch(() => {})
+      sendToWorker({ type: 'disposePgs', sessionId: this.state.sessionId! }).catch(() => {})
     }
     this.pgsParser?.dispose()
     this.pgsParser = null
+    this.state.sessionId = null
   }
 }
 
@@ -762,20 +1028,20 @@ export class VobSubRenderer extends BaseVideoSubtitleRenderer {
   private pendingIndexLookup: Promise<number> | null = null
 
   constructor(options: VideoVobSubOptions) {
-    super(options)
+    super(options, 'vobsub')
     this.idxUrl = options.idxUrl || (options.subUrl ? options.subUrl.replace(/\\.sub$/i, '.idx') : undefined)
     this.idxContent = options.idxContent
     this.onLoading = options.onLoading
     this.onLoaded = options.onLoaded
     this.onError = options.onError
+    applyCacheLimit(this.state, this.cacheLimit)
     this.startInit()
   }
 
   protected async loadSubtitles(): Promise<void> {
     try {
+      this.emitEvent({ type: 'loading', format: 'vobsub' })
       this.onLoading?.()
-
-      console.log(`[libbitsub] Loading VobSub`)
 
       let subArrayBuffer: ArrayBuffer | undefined
       let idxData: string | undefined
@@ -831,35 +1097,36 @@ export class VobSubRenderer extends BaseVideoSubtitleRenderer {
 
       const subData = new Uint8Array(subArrayBuffer)
 
-      console.log(
-        `[libbitsub] VobSub files loaded: .sub=${subArrayBuffer.byteLength} bytes, .idx=${idxData.length} chars`
-      )
-
       if (this.state.useWorker) {
         try {
+          this.state.sessionId = createWorkerSessionId()
           await getOrCreateWorker()
+          this.emitWorkerState(true, false, this.state.sessionId)
           const loadResponse = await sendToWorker({
             type: 'loadVobSub',
+            sessionId: this.state.sessionId,
             idxContent: idxData,
             subData: subData.buffer.slice(0)
           })
 
           if (loadResponse.type === 'vobSubLoaded') {
             this.state.workerReady = true
-            const tsResponse = await sendToWorker({ type: 'getVobSubTimestamps' })
+            this.state.metadata = loadResponse.metadata
+            const tsResponse = await sendToWorker({ type: 'getVobSubTimestamps', sessionId: this.state.sessionId })
             if (tsResponse.type === 'vobSubTimestamps') {
               this.state.timestamps = tsResponse.timestamps
             }
             this.isLoaded = true
-            console.log(`[libbitsub] VobSub loaded (worker): ${loadResponse.count} subtitle entries`)
+            this.setParserMetadata(loadResponse.metadata)
+            this.emitWorkerState(true, true, this.state.sessionId)
             this.onLoaded?.()
             return // Success, don't fall through to main thread
           } else if (loadResponse.type === 'error') {
             throw new Error(loadResponse.message)
           }
         } catch (workerError) {
-          console.warn('[libbitsub] Worker failed, falling back to main thread:', workerError)
           this.state.useWorker = false
+          this.emitWorkerState(false, false, this.state.sessionId, true)
         }
       }
 
@@ -867,8 +1134,9 @@ export class VobSubRenderer extends BaseVideoSubtitleRenderer {
       await this.loadOnMainThread(idxData, subData)
       this.onLoaded?.()
     } catch (error) {
-      console.error('Failed to load VobSub subtitles:', error)
-      this.onError?.(error instanceof Error ? error : new Error(String(error)))
+      const resolvedError = error instanceof Error ? error : new Error(String(error))
+      this.emitEvent({ type: 'error', format: 'vobsub', error: resolvedError })
+      this.onError?.(resolvedError)
     }
   }
 
@@ -888,8 +1156,9 @@ export class VobSubRenderer extends BaseVideoSubtitleRenderer {
       scheduleTask(() => {
         this.vobsubParser!.loadFromData(idxData, subData)
         this.state.timestamps = this.vobsubParser!.getTimestamps()
-        console.log(`[libbitsub] VobSub loaded (main thread): ${this.vobsubParser!.count} subtitle entries`)
+        this.state.metadata = this.vobsubParser!.getMetadata()
         this.isLoaded = true
+        this.setParserMetadata(this.state.metadata)
         resolve()
       })
     })
@@ -923,7 +1192,11 @@ export class VobSubRenderer extends BaseVideoSubtitleRenderer {
 
       // Start async lookup if not already pending
       if (!this.pendingIndexLookup) {
-        this.pendingIndexLookup = sendToWorker({ type: 'findVobSubIndex', timeMs }).then((response) => {
+        this.pendingIndexLookup = sendToWorker({
+          type: 'findVobSubIndex',
+          sessionId: this.state.sessionId!,
+          timeMs
+        }).then((response) => {
           if (response.type === 'vobSubIndex') {
             const newIndex = response.index
             const oldIndex = this.cachedIndex
@@ -946,22 +1219,25 @@ export class VobSubRenderer extends BaseVideoSubtitleRenderer {
   }
 
   protected renderAtIndex(index: number): SubtitleData | undefined {
-    if (this.state.useWorker && this.state.workerReady) {
-      // Return cached frame immediately if available
-      if (this.state.frameCache.has(index)) {
-        return this.state.frameCache.get(index) ?? undefined
-      }
+    if (this.state.frameCache.has(index)) {
+      return this.state.frameCache.get(index) ?? undefined
+    }
 
+    if (this.state.useWorker && this.state.workerReady) {
       // Start async render if not already pending
       if (!this.state.pendingRenders.has(index)) {
-        const renderPromise = sendToWorker({ type: 'renderVobSubAtIndex', index }).then((response) =>
-          response.type === 'vobSubFrame' && response.frame ? convertFrameData(response.frame) : null
-        )
+        const renderPromise = sendToWorker({
+          type: 'renderVobSubAtIndex',
+          sessionId: this.state.sessionId!,
+          index
+        }).then((response) => (response.type === 'vobSubFrame' && response.frame ? convertFrameData(response.frame) : null))
 
         this.state.pendingRenders.set(index, renderPromise)
+        this.emitCacheChange(this.state.frameCache.size, this.state.pendingRenders.size)
         renderPromise.then((result) => {
-          this.state.frameCache.set(index, result)
+          setCachedFrame(this.state, index, result)
           this.state.pendingRenders.delete(index)
+          this.emitCacheChange(this.state.frameCache.size, this.state.pendingRenders.size)
           // Force re-render on next frame by resetting lastRenderedIndex
           if (this.findCurrentIndex(this.video.currentTime) === index) {
             this.lastRenderedIndex = -1
@@ -971,7 +1247,38 @@ export class VobSubRenderer extends BaseVideoSubtitleRenderer {
       // Return undefined to indicate async loading in progress
       return undefined
     }
-    return this.vobsubParser?.renderAtIndex(index)
+
+    const rendered = this.vobsubParser?.renderAtIndex(index) ?? null
+    setCachedFrame(this.state, index, rendered)
+    this.emitCacheChange(this.state.frameCache.size, this.state.pendingRenders.size)
+    return rendered ?? undefined
+  }
+
+  protected buildCueMetadata(index: number): SubtitleCueMetadata | null {
+    if (this.vobsubParser) {
+      return this.vobsubParser.getCueMetadata(index)
+    }
+
+    const metadata = this.state.metadata
+    if (!metadata || index < 0 || index >= this.state.timestamps.length) return null
+
+    const startTime = this.state.timestamps[index]
+    const endTime = this.state.timestamps[index + 1] ?? startTime + 5000
+    const frame = this.state.frameCache.get(index) ?? null
+
+    return {
+      index,
+      format: 'vobsub',
+      startTime,
+      endTime,
+      duration: Math.max(0, endTime - startTime),
+      screenWidth: metadata.screenWidth,
+      screenHeight: metadata.screenHeight,
+      bounds: frame ? getSubtitleBounds(frame) : null,
+      compositionCount: frame?.compositionData.length ?? 0,
+      language: metadata.language ?? null,
+      trackId: metadata.trackId ?? null
+    }
   }
 
   protected isPendingRender(index: number): boolean {
@@ -986,9 +1293,48 @@ export class VobSubRenderer extends BaseVideoSubtitleRenderer {
     this.cachedIndexTime = -1
     this.pendingIndexLookup = null
     if (this.state.useWorker && this.state.workerReady) {
-      sendToWorker({ type: 'clearVobSubCache' }).catch(() => {})
+      sendToWorker({ type: 'clearVobSubCache', sessionId: this.state.sessionId! }).catch(() => {})
     }
     this.vobsubParser?.clearCache()
+    this.emitCacheChange(this.state.frameCache.size, this.state.pendingRenders.size)
+  }
+
+  setCacheLimit(limit: number): void {
+    this.cacheLimit = applyCacheLimit(this.state, limit)
+    this.emitCacheChange(this.state.frameCache.size, this.state.pendingRenders.size)
+  }
+
+  clearFrameCache(): void {
+    this.state.frameCache.clear()
+    this.state.pendingRenders.clear()
+    this.cachedIndex = -1
+    this.cachedIndexTime = -1
+    this.pendingIndexLookup = null
+    this.lastRenderedIndex = -1
+    if (this.state.useWorker && this.state.workerReady) {
+      sendToWorker({ type: 'clearVobSubCache', sessionId: this.state.sessionId! }).catch(() => {})
+    }
+    this.vobsubParser?.clearCache()
+    this.emitCacheChange(this.state.frameCache.size, this.state.pendingRenders.size)
+  }
+
+  async prefetchRange(startIndex: number, endIndex: number): Promise<void> {
+    const safeStart = Math.max(0, Math.min(startIndex, endIndex))
+    const safeEnd = Math.min(Math.max(startIndex, endIndex), this.state.timestamps.length - 1)
+
+    for (let index = safeStart; index <= safeEnd; index++) {
+      if (this.state.frameCache.has(index)) continue
+      const result = this.renderAtIndex(index)
+      if (result === undefined && this.state.pendingRenders.has(index)) {
+        await this.state.pendingRenders.get(index)
+      }
+    }
+  }
+
+  async prefetchAroundTime(time: number, before = this.prefetchBefore, after = this.prefetchAfter): Promise<void> {
+    const currentIndex = this.findCurrentIndex(time)
+    if (currentIndex < 0) return
+    await this.prefetchRange(currentIndex - before, currentIndex + after)
   }
 
   /** Get performance statistics for VobSub renderer */
@@ -1006,34 +1352,37 @@ export class VobSubRenderer extends BaseVideoSubtitleRenderer {
   /** Enable or disable debanding filter */
   setDebandEnabled(enabled: boolean): void {
     if (this.state.useWorker && this.state.workerReady) {
-      sendToWorker({ type: 'setVobSubDebandEnabled', enabled }).catch(() => {})
+      sendToWorker({ type: 'setVobSubDebandEnabled', sessionId: this.state.sessionId!, enabled }).catch(() => {})
     }
     this.vobsubParser?.setDebandEnabled(enabled)
     // Clear cache to force re-render with new settings
     this.state.frameCache.clear()
     this.lastRenderedIndex = -1
+    this.emitCacheChange(this.state.frameCache.size, this.state.pendingRenders.size)
   }
 
   /** Set debanding threshold (0-255, default: 64) */
   setDebandThreshold(threshold: number): void {
     if (this.state.useWorker && this.state.workerReady) {
-      sendToWorker({ type: 'setVobSubDebandThreshold', threshold }).catch(() => {})
+      sendToWorker({ type: 'setVobSubDebandThreshold', sessionId: this.state.sessionId!, threshold }).catch(() => {})
     }
     this.vobsubParser?.setDebandThreshold(threshold)
     // Clear cache to force re-render with new settings
     this.state.frameCache.clear()
     this.lastRenderedIndex = -1
+    this.emitCacheChange(this.state.frameCache.size, this.state.pendingRenders.size)
   }
 
   /** Set debanding sample range in pixels (1-64, default: 15) */
   setDebandRange(range: number): void {
     if (this.state.useWorker && this.state.workerReady) {
-      sendToWorker({ type: 'setVobSubDebandRange', range }).catch(() => {})
+      sendToWorker({ type: 'setVobSubDebandRange', sessionId: this.state.sessionId!, range }).catch(() => {})
     }
     this.vobsubParser?.setDebandRange(range)
     // Clear cache to force re-render with new settings
     this.state.frameCache.clear()
     this.lastRenderedIndex = -1
+    this.emitCacheChange(this.state.frameCache.size, this.state.pendingRenders.size)
   }
 
   /** Check if debanding is enabled */
@@ -1046,9 +1395,31 @@ export class VobSubRenderer extends BaseVideoSubtitleRenderer {
     this.state.frameCache.clear()
     this.state.pendingRenders.clear()
     if (this.state.useWorker && this.state.workerReady) {
-      sendToWorker({ type: 'disposeVobSub' }).catch(() => {})
+      sendToWorker({ type: 'disposeVobSub', sessionId: this.state.sessionId! }).catch(() => {})
     }
     this.vobsubParser?.dispose()
     this.vobsubParser = null
+    this.state.sessionId = null
   }
+}
+
+/** Create a video subtitle renderer with automatic format detection. */
+export function createAutoSubtitleRenderer(options: AutoVideoSubtitleOptions): PgsRenderer | VobSubRenderer {
+  const format = detectSubtitleFormat({
+    data: options.subContent,
+    idxContent: options.idxContent,
+    fileName: options.fileName,
+    subUrl: options.subUrl,
+    idxUrl: options.idxUrl
+  })
+
+  if (format === 'pgs') {
+    return new PgsRenderer(options)
+  }
+
+  if (format === 'vobsub') {
+    return new VobSubRenderer(options)
+  }
+
+  throw new Error('Unable to detect subtitle format for video renderer')
 }

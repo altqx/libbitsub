@@ -24,6 +24,8 @@ pub struct VobSubParser {
     packet_cache: HashMap<usize, Option<SubtitlePacket>>,
     /// Debanding configuration
     deband_config: DebandConfig,
+    /// Whether the parser was loaded from IDX metadata.
+    loaded_from_idx: bool,
 }
 
 #[wasm_bindgen]
@@ -37,6 +39,7 @@ impl VobSubParser {
             timestamps_ms: Vec::new(),
             packet_cache: HashMap::new(),
             deband_config: DebandConfig::default(),
+            loaded_from_idx: false,
         }
     }
 
@@ -50,6 +53,7 @@ impl VobSubParser {
         self.timestamps_ms = idx.timestamps.iter().map(|t| t.timestamp_ms).collect();
         self.idx_data = Some(idx);
         self.sub_data = Some(sub_data.to_vec());
+        self.loaded_from_idx = true;
     }
 
     /// Load VobSub from SUB file only (scans for timestamps).
@@ -103,6 +107,7 @@ impl VobSubParser {
             metadata: Default::default(),
         });
         self.sub_data = Some(sub_data.to_vec());
+        self.loaded_from_idx = false;
     }
 
     /// Dispose of all resources.
@@ -112,12 +117,53 @@ impl VobSubParser {
         self.sub_data = None;
         self.timestamps_ms.clear();
         self.packet_cache.clear();
+        self.loaded_from_idx = false;
     }
 
     /// Get the number of subtitle entries.
     #[wasm_bindgen(getter)]
     pub fn count(&self) -> usize {
         self.timestamps_ms.len()
+    }
+
+    /// Get the presentation width for this subtitle track.
+    #[wasm_bindgen(getter, js_name = screenWidth)]
+    pub fn screen_width(&self) -> u16 {
+        self.idx_data
+            .as_ref()
+            .map_or(0, |idx_data| idx_data.metadata.width)
+    }
+
+    /// Get the presentation height for this subtitle track.
+    #[wasm_bindgen(getter, js_name = screenHeight)]
+    pub fn screen_height(&self) -> u16 {
+        self.idx_data
+            .as_ref()
+            .map_or(0, |idx_data| idx_data.metadata.height)
+    }
+
+    /// Get the declared language code from IDX metadata.
+    #[wasm_bindgen(getter)]
+    pub fn language(&self) -> String {
+        self.idx_data
+            .as_ref()
+            .and_then(|idx_data| idx_data.metadata.language.clone())
+            .unwrap_or_default()
+    }
+
+    /// Get the declared subtitle track ID from IDX metadata.
+    #[wasm_bindgen(getter, js_name = trackId)]
+    pub fn track_id(&self) -> String {
+        self.idx_data
+            .as_ref()
+            .and_then(|idx_data| idx_data.metadata.id.clone())
+            .unwrap_or_default()
+    }
+
+    /// Check whether IDX metadata was used to load the parser.
+    #[wasm_bindgen(getter, js_name = hasIdxMetadata)]
+    pub fn has_idx_metadata(&self) -> bool {
+        self.loaded_from_idx
     }
 
     /// Get all timestamps in milliseconds as a Float64Array.
@@ -158,6 +204,42 @@ impl VobSubParser {
 
         // Current time is past the subtitle's duration
         -1
+    }
+
+    /// Get the cue start time in milliseconds.
+    #[wasm_bindgen(js_name = getCueStartTime)]
+    pub fn get_cue_start_time(&self, index: usize) -> f64 {
+        self.timestamps_ms.get(index).copied().map_or(-1.0, |ts| ts as f64)
+    }
+
+    /// Get the cue end time in milliseconds.
+    #[wasm_bindgen(js_name = getCueEndTime)]
+    pub fn get_cue_end_time(&mut self, index: usize) -> f64 {
+        let Some(&start_time) = self.timestamps_ms.get(index) else {
+            return -1.0;
+        };
+
+        self.calculate_end_time(index, start_time) as f64
+    }
+
+    /// Get the cue duration in milliseconds.
+    #[wasm_bindgen(js_name = getCueDuration)]
+    pub fn get_cue_duration(&mut self, index: usize) -> f64 {
+        let Some(&start_time) = self.timestamps_ms.get(index) else {
+            return -1.0;
+        };
+
+        self.calculate_end_time(index, start_time)
+            .saturating_sub(start_time) as f64
+    }
+
+    /// Get the cue file position in the SUB file.
+    #[wasm_bindgen(js_name = getCueFilePosition)]
+    pub fn get_cue_file_position(&self, index: usize) -> f64 {
+        self.idx_data
+            .as_ref()
+            .and_then(|idx_data| idx_data.timestamps.get(index).copied())
+            .map_or(-1.0, |timestamp| timestamp.file_position as f64)
     }
     /// Calculate the end time for a subtitle at the given index.
     fn calculate_end_time(&mut self, index: usize, start_time: u32) -> u32 {

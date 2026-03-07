@@ -11,6 +11,7 @@ struct VertexOutput {
 
 struct Uniforms {
   resolution: vec2f,
+  opacity: f32,
 }
 
 struct QuadData {
@@ -64,7 +65,7 @@ struct FragmentInput {
 @fragment
 fn fragmentMain(input: FragmentInput) -> @location(0) vec4f {
   // Sample pre-multiplied alpha texture (premultiplied on CPU upload)
-  return textureSample(tex, texSampler, input.texCoord);
+  return textureSample(tex, texSampler, input.texCoord) * uniforms.opacity;
 }
 `
 
@@ -158,7 +159,7 @@ export class WebGPURenderer {
 
     // Create uniform buffer
     this.uniformBuffer = this.device.createBuffer({
-      size: 16, // vec2f resolution + padding
+      size: 16,
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
     })
 
@@ -167,7 +168,7 @@ export class WebGPURenderer {
       entries: [
         {
           binding: 0,
-          visibility: GPUShaderStage.VERTEX,
+          visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
           buffer: { type: 'uniform' }
         },
         {
@@ -260,7 +261,7 @@ export class WebGPURenderer {
     canvas.height = height
 
     // Update uniform buffer with resolution
-    this.device.queue.writeBuffer(this.uniformBuffer!, 0, new Float32Array([width, height]))
+    this.device.queue.writeBuffer(this.uniformBuffer!, 0, new Float32Array([width, height, 1, 0]))
   }
 
   /**
@@ -272,7 +273,7 @@ export class WebGPURenderer {
     this._canvas.width = width
     this._canvas.height = height
 
-    this.device.queue.writeBuffer(this.uniformBuffer!, 0, new Float32Array([width, height]))
+    this.device.queue.writeBuffer(this.uniformBuffer!, 0, new Float32Array([width, height, 1, 0]))
   }
 
   private createTextureInfo(width: number, height: number): TextureInfo {
@@ -301,9 +302,17 @@ export class WebGPURenderer {
     screenHeight: number,
     scaleX: number,
     scaleY: number,
-    offsetY: number
+    shiftX: number,
+    shiftY: number,
+    opacity: number
   ): void {
     if (!this.device || !this.context || !this.pipeline) return
+
+    this.device.queue.writeBuffer(
+      this.uniformBuffer!,
+      0,
+      new Float32Array([this._canvas!.width, this._canvas!.height, opacity, 0])
+    )
 
     const commandEncoder = this.device.createCommandEncoder()
     const textureView = this.context.getCurrentTexture().createView()
@@ -386,15 +395,13 @@ export class WebGPURenderer {
       // Calculate scaled position and size
       const scaledWidth = width * scaleX
       const scaledHeight = height * scaleY
-      const baseX = x * (this._canvas!.width / screenWidth)
-      const baseY = y * (this._canvas!.height / screenHeight)
-      const centeredX = baseX + (width * (this._canvas!.width / screenWidth) - scaledWidth) / 2
-      const adjustedY = baseY + offsetY + (height * (this._canvas!.height / screenHeight) - scaledHeight)
+      const adjustedX = x * (this._canvas!.width / screenWidth) + shiftX
+      const adjustedY = y * (this._canvas!.height / screenHeight) + shiftY
 
       // Update quad data buffer
       const quadData = new Float32Array([
         // destRect
-        centeredX,
+        adjustedX,
         adjustedY,
         scaledWidth,
         scaledHeight,

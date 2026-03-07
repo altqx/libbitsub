@@ -4,8 +4,19 @@
 
 // Types
 export type {
+  AutoSubtitleSource,
+  AutoVideoSubtitleOptions,
+  SubtitleCueBounds,
+  SubtitleCueMetadata,
   SubtitleData,
   SubtitleCompositionData,
+  SubtitleDisplaySettings,
+  SubtitleFormatName,
+  SubtitleHorizontalAlign,
+  SubtitleParserMetadata,
+  SubtitleRendererBackend,
+  SubtitleRendererEvent,
+  SubtitleRendererStatsSnapshot,
   VideoSubtitleOptions,
   VideoVobSubOptions,
   CompositionData,
@@ -25,13 +36,22 @@ export { initWasm, isWasmInitialized, getWasm, getWasmUrl } from './wasm'
 export { isWorkerAvailable, getOrCreateWorker, sendToWorker } from './worker'
 
 // Utilities
-export { binarySearchTimestamp, convertFrameData, createWorkerState } from './utils'
+export {
+  binarySearchTimestamp,
+  convertFrameData,
+  createWorkerState,
+  createWorkerSessionId,
+  detectSubtitleFormat,
+  getSubtitleBounds,
+  setCacheLimit,
+  setCachedFrame
+} from './utils'
 
 // Parsers
 export { PgsParser, VobSubParserLowLevel, UnifiedSubtitleParser } from './parsers'
 
 // Renderers
-export { PgsRenderer, VobSubRenderer } from './renderers'
+export { PgsRenderer, VobSubRenderer, createAutoSubtitleRenderer } from './renderers'
 
 // GPU renderers (advanced use)
 export { WebGPURenderer, isWebGPUSupported } from './webgpu-renderer'

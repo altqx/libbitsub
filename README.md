@@ -2,33 +2,35 @@
 
 High-performance WASM renderer for graphical subtitles (PGS and VobSub), written in Rust.
 
-Started as a fork of Arcus92's [libpgs-js](https://github.com/Arcus92/libpgs-js), this project is re-engineered to maximize performance and extend functionality to VobSub, which was not supported by the original library. It remains fully backward compatible (only for PGS - obliviously). Special thanks to the original project for the inspiration!
+Started as a fork of Arcus92's [libpgs-js](https://github.com/Arcus92/libpgs-js), this project was reworked for higher performance and broader format support. It keeps the familiar high-level PGS-oriented API while adding a lower-level parser surface, VobSub support, GPU backends, and worker-backed rendering.
 
 ## Features
 
-- **PGS (Blu-ray)** subtitle parsing and rendering
-- **VobSub (DVD)** subtitle parsing and rendering
-- **WebGPU / WebGL2 rendering** GPU-accelerated rendering with automatic fallback: WebGPU → WebGL2 → Canvas2D
-- **High-performance** Rust-based rendering engine compiled to WebAssembly
-- **Zero-copy** data transfer between JS and WASM where possible
-- **Caching** for decoded bitmaps to optimize repeated rendering
-- **TypeScript** support with full type definitions
+- PGS (Blu-ray) subtitle parsing and rendering
+- VobSub (DVD) subtitle parsing and rendering
+- WebGPU, WebGL2, and Canvas2D rendering with automatic fallback
+- Worker-backed parsing/rendering for large subtitle files
+- Rich layout controls: scale, horizontal/vertical offsets, alignment, bottom padding, safe area, opacity
+- Cue metadata and parser introspection APIs
+- Frame prefetching and cache control for high-level renderers
+- Automatic format detection and unified loading helpers
+- TypeScript support with exported event and metadata types
 
 ## Showcase
 
-### PGS (Created using Spp2Pgs)
+### PGS
 
 https://gist.github.com/user-attachments/assets/55ac8e11-1964-4fb9-923e-dcac82dc7703
 
-### Vobsub
+### VobSub
 
 https://gist.github.com/user-attachments/assets/a89ae9fe-23e4-4bc3-8cad-16a3f0fea665
 
-### [See in action](https://a.rafasu.com/v)
+### Live demo
 
-### Installation
+https://a.rafasu.com/v
 
-**npm / bun**
+## Installation
 
 ```bash
 npm install libbitsub
@@ -36,327 +38,301 @@ npm install libbitsub
 bun add libbitsub
 ```
 
-**JSR (Deno)**
+For JSR:
 
 ```bash
 deno add jsr:@altq/libbitsub
 ```
 
-### Setup for Web Workers (Recommended)
+## Worker setup
 
-For best performance with large subtitle files, copy the WASM files to your public folder so Web Workers can access them:
+For best performance, make the generated WASM assets reachable by the browser so the shared worker can load them:
 
 ```bash
-# For Next.js, Vite, or similar frameworks
 mkdir -p public/libbitsub
 cp node_modules/libbitsub/pkg/libbitsub_bg.wasm public/libbitsub/
 cp node_modules/libbitsub/pkg/libbitsub.js public/libbitsub/
 ```
 
-This enables off-main-thread parsing which prevents UI freezing when loading large PGS files.
+`workerUrl` still exists in the option type for compatibility, but the current implementation creates an inline shared worker and resolves the WASM asset from the package loader. Supplying `workerUrl` does not change runtime behavior.
 
-## Prerequisites
+## Building from source
 
-To build from source, you need:
+Prerequisites:
 
-- [Rust](https://rustup.rs/) (1.70+)
-- [wasm-pack](https://rustwasm.github.io/wasm-pack/installer/)
+- Rust
+- wasm-pack
+- Bun
 
 ```bash
-# Install wasm-pack
 cargo install wasm-pack
-```
-
-## Building
-
-```bash
-# Build WASM module and TypeScript wrapper
 bun run build
-
-# Build WASM only (for development)
-bun run build:wasm
-
-# Build release version (optimized)
-bun run build:wasm:release
 ```
 
-## Usage
+## Quick start
 
-### Initialize WASM
+Initialize the WASM module once before using any parser or renderer:
 
-Before using any renderer, you must initialize the WASM module:
-
-```typescript
+```ts
 import { initWasm } from 'libbitsub'
 
-// Initialize WASM (do this once at app startup)
 await initWasm()
 ```
 
-## High-Level API (Video Integration)
+## High-level video renderers
 
-The high-level API automatically handles video synchronization, canvas overlay, and subtitle fetching.
+The high-level API manages subtitle loading, canvas overlay creation, playback sync, resize handling, worker usage, and renderer fallback.
 
-### PGS Subtitles (Video-Integrated)
+### PGS renderer
 
-```typescript
+```ts
 import { PgsRenderer } from 'libbitsub'
 
-// Create renderer with video element (URL-based loading)
 const renderer = new PgsRenderer({
   video: videoElement,
   subUrl: '/subtitles/movie.sup',
-  workerUrl: '/libbitsub.js', // Optional, kept for API compatibility
-  // Lifecycle callbacks (optional)
-  onLoading: () => console.log('Loading subtitles...'),
-  onLoaded: () => console.log('Subtitles loaded!'),
-  onError: (error) => console.error('Failed to load:', error)
+  displaySettings: {
+    scale: 1.1,
+    bottomPadding: 4,
+    safeArea: 5
+  },
+  cacheLimit: 32,
+  prefetchWindow: { before: 1, after: 2 },
+  onEvent: (event) => {
+    if (event.type === 'worker-state') {
+      console.log('worker', event.ready ? 'ready' : 'starting', event.sessionId)
+    }
+  }
 })
 
-// Or load directly from ArrayBuffer
-const response = await fetch('/subtitles/movie.sup')
-const subtitleData = await response.arrayBuffer()
-
-const renderer = new PgsRenderer({
-  video: videoElement,
-  subContent: subtitleData, // Load directly from ArrayBuffer
-  onLoading: () => console.log('Loading subtitles...'),
-  onLoaded: () => console.log('Subtitles loaded!'),
-  onError: (error) => console.error('Failed to load:', error)
-})
-
-// The renderer automatically:
-// - Fetches the subtitle file (if using subUrl) or uses provided ArrayBuffer
-// - Creates a canvas overlay on the video
-// - Syncs rendering with video playback
-// - Handles resize events
-
-// When done:
 renderer.dispose()
 ```
 
-### VobSub Subtitles (Video-Integrated)
+### VobSub renderer
 
-```typescript
+```ts
 import { VobSubRenderer } from 'libbitsub'
 
-// Create renderer with video element (URL-based loading)
 const renderer = new VobSubRenderer({
   video: videoElement,
   subUrl: '/subtitles/movie.sub',
-  idxUrl: '/subtitles/movie.idx', // Optional, defaults to .sub path with .idx extension
-  workerUrl: '/libbitsub.js', // Optional
-  // Lifecycle callbacks (optional)
-  onLoading: () => setIsLoading(true),
-  onLoaded: () => setIsLoading(false),
-  onError: (error) => {
-    setIsLoading(false)
-    console.error('Subtitle error:', error)
-  }
+  idxUrl: '/subtitles/movie.idx'
 })
 
-// Or load directly from ArrayBuffer
-const [subResponse, idxResponse] = await Promise.all([fetch('/subtitles/movie.sub'), fetch('/subtitles/movie.idx')])
-const subData = await subResponse.arrayBuffer()
-const idxData = await idxResponse.text()
-
-const renderer = new VobSubRenderer({
-  video: videoElement,
-  subContent: subData, // Load .sub directly from ArrayBuffer
-  idxContent: idxData, // Load .idx directly from string
-  onLoading: () => setIsLoading(true),
-  onLoaded: () => setIsLoading(false),
-  onError: (error) => {
-    setIsLoading(false)
-    console.error('Subtitle error:', error)
-  }
-})
-
-// When done:
-renderer.dispose()
+renderer.setDebandThreshold(64)
+renderer.setDebandRange(15)
 ```
 
-### Subtitle Display Settings
+### Automatic format detection
 
-Both `PgsRenderer` and `VobSubRenderer` support real-time customization of subtitle size and position:
+```ts
+import { createAutoSubtitleRenderer } from 'libbitsub'
 
-```typescript
-// Get current settings
-const settings = renderer.getDisplaySettings()
-console.log(settings)
-// Output: { scale: 1.0, verticalOffset: 0 }
+const renderer = createAutoSubtitleRenderer({
+  video: videoElement,
+  subUrl: '/subtitles/track.sup',
+  fileName: 'track.sup'
+})
+```
 
-// Update settings
+Automatic detection uses file hints when available and otherwise inspects the binary payload. If the format cannot be identified confidently, it throws instead of silently forcing a parser.
+
+## Layout controls
+
+Both `PgsRenderer` and `VobSubRenderer` support runtime layout changes:
+
+```ts
 renderer.setDisplaySettings({
-  scale: 1.2, // 1.2 = 120% size
-  verticalOffset: -10 // -10% (move up 10% of video height)
+  scale: 1.2,
+  verticalOffset: -8,
+  horizontalOffset: 2,
+  horizontalAlign: 'center',
+  bottomPadding: 6,
+  safeArea: 5,
+  opacity: 0.92
 })
 
-// Reset to defaults
+const settings = renderer.getDisplaySettings()
 renderer.resetDisplaySettings()
 ```
 
-### Debanding (VobSub)
+`SubtitleDisplaySettings`:
 
-VobSub subtitles often exhibit banding artifacts due to their limited 4-color palette. libbitsub includes a neo_f3kdb-style debanding filter that smooths color transitions:
+| Field | Type | Range / values | Meaning |
+| --- | --- | --- | --- |
+| `scale` | number | `0.1` to `3.0` | Overall subtitle scale |
+| `verticalOffset` | number | `-50` to `50` | Vertical movement as percent of video height |
+| `horizontalOffset` | number | `-50` to `50` | Horizontal movement as percent of video width |
+| `horizontalAlign` | `'left' \| 'center' \| 'right'` | fixed set | Anchor used when scaling subtitle groups |
+| `bottomPadding` | number | `0` to `50` | Extra padding from the bottom edge |
+| `safeArea` | number | `0` to `25` | Clamp subtitles inside a video-safe area |
+| `opacity` | number | `0.0` to `1.0` | Global subtitle opacity |
 
-```typescript
-import { VobSubRenderer } from 'libbitsub'
+## Metadata and introspection
 
-const renderer = new VobSubRenderer({
-  video: videoElement,
-  subUrl: '/subtitles/movie.sub'
-})
+High-level renderers expose parser and cue metadata:
 
-// Debanding is enabled by default; call to disable if needed
-// renderer.setDebandEnabled(false)
-
-// Fine-tune debanding parameters
-renderer.setDebandThreshold(64.0) // Higher = more aggressive smoothing
-renderer.setDebandRange(15) // Pixel radius for sampling
-
-// Check if debanding is active
-console.log(renderer.debandEnabled) // true
+```ts
+const metadata = renderer.getMetadata()
+const currentCue = renderer.getCurrentCueMetadata()
+const cue42 = renderer.getCueMetadata(42)
 ```
 
-**Low-Level API:**
+Low-level parsers expose the same model:
 
-```typescript
-import { VobSubParserLowLevel } from 'libbitsub'
+```ts
+import { PgsParser, UnifiedSubtitleParser, VobSubParserLowLevel } from 'libbitsub'
 
-const parser = new VobSubParserLowLevel()
-parser.loadFromData(idxContent, subData)
+const parser = new UnifiedSubtitleParser()
+const detected = parser.loadAuto({ data: subtitleBytes, fileName: 'track.sup' })
 
-// Configure debanding before rendering
-parser.setDebandEnabled(true)
-parser.setDebandThreshold(48.0)
-parser.setDebandRange(12)
-
-// Rendered frames will have debanding applied
-const frame = parser.renderAtIndex(0)
+console.log(detected)
+console.log(parser.getMetadata())
+console.log(parser.getCueMetadata(0))
 ```
 
-**Debanding Settings:**
+Metadata includes:
 
-| Property    | Type    | Default | Range     | Description                                      |
-| ----------- | ------- | ------- | --------- | ------------------------------------------------ |
-| `enabled`   | boolean | `true`  | -         | Enable/disable the debanding filter              |
-| `threshold` | number  | `64.0`  | 0.0-255.0 | Difference threshold; higher = more smoothing    |
-| `range`     | number  | `15`    | 1-64      | Sample radius in pixels; higher = wider sampling |
+- Track format, cue count, and presentation size
+- Cue start/end time and duration
+- Rendered cue bounds when available
+- PGS composition count, palette ID, composition state
+- VobSub language, track ID, IDX metadata presence, file position where available
 
-**Notes:**
+## Cache control and prefetching
 
-- Debanding is applied post-decode on the RGBA output
-- Uses cross-shaped sampling with factor-based blending (neo_f3kdb sample_mode 6 style)
-- Transparent pixels are skipped for performance
-- Deterministic output (same input = same output)
+High-level renderers expose cache helpers:
 
-**Settings Reference:**
-
-- `scale` (number): Scale factor for subtitles.
-  - `1.0` = 100% (Original size)
-  - `0.5` = 50%
-  - `2.0` = 200%
-  - Range: `0.1` to `3.0`
-
-- `verticalOffset` (number): Vertical position offset as a percentage of video height.
-  - `0` = Original position
-  - Negative values move up (e.g., `-10` moves up by 10% of height)
-  - Positive values move down (e.g., `10` moves down by 10% of height)
-  - Range: `-50` to `50`
-
-### Performance Statistics
-
-Both `PgsRenderer` and `VobSubRenderer` provide real-time performance metrics:
-
-```typescript
-// Get performance statistics
-const stats = renderer.getStats()
-console.log(stats)
-// Output:
-// {
-//   framesRendered: 120,
-//   framesDropped: 2,
-//   avgRenderTime: 1.45,
-//   maxRenderTime: 8.32,
-//   minRenderTime: 0.12,
-//   lastRenderTime: 1.23,
-//   renderFps: 60,
-//   usingWorker: true,
-//   cachedFrames: 5,
-//   pendingRenders: 0,
-//   totalEntries: 847,
-//   currentIndex: 42
-// }
-
-// Example: Display stats in a debug overlay
-setInterval(() => {
-  const stats = renderer.getStats()
-  debugOverlay.textContent = `
-    FPS: ${stats.renderFps}
-    Frames: ${stats.framesRendered} (dropped: ${stats.framesDropped})
-    Avg render: ${stats.avgRenderTime}ms
-    Worker: ${stats.usingWorker ? 'Yes' : 'No'}
-    Cache: ${stats.cachedFrames} frames
-  `
-}, 1000)
+```ts
+renderer.setCacheLimit(48)
+await renderer.prefetchRange(10, 20)
+await renderer.prefetchAroundTime(videoElement.currentTime)
+renderer.clearFrameCache()
 ```
 
-**Stats Reference:**
+`clearFrameCache()` clears both the renderer-side frame map and the underlying parser cache for the active session.
 
-| Property         | Type    | Description                                                    |
-| ---------------- | ------- | -------------------------------------------------------------- |
-| `framesRendered` | number  | Total frames rendered since initialization                     |
-| `framesDropped`  | number  | Frames dropped due to slow rendering (>16.67ms)                |
-| `avgRenderTime`  | number  | Average render time in milliseconds (rolling 60-sample window) |
-| `maxRenderTime`  | number  | Maximum render time in milliseconds                            |
-| `minRenderTime`  | number  | Minimum render time in milliseconds                            |
-| `lastRenderTime` | number  | Most recent render time in milliseconds                        |
-| `renderFps`      | number  | Current renders per second (based on last 1 second)            |
-| `usingWorker`    | boolean | Whether rendering is using Web Worker (off-main-thread)        |
-| `cachedFrames`   | number  | Number of decoded frames currently cached                      |
-| `pendingRenders` | number  | Number of frames currently being decoded asynchronously        |
-| `totalEntries`   | number  | Total subtitle entries/display sets in the loaded file         |
-| `currentIndex`   | number  | Index of the currently displayed subtitle                      |
+## Observability events
 
-### GPU-Accelerated Rendering
+Use `onEvent` to observe renderer lifecycle and runtime behavior:
 
-libbitsub automatically selects the best available GPU renderer at startup, following this fallback chain:
-
-**WebGPU → WebGL2 → Canvas2D**
-
-```typescript
-import { PgsRenderer, isWebGPUSupported, isWebGL2Supported } from 'libbitsub'
-
-// Check renderer support
-if (isWebGPUSupported()) {
-  console.log('WebGPU available')
-} else if (isWebGL2Supported()) {
-  console.log('WebGL2 available')
-} else {
-  console.log('Falling back to Canvas2D')
-}
-
+```ts
 const renderer = new PgsRenderer({
   video: videoElement,
   subUrl: '/subtitles/movie.sup',
-  onWebGPUFallback: () => console.log('WebGPU unavailable, trying WebGL2'),
-  onWebGL2Fallback: () => console.log('WebGL2 unavailable, using Canvas2D')
+  onEvent: (event) => {
+    switch (event.type) {
+      case 'loading':
+      case 'loaded':
+      case 'error':
+      case 'renderer-change':
+      case 'worker-state':
+      case 'cache-change':
+      case 'cue-change':
+      case 'stats':
+        console.log(event)
+        break
+    }
+  }
 })
 ```
 
-**Options:**
+Emitted events:
 
-- `onWebGPUFallback` (function): Callback when WebGPU initialisation fails
-- `onWebGL2Fallback` (function): Callback when WebGL2 initialisation fails
+| Event | Payload |
+| --- | --- |
+| `loading` | subtitle format |
+| `loaded` | subtitle format and parser metadata |
+| `error` | subtitle format and `Error` |
+| `renderer-change` | active backend: `webgpu`, `webgl2`, or `canvas2d` |
+| `worker-state` | whether worker mode is enabled, ready, fallback status, and the active session ID |
+| `cache-change` | cached frame count, pending renders, and configured cache limit |
+| `cue-change` | current cue metadata or `null` when nothing is displayed |
+| `stats` | periodic renderer stats snapshot |
 
-**Renderer capabilities:**
+## Performance stats
 
-| Renderer | Premultiplied alpha | Linear sampling | Browser support |
-| -------- | ------------------- | --------------- | --------------- |
-| WebGPU   | ✅                  | ✅              | Chrome 113+, Firefox 141+, Edge 113+ |
-| WebGL2   | ✅                  | ✅              | All modern browsers |
-| Canvas2D | —                   | ✅              | Universal |
+```ts
+const stats = renderer.getStats()
+```
+
+`SubtitleRendererStats` includes:
+
+- `framesRendered`
+- `framesDropped`
+- `avgRenderTime`
+- `maxRenderTime`
+- `minRenderTime`
+- `lastRenderTime`
+- `renderFps`
+- `usingWorker`
+- `cachedFrames`
+- `pendingRenders`
+- `totalEntries`
+- `currentIndex`
+
+## Low-level APIs
+
+### PGS parser
+
+```ts
+import { PgsParser } from 'libbitsub'
+
+const parser = new PgsParser()
+parser.load(new Uint8Array(arrayBuffer))
+
+const timestamps = parser.getTimestamps()
+const frame = parser.renderAtIndex(0)
+const metadata = parser.getMetadata()
+```
+
+### VobSub parser
+
+```ts
+import { VobSubParserLowLevel } from 'libbitsub'
+
+const parser = new VobSubParserLowLevel()
+parser.loadFromData(idxContent, new Uint8Array(subArrayBuffer))
+parser.setDebandEnabled(true)
+
+const frame = parser.renderAtTimestamp(120.5)
+const cue = parser.getCueMetadata(0)
+```
+
+### Unified parser
+
+```ts
+import { UnifiedSubtitleParser, detectSubtitleFormat } from 'libbitsub'
+
+const format = detectSubtitleFormat({ data: subtitleBytes, fileName: 'track.sup' })
+
+const parser = new UnifiedSubtitleParser()
+parser.loadAuto({ data: subtitleBytes, fileName: 'track.sup' })
+```
+
+## GPU backends
+
+libbitsub prefers:
+
+1. WebGPU
+2. WebGL2
+3. Canvas2D
+
+```ts
+import { isWebGL2Supported, isWebGPUSupported } from 'libbitsub'
+
+console.log({
+  webgpu: isWebGPUSupported(),
+  webgl2: isWebGL2Supported()
+})
+```
+
+## Notes
+
+- Worker mode is shared, but subtitle parser state is isolated per renderer session.
+- Multiple subtitle renderers can coexist without reusing the same parser instance.
+- If worker startup fails, the high-level API falls back to main-thread parsing.
+- The library only handles bitmap subtitle formats. It does not parse text subtitle formats such as SRT or ASS.
 
 ## Low-Level API (Programmatic Use)
 

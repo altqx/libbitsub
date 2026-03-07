@@ -5,9 +5,19 @@
 
 // Re-export all types
 export type {
+  AutoSubtitleSource,
+  AutoVideoSubtitleOptions,
+  SubtitleCueBounds,
+  SubtitleCueMetadata,
   SubtitleData,
   SubtitleCompositionData,
   SubtitleDisplaySettings,
+  SubtitleFormatName,
+  SubtitleHorizontalAlign,
+  SubtitleParserMetadata,
+  SubtitleRendererBackend,
+  SubtitleRendererEvent,
+  SubtitleRendererStatsSnapshot,
   VideoSubtitleOptions,
   VideoVobSubOptions,
   RenderResult,
@@ -25,7 +35,10 @@ export { isWebGPUSupported } from './ts/webgpu-renderer'
 export { PgsParser, VobSubParserLowLevel, UnifiedSubtitleParser } from './ts/parsers'
 
 // Re-export renderers
-export { PgsRenderer, VobSubRenderer, type SubtitleRendererStats } from './ts/renderers'
+export { PgsRenderer, VobSubRenderer, createAutoSubtitleRenderer, type SubtitleRendererStats } from './ts/renderers'
+
+// Re-export format detection utilities
+export { detectSubtitleFormat } from './ts/utils'
 
 // =============================================================================
 // Legacy Aliases (for backward compatibility)
