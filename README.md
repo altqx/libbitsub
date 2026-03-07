@@ -384,222 +384,225 @@ console.log({
 - If worker startup fails, the high-level API falls back to main-thread parsing.
 - The library only handles bitmap subtitle formats. It does not parse text subtitle formats such as SRT or ASS.
 
-## Low-Level API (Programmatic Use)
-
-For more control over rendering, use the low-level parsers directly.
-
-### PGS Subtitles (Low-Level)
-
-```typescript
-import { initWasm, PgsParser } from 'libbitsub'
-
-await initWasm()
-
-const parser = new PgsParser()
-
-// Load PGS data from a .sup file
-const response = await fetch('subtitles.sup')
-const data = new Uint8Array(await response.arrayBuffer())
-parser.load(data)
-
-// Get timestamps
-const timestamps = parser.getTimestamps() // Float64Array in milliseconds
-
-// Render at a specific time
-const subtitleData = parser.renderAtTimestamp(currentTimeInSeconds)
-if (subtitleData) {
-  for (const comp of subtitleData.compositionData) {
-    ctx.putImageData(comp.pixelData, comp.x, comp.y)
-  }
-}
-
-// Clean up
-parser.dispose()
-```
-
-### VobSub Subtitles (Low-Level)
-
-```typescript
-import { initWasm, VobSubParserLowLevel } from 'libbitsub'
-
-await initWasm()
-
-const parser = new VobSubParserLowLevel()
-
-// Load from IDX + SUB files
-const idxResponse = await fetch('subtitles.idx')
-const idxContent = await idxResponse.text()
-const subResponse = await fetch('subtitles.sub')
-const subData = new Uint8Array(await subResponse.arrayBuffer())
-
-parser.loadFromData(idxContent, subData)
-
-// Or load from SUB file only
-// parser.loadFromSubOnly(subData);
-
-// Render
-const subtitleData = parser.renderAtTimestamp(currentTimeInSeconds)
-if (subtitleData) {
-  for (const comp of subtitleData.compositionData) {
-    ctx.putImageData(comp.pixelData, comp.x, comp.y)
-  }
-}
-
-parser.dispose()
-```
-
-### Unified Parser
-
-For handling both formats with a single API:
-
-```typescript
-import { initWasm, UnifiedSubtitleParser } from 'libbitsub'
-
-await initWasm()
-
-const parser = new UnifiedSubtitleParser()
-
-// Load PGS
-parser.loadPgs(pgsData)
-
-// Or load VobSub
-// parser.loadVobSub(idxContent, subData);
-
-console.log(parser.format) // 'pgs' or 'vobsub'
-
-const subtitleData = parser.renderAtTimestamp(time)
-// ... render to canvas
-
-parser.dispose()
-```
-
 ## API Reference
 
-### High-Level (Video-Integrated)
+### Top-level exports
+
+- `initWasm(): Promise<void>` initializes the WASM module.
+- `isWasmInitialized(): boolean` reports whether initialization has completed.
+- `isWebGPUSupported(): boolean` checks WebGPU support.
+- `detectSubtitleFormat(source: AutoSubtitleSource): 'pgs' | 'vobsub' | null` detects the bitmap subtitle format from file hints or binary data.
+- `createAutoSubtitleRenderer(options: AutoVideoSubtitleOptions): PgsRenderer | VobSubRenderer` creates a high-level renderer after format detection.
+- Legacy aliases remain exported: `PGSRenderer`, `VobsubRenderer`, `UnifiedSubtitleRenderer`.
+
+### High-level renderers
 
 #### `PgsRenderer`
 
-- `constructor(options: VideoSubtitleOptions)` - Create video-integrated PGS renderer
-- `getDisplaySettings(): SubtitleDisplaySettings` - Get current display settings
-- `setDisplaySettings(settings: Partial<SubtitleDisplaySettings>): void` - Update display settings
-- `resetDisplaySettings(): void` - Reset display settings to defaults
-- `getStats(): SubtitleRendererStats` - Get performance statistics
-- `dispose(): void` - Clean up all resources
+- `constructor(options: VideoSubtitleOptions)` creates a video-synced PGS renderer.
+- `getDisplaySettings(): SubtitleDisplaySettings` returns the current layout settings.
+- `setDisplaySettings(settings: Partial<SubtitleDisplaySettings>): void` updates layout settings.
+- `resetDisplaySettings(): void` resets layout settings to defaults.
+- `getStats(): SubtitleRendererStats` returns render statistics.
+- `getMetadata(): SubtitleParserMetadata | null` returns track-level metadata.
+- `getCurrentCueMetadata(): SubtitleCueMetadata | null` returns the currently displayed cue metadata.
+- `getCueMetadata(index: number): SubtitleCueMetadata | null` returns metadata for a specific cue.
+- `getCacheLimit(): number` returns the active frame-cache limit.
+- `setCacheLimit(limit: number): void` updates the frame-cache limit.
+- `clearFrameCache(): void` clears the renderer-side and parser-side frame cache.
+- `prefetchRange(startIndex: number, endIndex: number): Promise<void>` prefetches decoded frames for a cue range.
+- `prefetchAroundTime(time: number, before?: number, after?: number): Promise<void>` prefetches around a playback time in seconds.
+- `dispose(): void` releases DOM, parser, and worker resources.
 
 #### `VobSubRenderer`
 
-- `constructor(options: VideoVobSubOptions)` - Create video-integrated VobSub renderer
-- `getDisplaySettings(): SubtitleDisplaySettings` - Get current display settings
-- `setDisplaySettings(settings: Partial<SubtitleDisplaySettings>): void` - Update display settings
-- `resetDisplaySettings(): void` - Reset display settings to defaults
-- `getStats(): SubtitleRendererStats` - Get performance statistics
-- `setDebandEnabled(enabled: boolean): void` - Enable/disable debanding filter
-- `setDebandThreshold(threshold: number): void` - Set debanding threshold (0.0-255.0)
-- `setDebandRange(range: number): void` - Set debanding sample range (1-64)
-- `debandEnabled: boolean` - Check if debanding is enabled
-- `dispose(): void` - Clean up all resources
+- Supports all `PgsRenderer` methods above.
+- `setDebandEnabled(enabled: boolean): void` enables or disables debanding.
+- `setDebandThreshold(threshold: number): void` updates the deband threshold.
+- `setDebandRange(range: number): void` updates the deband sample range.
+- `debandEnabled: boolean` reports whether debanding is enabled.
 
-### Low-Level (Programmatic)
+### Low-level parsers
 
 #### `PgsParser`
 
-- `load(data: Uint8Array): number` - Load PGS data, returns display set count
-- `getTimestamps(): Float64Array` - Get all timestamps in milliseconds
-- `count: number` - Number of display sets
-- `findIndexAtTimestamp(timeSeconds: number): number` - Find index for timestamp
-- `renderAtIndex(index: number): SubtitleData | undefined` - Render at index
-- `renderAtTimestamp(timeSeconds: number): SubtitleData | undefined` - Render at time
-- `clearCache(): void` - Clear decoded bitmap cache
-- `dispose(): void` - Release resources
+- `load(data: Uint8Array): number` loads PGS data and returns the cue count.
+- `getTimestamps(): Float64Array` returns cue timestamps in milliseconds.
+- `count: number` returns the number of cues.
+- `findIndexAtTimestamp(timeSeconds: number): number` finds the cue index for a playback time in seconds.
+- `renderAtIndex(index: number): SubtitleData | undefined` renders a cue by index.
+- `renderAtTimestamp(timeSeconds: number): SubtitleData | undefined` renders a cue at a playback time.
+- `getMetadata(): SubtitleParserMetadata` returns parser metadata.
+- `getCueMetadata(index: number): SubtitleCueMetadata | null` returns cue metadata.
+- `clearCache(): void` clears parser-side caches.
+- `dispose(): void` frees parser resources.
 
 #### `VobSubParserLowLevel`
 
-- `loadFromData(idxContent: string, subData: Uint8Array): void` - Load IDX + SUB
-- `loadFromSubOnly(subData: Uint8Array): void` - Load SUB only
-- `setDebandEnabled(enabled: boolean): void` - Enable/disable debanding filter
-- `setDebandThreshold(threshold: number): void` - Set debanding threshold (0.0-255.0)
-- `setDebandRange(range: number): void` - Set debanding sample range (1-64)
-- `debandEnabled: boolean` - Check if debanding is enabled
-- Same rendering methods as PgsParser
+- `loadFromData(idxContent: string, subData: Uint8Array): void` loads IDX and SUB data.
+- `loadFromSubOnly(subData: Uint8Array): void` loads SUB-only VobSub data.
+- `getTimestamps(): Float64Array`, `count`, `findIndexAtTimestamp()`, `renderAtIndex()`, `renderAtTimestamp()`, `getMetadata()`, `getCueMetadata()`, `clearCache()`, and `dispose()` behave like `PgsParser`.
+- `setDebandEnabled(enabled: boolean): void`, `setDebandThreshold(threshold: number): void`, `setDebandRange(range: number): void`, and `debandEnabled` control debanding.
 
 #### `UnifiedSubtitleParser`
 
-- `loadPgs(data: Uint8Array): number` - Load PGS data
-- `loadVobSub(idxContent: string, subData: Uint8Array): void` - Load VobSub
-- `loadVobSubOnly(subData: Uint8Array): void` - Load SUB only
-- `format: 'pgs' | 'vobsub' | null` - Current format
-- Same rendering methods as above
+- `loadPgs(data: Uint8Array): number` loads PGS data.
+- `loadVobSub(idxContent: string, subData: Uint8Array): void` loads VobSub from IDX and SUB.
+- `loadVobSubOnly(subData: Uint8Array): void` loads SUB-only VobSub data.
+- `loadAuto(source: AutoSubtitleSource): SubtitleFormatName` detects and loads a supported bitmap subtitle format.
+- `format: 'pgs' | 'vobsub' | null` returns the active format.
+- `getTimestamps()`, `count`, `findIndexAtTimestamp()`, `renderAtIndex()`, `renderAtTimestamp()`, `getMetadata()`, `getCueMetadata()`, `clearCache()`, and `dispose()` are available as on the format-specific parsers.
 
-### Types
+### Core option and data types
 
 #### `VideoSubtitleOptions`
 
-```typescript
+```ts
 interface VideoSubtitleOptions {
-  video: HTMLVideoElement // Video element to sync with
-  subUrl?: string // URL to subtitle file (provide this OR subContent)
-  subContent?: ArrayBuffer // Direct subtitle content (provide this OR subUrl)
-  workerUrl?: string // Worker URL (for API compatibility)
-  onLoading?: () => void // Called when subtitle loading starts
-  onLoaded?: () => void // Called when subtitle loading completes
-  onError?: (error: Error) => void // Called when subtitle loading fails
-  onWebGPUFallback?: () => void // Called when WebGPU init fails
-  onWebGL2Fallback?: () => void // Called when WebGL2 init fails
+  video: HTMLVideoElement
+  subUrl?: string
+  subContent?: ArrayBuffer
+  workerUrl?: string
+  onLoading?: () => void
+  onLoaded?: () => void
+  onError?: (error: Error) => void
+  onWebGPUFallback?: () => void
+  onWebGL2Fallback?: () => void
+  displaySettings?: Partial<SubtitleDisplaySettings>
+  cacheLimit?: number
+  prefetchWindow?: {
+    before?: number
+    after?: number
+  }
+  onEvent?: (event: SubtitleRendererEvent) => void
 }
 ```
 
 #### `VideoVobSubOptions`
 
-```typescript
+```ts
 interface VideoVobSubOptions extends VideoSubtitleOptions {
-  idxUrl?: string // URL to .idx file (optional, defaults to subUrl with .idx extension)
-  idxContent?: string // Direct .idx content (provide this OR idxUrl)
+  idxUrl?: string
+  idxContent?: string
+}
+```
+
+#### `AutoVideoSubtitleOptions`
+
+```ts
+interface AutoVideoSubtitleOptions extends Omit<VideoVobSubOptions, 'subUrl' | 'idxUrl'> {
+  subUrl?: string
+  idxUrl?: string
+  fileName?: string
 }
 ```
 
 #### `SubtitleDisplaySettings`
 
-```typescript
+```ts
 interface SubtitleDisplaySettings {
-  // Scale factor (1.0 = 100%, 0.5 = 50%, 2.0 = 200%)
   scale: number
-  // Vertical offset as % of video height (-50 to 50)
   verticalOffset: number
+  horizontalOffset: number
+  horizontalAlign: 'left' | 'center' | 'right'
+  bottomPadding: number
+  safeArea: number
+  opacity: number
 }
 ```
 
-#### `SubtitleRendererStats`
+#### `SubtitleRendererEvent`
 
-```typescript
-interface SubtitleRendererStats {
-  framesRendered: number // Total frames rendered since initialization
-  framesDropped: number // Frames dropped due to slow rendering
-  avgRenderTime: number // Average render time in milliseconds
-  maxRenderTime: number // Maximum render time in milliseconds
-  minRenderTime: number // Minimum render time in milliseconds
-  lastRenderTime: number // Last render time in milliseconds
-  renderFps: number // Current FPS (renders per second)
-  usingWorker: boolean // Whether rendering is using web worker
-  cachedFrames: number // Number of cached frames
-  pendingRenders: number // Number of pending renders
-  totalEntries: number // Total subtitle entries/display sets
-  currentIndex: number // Current subtitle index being displayed
+```ts
+type SubtitleRendererEvent =
+  | { type: 'loading'; format: SubtitleFormatName }
+  | { type: 'loaded'; format: SubtitleFormatName; metadata: SubtitleParserMetadata }
+  | { type: 'error'; format: SubtitleFormatName; error: Error }
+  | { type: 'renderer-change'; renderer: 'webgpu' | 'webgl2' | 'canvas2d' }
+  | { type: 'worker-state'; enabled: boolean; ready: boolean; sessionId: string | null; fallback?: boolean }
+  | { type: 'cache-change'; cachedFrames: number; pendingRenders: number; cacheLimit: number }
+  | { type: 'cue-change'; cue: SubtitleCueMetadata | null }
+  | { type: 'stats'; stats: SubtitleRendererStatsSnapshot }
+```
+
+#### `SubtitleRendererStats` and `SubtitleRendererStatsSnapshot`
+
+Both shapes expose:
+
+- `framesRendered`
+- `framesDropped`
+- `avgRenderTime`
+- `maxRenderTime`
+- `minRenderTime`
+- `lastRenderTime`
+- `renderFps`
+- `usingWorker`
+- `cachedFrames`
+- `pendingRenders`
+- `totalEntries`
+- `currentIndex`
+
+#### `SubtitleParserMetadata`
+
+```ts
+interface SubtitleParserMetadata {
+  format: 'pgs' | 'vobsub'
+  cueCount: number
+  screenWidth: number
+  screenHeight: number
+  language?: string | null
+  trackId?: string | null
+  hasIdxMetadata?: boolean
+}
+```
+
+#### `SubtitleCueMetadata`
+
+```ts
+interface SubtitleCueMetadata {
+  index: number
+  format: 'pgs' | 'vobsub'
+  startTime: number
+  endTime: number
+  duration: number
+  screenWidth: number
+  screenHeight: number
+  bounds: SubtitleCueBounds | null
+  compositionCount: number
+  paletteId?: number
+  compositionState?: number
+  language?: string | null
+  trackId?: string | null
+  filePosition?: number
+}
+```
+
+#### `AutoSubtitleSource`
+
+```ts
+interface AutoSubtitleSource {
+  data?: ArrayBuffer | Uint8Array
+  subData?: ArrayBuffer | Uint8Array
+  idxContent?: string
+  fileName?: string
+  subUrl?: string
+  idxUrl?: string
 }
 ```
 
 #### `SubtitleData`
 
-```typescript
+```ts
 interface SubtitleData {
-  width: number // Screen width
-  height: number // Screen height
+  width: number
+  height: number
   compositionData: SubtitleCompositionData[]
 }
 
 interface SubtitleCompositionData {
-  pixelData: ImageData // RGBA pixel data
-  x: number // X position
-  y: number // Y position
+  pixelData: ImageData
+  x: number
+  y: number
 }
 ```
 
