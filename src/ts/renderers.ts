@@ -41,6 +41,14 @@ const DEFAULT_DISPLAY_SETTINGS: SubtitleDisplaySettings = {
   opacity: 1.0
 }
 
+interface SubtitleRenderLayout {
+  scaleX: number
+  scaleY: number
+  shiftX: number
+  shiftY: number
+  opacity: number
+}
+
 /** Performance statistics for subtitle renderer */
 export interface SubtitleRendererStats {
   /** Total frames rendered since initialization */
@@ -540,55 +548,47 @@ abstract class BaseVideoSubtitleRenderer {
     }
   }
 
-  protected computeLayout(data: SubtitleData): {
-    scaleX: number
-    scaleY: number
-    shiftX: number
-    shiftY: number
-    opacity: number
-  } {
+  protected computeLayout(data: SubtitleData): SubtitleRenderLayout {
     if (!this.canvas) {
       return { scaleX: 1, scaleY: 1, shiftX: 0, shiftY: 0, opacity: this.displaySettings.opacity }
     }
 
     const baseScaleX = this.canvas.width / data.width
     const baseScaleY = this.canvas.height / data.height
-    const bounds = getSubtitleBounds(data)
+    const bounds =
+      getSubtitleBounds(data) ??
+      ({
+        x: 0,
+        y: 0,
+        width: data.width,
+        height: data.height
+      } as const)
     const { scale, verticalOffset, horizontalOffset, horizontalAlign, bottomPadding, safeArea, opacity } =
       this.displaySettings
 
-    if (!bounds) {
-      return {
-        scaleX: baseScaleX * scale,
-        scaleY: baseScaleY * scale,
-        shiftX: (horizontalOffset / 100) * this.canvas.width,
-        shiftY: (verticalOffset / 100) * this.canvas.height - (bottomPadding / 100) * this.canvas.height,
-        opacity
-      }
-    }
+    const anchorX =
+      horizontalAlign === 'left'
+        ? bounds.x
+        : horizontalAlign === 'right'
+          ? bounds.x + bounds.width
+          : bounds.x + bounds.width / 2
+    const anchorY = bounds.y + bounds.height
 
-    const groupWidth = bounds.width * baseScaleX
-    const groupHeight = bounds.height * baseScaleY
-    const scaledGroupWidth = groupWidth * scale
-    const scaledGroupHeight = groupHeight * scale
-
-    let anchorShiftX = 0
-    if (horizontalAlign === 'center') {
-      anchorShiftX = (groupWidth - scaledGroupWidth) / 2
-    } else if (horizontalAlign === 'right') {
-      anchorShiftX = groupWidth - scaledGroupWidth
-    }
+    const scaleX = baseScaleX * scale
+    const scaleY = baseScaleY * scale
+    const anchorShiftX = anchorX * baseScaleX * (1 - scale)
+    const anchorShiftY = anchorY * baseScaleY * (1 - scale)
 
     let shiftX = anchorShiftX + (horizontalOffset / 100) * this.canvas.width
-    let shiftY = groupHeight - scaledGroupHeight + (verticalOffset / 100) * this.canvas.height
+    let shiftY = anchorShiftY + (verticalOffset / 100) * this.canvas.height
     shiftY -= (bottomPadding / 100) * this.canvas.height
 
     const safeX = (safeArea / 100) * this.canvas.width
     const safeY = (safeArea / 100) * this.canvas.height
-    const finalMinX = bounds.x * baseScaleX + shiftX
-    const finalMinY = bounds.y * baseScaleY + shiftY
-    const finalMaxX = finalMinX + scaledGroupWidth
-    const finalMaxY = finalMinY + scaledGroupHeight
+    const finalMinX = bounds.x * scaleX + shiftX
+    const finalMinY = bounds.y * scaleY + shiftY
+    const finalMaxX = (bounds.x + bounds.width) * scaleX + shiftX
+    const finalMaxY = (bounds.y + bounds.height) * scaleY + shiftY
 
     if (finalMinX < safeX) shiftX += safeX - finalMinX
     if (finalMaxX > this.canvas.width - safeX) shiftX -= finalMaxX - (this.canvas.width - safeX)
@@ -596,8 +596,8 @@ abstract class BaseVideoSubtitleRenderer {
     if (finalMaxY > this.canvas.height - safeY) shiftY -= finalMaxY - (this.canvas.height - safeY)
 
     return {
-      scaleX: baseScaleX * scale,
-      scaleY: baseScaleY * scale,
+      scaleX,
+      scaleY,
       shiftX,
       shiftY,
       opacity
@@ -695,8 +695,8 @@ abstract class BaseVideoSubtitleRenderer {
       // Center the scaled content horizontally
       const scaledWidth = comp.pixelData.width * layout.scaleX
       const scaledHeight = comp.pixelData.height * layout.scaleY
-      const adjustedX = comp.x * (this.canvas.width / data.width) + layout.shiftX
-      const adjustedY = comp.y * (this.canvas.height / data.height) + layout.shiftY
+      const adjustedX = comp.x * layout.scaleX + layout.shiftX
+      const adjustedY = comp.y * layout.scaleY + layout.shiftY
 
       this.ctx.drawImage(this.tempCanvas, adjustedX, adjustedY, scaledWidth, scaledHeight)
     }

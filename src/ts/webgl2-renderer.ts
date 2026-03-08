@@ -289,8 +289,8 @@ export class WebGL2Renderer {
       // Calculate scaled position and size (mirrors WebGPU renderer maths)
       const scaledWidth = width * scaleX
       const scaledHeight = height * scaleY
-      const adjustedX = x * (this._width / screenWidth) + shiftX
-      const adjustedY = y * (this._height / screenHeight) + shiftY
+      const adjustedX = x * scaleX + shiftX
+      const adjustedY = y * scaleY + shiftY
 
       gl.uniform4f(this.uDestRect, adjustedX, adjustedY, scaledWidth, scaledHeight)
 

@@ -64,17 +64,80 @@ export function binarySearchTimestamp(timestamps: Float64Array, timeMs: number):
 
 /** Convert worker frame data to SubtitleData. */
 export function convertFrameData(frame: FrameData): SubtitleData {
-  const compositionData: SubtitleCompositionData[] = frame.compositions.map((comp) => {
+  const compositionData: SubtitleCompositionData[] = frame.compositions.flatMap((comp) => {
     const clampedData = new Uint8ClampedArray(comp.rgba.length)
     clampedData.set(comp.rgba)
+    const trimmed = trimTransparentImageData(clampedData, comp.width, comp.height)
+
+    if (!trimmed) return []
+
     return {
-      pixelData: new ImageData(clampedData, comp.width, comp.height),
-      x: comp.x,
-      y: comp.y
+      pixelData: trimmed.pixelData,
+      x: comp.x + trimmed.offsetX,
+      y: comp.y + trimmed.offsetY
     }
   })
 
   return { width: frame.width, height: frame.height, compositionData }
+}
+
+export function trimTransparentImageData(
+  pixels: Uint8ClampedArray,
+  width: number,
+  height: number
+): { pixelData: ImageData; offsetX: number; offsetY: number } | null {
+  if (width <= 0 || height <= 0 || pixels.length !== width * height * 4) {
+    return null
+  }
+
+  let minX = width
+  let minY = height
+  let maxX = -1
+  let maxY = -1
+
+  for (let index = 3; index < pixels.length; index += 4) {
+    if (pixels[index] === 0) continue
+
+    const pixelIndex = (index - 3) >> 2
+    const y = Math.floor(pixelIndex / width)
+    const x = pixelIndex - y * width
+
+    if (x < minX) minX = x
+    if (y < minY) minY = y
+    if (x > maxX) maxX = x
+    if (y > maxY) maxY = y
+  }
+
+  if (maxX < minX || maxY < minY) {
+    return null
+  }
+
+  if (minX === 0 && minY === 0 && maxX === width - 1 && maxY === height - 1) {
+    const untrimmedPixels = new Uint8ClampedArray(pixels.length)
+    untrimmedPixels.set(pixels)
+
+    return {
+      pixelData: new ImageData(untrimmedPixels, width, height),
+      offsetX: 0,
+      offsetY: 0
+    }
+  }
+
+  const trimmedWidth = maxX - minX + 1
+  const trimmedHeight = maxY - minY + 1
+  const trimmedPixels = new Uint8ClampedArray(trimmedWidth * trimmedHeight * 4)
+
+  for (let y = 0; y < trimmedHeight; y++) {
+    const sourceStart = ((minY + y) * width + minX) * 4
+    const sourceEnd = sourceStart + trimmedWidth * 4
+    trimmedPixels.set(pixels.subarray(sourceStart, sourceEnd), y * trimmedWidth * 4)
+  }
+
+  return {
+    pixelData: new ImageData(trimmedPixels, trimmedWidth, trimmedHeight),
+    offsetX: minX,
+    offsetY: minY
+  }
 }
 
 /** Calculate the bounding box for a subtitle frame. */

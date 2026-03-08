@@ -18,7 +18,7 @@ import type {
   WasmSubtitleRenderer
 } from './types'
 import { getWasm } from './wasm'
-import { detectSubtitleFormat, getSubtitleBounds } from './utils'
+import { detectSubtitleFormat, getSubtitleBounds, trimTransparentImageData } from './utils'
 
 /**
  * Low-level PGS subtitle parser using WASM.
@@ -150,12 +150,16 @@ export class PgsParser {
       const clampedData = new Uint8ClampedArray(rgba.length)
       clampedData.set(rgba)
 
-      const imageData = new ImageData(clampedData, comp.width, comp.height)
+      const trimmed = trimTransparentImageData(clampedData, comp.width, comp.height)
+
+      if (!trimmed) {
+        continue
+      }
 
       compositionData.push({
-        pixelData: imageData,
-        x: comp.x,
-        y: comp.y
+        pixelData: trimmed.pixelData,
+        x: comp.x + trimmed.offsetX,
+        y: comp.y + trimmed.offsetY
       })
     }
 
@@ -326,16 +330,24 @@ export class VobSubParserLowLevel {
     const clampedData = new Uint8ClampedArray(rgba.length)
     clampedData.set(rgba)
 
-    const imageData = new ImageData(clampedData, frame.width, frame.height)
+    const trimmed = trimTransparentImageData(clampedData, frame.width, frame.height)
+
+    if (!trimmed) {
+      return {
+        width: frame.screenWidth,
+        height: frame.screenHeight,
+        compositionData: []
+      }
+    }
 
     return {
       width: frame.screenWidth,
       height: frame.screenHeight,
       compositionData: [
         {
-          pixelData: imageData,
-          x: frame.x,
-          y: frame.y
+          pixelData: trimmed.pixelData,
+          x: frame.x + trimmed.offsetX,
+          y: frame.y + trimmed.offsetY
         }
       ]
     }
@@ -572,12 +584,16 @@ export class UnifiedSubtitleParser {
         const clampedData = new Uint8ClampedArray(rgba.length)
         clampedData.set(rgba)
 
-        const imageData = new ImageData(clampedData, width, height)
+        const trimmed = trimTransparentImageData(clampedData, width, height)
+
+        if (!trimmed) {
+          continue
+        }
 
         compositionData.push({
-          pixelData: imageData,
-          x: result.getCompositionX(i),
-          y: result.getCompositionY(i)
+          pixelData: trimmed.pixelData,
+          x: result.getCompositionX(i) + trimmed.offsetX,
+          y: result.getCompositionY(i) + trimmed.offsetY
         })
       } else if (width > 0 && height > 0) {
         console.warn(

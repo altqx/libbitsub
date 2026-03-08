@@ -438,8 +438,8 @@ export class WebGPURenderer {
       // Calculate scaled position and size
       const scaledWidth = width * scaleX
       const scaledHeight = height * scaleY
-      const adjustedX = x * (this._canvas!.width / screenWidth) + shiftX
-      const adjustedY = y * (this._canvas!.height / screenHeight) + shiftY
+      const adjustedX = x * scaleX + shiftX
+      const adjustedY = y * scaleY + shiftY
 
       // Update quad data buffer
       const quadData = new Float32Array([
