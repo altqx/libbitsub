@@ -71,13 +71,24 @@ bun run build
 
 ## Quick start
 
-Initialize the WASM module once before using any parser or renderer:
+The WASM module initializes automatically — high-level renderers call `initWasm()` internally, and importing the library triggers a non-blocking pre-init in browser environments. You can use renderers directly without any setup:
 
 ```ts
-import { initWasm } from 'libbitsub'
+import { PgsRenderer } from 'libbitsub'
+
+const renderer = new PgsRenderer({ video: videoElement, subUrl: '/subtitles/movie.sup' })
+```
+
+For low-level parsers, you can optionally `await initWasm()` to ensure WASM is ready before calling parser methods:
+
+```ts
+import { initWasm, PgsParser } from 'libbitsub'
 
 await initWasm()
+const parser = new PgsParser()
 ```
+
+Calling `initWasm()` multiple times is safe (it deduplicates).
 
 ## High-level video renderers
 
@@ -388,7 +399,7 @@ console.log({
 
 ### Top-level exports
 
-- `initWasm(): Promise<void>` initializes the WASM module.
+- `initWasm(): Promise<void>` initializes the WASM module. Called automatically by high-level renderers and on first import in browser environments. Safe to call multiple times. Only needed explicitly for low-level parser usage.
 - `isWasmInitialized(): boolean` reports whether initialization has completed.
 - `isWebGPUSupported(): boolean` checks WebGPU support.
 - `detectSubtitleFormat(source: AutoSubtitleSource): 'pgs' | 'vobsub' | null` detects the bitmap subtitle format from file hints or binary data.

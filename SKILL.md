@@ -26,14 +26,17 @@ The WASM file must be served from `/libbitsub/libbitsub_bg.wasm` (resolved from 
 
 ## WASM initialization
 
-Call `initWasm()` once before any parser or renderer. It is safe to call it early (e.g., on app load) to pre-warm.
+The WASM module initializes automatically — high-level renderers (`PgsRenderer`, `VobSubRenderer`) call `initWasm()` internally, and the module also triggers a non-blocking pre-init on first import in browser environments. No explicit initialization is needed for renderer usage.
+
+For low-level parsers (`PgsParser`, `VobSubParserLowLevel`), await `initWasm()` before calling parser methods:
 
 ```ts
-import { initWasm } from 'libbitsub'
+import { initWasm, PgsParser } from 'libbitsub'
 await initWasm()
+const parser = new PgsParser()
 ```
 
-The module auto-initiates in the background on first import in browser environments, but awaiting it explicitly before use avoids a race.
+Calling `initWasm()` multiple times is safe (it deduplicates).
 
 ## High-level video renderers
 
