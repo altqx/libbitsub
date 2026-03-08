@@ -4,7 +4,7 @@
 
 use memchr::memchr;
 
-use super::VobSubPalette;
+use super::{MAX_VOBSUB_IMAGE_PIXELS, VobSubPalette};
 
 /// Parsed subtitle packet from the SUB file.
 #[derive(Debug, Clone)]
@@ -95,7 +95,12 @@ pub fn parse_subtitle_packet(
             let pes_length = ((data[offset] as usize) << 8) | (data[offset + 1] as usize);
             offset += 2;
 
-            if offset + pes_length > data_len {
+            let packet_end = match offset.checked_add(pes_length) {
+                Some(packet_end) if packet_end <= data_len => packet_end,
+                _ => break,
+            };
+
+            if offset + 3 > packet_end {
                 break;
             }
 
@@ -104,20 +109,27 @@ pub fn parse_subtitle_packet(
             let header_data_length = data[offset + 2] as usize;
             offset += 3;
 
+            if offset + header_data_length > packet_end {
+                break;
+            }
+
             // Extract PTS if present and we don't have one yet
-            if (pes_flags & 0x80) != 0 && pts == 0 {
+            if (pes_flags & 0x80) != 0 && pts == 0 && offset + 5 <= packet_end {
                 pts = extract_pts(data, offset);
             }
 
             offset += header_data_length;
 
             // Skip stream ID byte
+            if offset + 1 > packet_end {
+                break;
+            }
             offset += 1;
 
-            // Calculate payload length
-            let payload_length = pes_length.saturating_sub(3 + header_data_length + 1);
+            // Calculate payload length within this PES packet
+            let payload_length = packet_end.saturating_sub(offset);
 
-            if payload_length > 0 && offset + payload_length <= data_len {
+            if payload_length > 0 {
                 let payload = data[offset..offset + payload_length].to_vec();
 
                 // First packet - read expected subtitle size
@@ -216,6 +228,9 @@ fn parse_subtitle_data(data: &[u8], pts: u32) -> Option<SubtitlePacket> {
 
     // Next 2 bytes: offset to first control sequence (DCSQ offset)
     let dcsq_offset = ((data[2] as usize) << 8) | (data[3] as usize);
+    if dcsq_offset < 4 || dcsq_offset > end_offset {
+        return None;
+    }
 
     // Parse control sequence
     let mut x: u16 = 0;
@@ -296,10 +311,20 @@ fn parse_subtitle_data(data: &[u8], pts: u32) -> Option<SubtitlePacket> {
                             | ((data[ctrl_offset + 4] >> 4) as u16);
                         let y2 = (((data[ctrl_offset + 4] & 0x0F) as u16) << 8)
                             | (data[ctrl_offset + 5] as u16);
+                        if x2 < x1 || y2 < y1 {
+                            return None;
+                        }
+
+                        let width_usize = (x2 - x1) as usize + 1;
+                        let height_usize = (y2 - y1) as usize + 1;
+                        if width_usize.checked_mul(height_usize)? > MAX_VOBSUB_IMAGE_PIXELS {
+                            return None;
+                        }
+
                         x = x1;
                         y = y1;
-                        width = x2.saturating_sub(x1) + 1;
-                        height = y2.saturating_sub(y1) + 1;
+                        width = width_usize as u16;
+                        height = height_usize as u16;
                         ctrl_offset += 6;
                     }
                 }
@@ -375,4 +400,23 @@ fn parse_subtitle_data(data: &[u8], pts: u32) -> Option<SubtitlePacket> {
         even_field_data,
         odd_field_data,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_subtitle_packet_rejects_short_pes_header() {
+        let data = [0x00, 0x00, 0x01, 0xBD, 0x00, 0x01, 0x00];
+
+        assert!(parse_subtitle_packet(&data, 0, &VobSubPalette::default()).is_none());
+    }
+
+    #[test]
+    fn test_parse_subtitle_packet_rejects_invalid_control_offset() {
+        let data = [0x00, 0x08, 0x00, 0x09, 0x11, 0x22, 0x33, 0x44];
+
+        assert!(parse_subtitle_data(&data, 0).is_none());
+    }
 }

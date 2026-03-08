@@ -1,5 +1,6 @@
 //! Object Definition Segment parsing.
 
+use super::MAX_PGS_OBJECT_DATA_LEN;
 use crate::utils::BigEndianReader;
 
 /// Object Definition Segment contains RLE-encoded bitmap data.
@@ -31,13 +32,24 @@ impl ObjectDefinitionSegment {
         let is_first = (sequence_flag & 0x80) != 0;
 
         let (data_length, width, height, data) = if is_first {
+            if length < 11 {
+                return None;
+            }
+
             // First segment includes dimensions
             let data_length = reader.read_u24()?;
+            if data_length == 0 || (data_length as usize) > MAX_PGS_OBJECT_DATA_LEN {
+                return None;
+            }
             let width = reader.read_u16()?;
             let height = reader.read_u16()?;
             let data = reader.read_bytes(length - 11)?;
             (data_length, width, height, data)
         } else {
+            if length < 4 {
+                return None;
+            }
+
             // Continuation segment - only raw data
             let data = reader.read_bytes(length - 4)?;
             (0, 0, 0, data)
@@ -99,12 +111,31 @@ impl AssembledObject {
         let width = first.width;
         let height = first.height;
 
+        if width == 0 || height == 0 {
+            return None;
+        }
+
+        let declared_size = first.data_length as usize;
+        if declared_size == 0 || declared_size > MAX_PGS_OBJECT_DATA_LEN {
+            return None;
+        }
+
         // Combine all data segments
-        let total_size: usize = segments.iter().map(|s| s.data.len()).sum();
+        let total_size = segments.iter().try_fold(0usize, |acc, segment| {
+            acc.checked_add(segment.data.len())
+        })?;
+        if total_size == 0 || total_size > declared_size {
+            return None;
+        }
+
         let mut data = Vec::with_capacity(total_size);
 
         for segment in segments {
             data.extend_from_slice(&segment.data);
+        }
+
+        if data.len() != declared_size {
+            return None;
         }
 
         Some(Self {
@@ -114,5 +145,33 @@ impl AssembledObject {
             height,
             data,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_first_segment_rejects_short_length() {
+        let data = [0x00, 0x01, 0x00, 0x80, 0x00];
+        let mut reader = BigEndianReader::new(&data);
+
+        assert!(ObjectDefinitionSegment::parse(&mut reader, 5).is_none());
+    }
+
+    #[test]
+    fn test_from_segments_rejects_declared_length_mismatch() {
+        let segment = ObjectDefinitionSegment {
+            id: 1,
+            version: 0,
+            sequence_flag: 0xC0,
+            data_length: 2,
+            width: 32,
+            height: 32,
+            data: vec![1, 2, 3],
+        };
+
+        assert!(AssembledObject::from_segments(&[segment]).is_none());
     }
 }

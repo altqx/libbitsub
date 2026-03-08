@@ -7,7 +7,7 @@ use wasm_bindgen::prelude::*;
 
 use super::{
     AssembledObject, DisplaySet, ObjectDefinitionSegment, PaletteDefinitionSegment,
-    WindowDefinition, apply_palette, decode_rle_to_indexed,
+    WindowDefinition, MAX_PGS_BITMAP_PIXELS, apply_palette, decode_rle_to_indexed,
 };
 use crate::utils::binary_search_timestamp;
 
@@ -227,8 +227,8 @@ impl PgsParser {
         for comp_obj in &composition.composition_objects {
             // Get assembled object
             let obj = match context.objects.get(&comp_obj.object_id) {
-                Some(o) => o,
-                None => continue, // Skip if object not found (incomplete data)
+                Some(obj) => obj,
+                None => continue,
             };
 
             // Window lookup is optional - don't fail if not found
@@ -239,8 +239,11 @@ impl PgsParser {
             let decoded = if let Some(cached) = self.indexed_cache.get(&cache_key) {
                 cached
             } else {
-                // Decode RLE to indexed pixels
-                let pixel_count = (obj.width as usize) * (obj.height as usize);
+                let pixel_count = match Self::bitmap_pixel_count(obj.width, obj.height) {
+                    Some(pixel_count) => pixel_count,
+                    None => continue,
+                };
+
                 let mut indexed = vec![0u8; pixel_count];
                 decode_rle_to_indexed(&obj.data, &mut indexed);
 
@@ -255,10 +258,11 @@ impl PgsParser {
                 self.indexed_cache.get(&cache_key).unwrap()
             };
 
-            // Apply palette to get RGBA
-            let pixel_count = (decoded.width as usize) * (decoded.height as usize);
+            let pixel_count = match Self::bitmap_pixel_count(decoded.width, decoded.height) {
+                Some(pixel_count) => pixel_count,
+                None => continue,
+            };
 
-            // Ensure buffer has enough capacity and set length
             if self.rgba_buffer.len() < pixel_count {
                 self.rgba_buffer.resize(pixel_count, 0);
             }
@@ -268,13 +272,11 @@ impl PgsParser {
                 &mut self.rgba_buffer[..pixel_count],
             );
 
-            // Convert to bytes for JavaScript
             let rgba_bytes: Vec<u8> = self.rgba_buffer[..pixel_count]
                 .iter()
-                .flat_map(|&c| c.to_le_bytes())
+                .flat_map(|&color| color.to_le_bytes())
                 .collect();
 
-            // comp_obj.x and comp_obj.y are absolute screen positions per PGS spec
             compositions.push(SubtitleComposition {
                 x: comp_obj.x,
                 y: comp_obj.y,
@@ -320,14 +322,9 @@ impl PgsParser {
             // Process objects - need to handle multi-segment objects correctly
             for obj in &ds.objects {
                 if obj.is_first_in_sequence() {
-                    // New object definition - clear any existing parts for this ID
                     context.object_parts.insert(obj.id, vec![obj.clone()]);
-                } else {
-                    // Continuation segment - append to existing
-                    if let Some(parts) = context.object_parts.get_mut(&obj.id) {
-                        parts.push(obj.clone());
-                    }
-                    // If no first segment exists, ignore this continuation
+                } else if let Some(parts) = context.object_parts.get_mut(&obj.id) {
+                    parts.push(obj.clone());
                 }
             }
 
@@ -352,6 +349,22 @@ impl PgsParser {
         }
 
         context
+    }
+
+    fn bitmap_pixel_count(width: u16, height: u16) -> Option<usize> {
+        let width = width as usize;
+        let height = height as usize;
+
+        if width == 0 || height == 0 {
+            return None;
+        }
+
+        let pixel_count = width.checked_mul(height)?;
+        if pixel_count > MAX_PGS_BITMAP_PIXELS {
+            return None;
+        }
+
+        Some(pixel_count)
     }
 }
 
@@ -386,6 +399,7 @@ impl RenderContext {
 
 /// A single subtitle composition element.
 #[wasm_bindgen]
+#[derive(Clone)]
 pub struct SubtitleComposition {
     x: u16,
     y: u16,
@@ -452,12 +466,65 @@ impl SubtitleFrame {
     /// Get a composition by index.
     #[wasm_bindgen(js_name = getComposition)]
     pub fn get_composition(&self, index: usize) -> Option<SubtitleComposition> {
-        self.compositions.get(index).map(|c| SubtitleComposition {
-            x: c.x,
-            y: c.y,
-            width: c.width,
-            height: c.height,
-            rgba: c.rgba.clone(),
-        })
+        self.compositions.get(index).cloned()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::pgs::{CompositionObject, PresentationCompositionSegment};
+
+    #[test]
+    fn test_render_at_index_skips_oversized_objects() {
+        let mut parser = PgsParser {
+            display_sets: vec![DisplaySet {
+                pts: 0,
+                dts: 0,
+                composition: Some(PresentationCompositionSegment {
+                    width: 1920,
+                    height: 1080,
+                    frame_rate: 0,
+                    composition_number: 0,
+                    composition_state: 0,
+                    palette_update_flag: 0,
+                    palette_id: 0,
+                    composition_objects: vec![CompositionObject {
+                        object_id: 1,
+                        window_id: 0,
+                        cropped_flag: 0,
+                        x: 0,
+                        y: 0,
+                        crop_x: 0,
+                        crop_y: 0,
+                        crop_width: 0,
+                        crop_height: 0,
+                    }],
+                }),
+                palettes: vec![PaletteDefinitionSegment {
+                    id: 0,
+                    version: 0,
+                    rgba: vec![0u32; 256],
+                }],
+                objects: vec![ObjectDefinitionSegment {
+                    id: 1,
+                    version: 0,
+                    sequence_flag: 0xC0,
+                    data_length: 1,
+                    width: 5000,
+                    height: 5000,
+                    data: vec![1],
+                }],
+                windows: Vec::new(),
+            }],
+            timestamps_ms: vec![0],
+            indexed_cache: HashMap::new(),
+            last_boundary_index: None,
+            rgba_buffer: Vec::new(),
+        };
+
+        let frame = parser.render_at_index(0).expect("frame should exist");
+
+        assert_eq!(frame.composition_count(), 0);
     }
 }

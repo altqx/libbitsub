@@ -8,6 +8,8 @@ mod rle;
 mod sub_parser;
 mod vobsub_parser;
 
+pub(crate) const MAX_VOBSUB_IMAGE_PIXELS: usize = 16_777_216;
+
 pub use deband::*;
 
 pub use idx_parser::*;

@@ -2,7 +2,7 @@
 //!
 //! DVD subtitles use 2-bit RLE encoding with interlaced fields.
 
-use super::{SubtitlePacket, VobSubPalette};
+use super::{MAX_VOBSUB_IMAGE_PIXELS, SubtitlePacket, VobSubPalette};
 
 /// Decode VobSub RLE-encoded bitmap and render to RGBA.
 pub fn decode_vobsub_rle(packet: &SubtitlePacket, palette: &VobSubPalette) -> Vec<u8> {
@@ -13,8 +13,19 @@ pub fn decode_vobsub_rle(packet: &SubtitlePacket, palette: &VobSubPalette) -> Ve
         return Vec::new();
     }
 
+    let Some(pixel_count) = width.checked_mul(height) else {
+        return Vec::new();
+    };
+    if pixel_count > MAX_VOBSUB_IMAGE_PIXELS {
+        return Vec::new();
+    }
+
+    let Some(rgba_len) = pixel_count.checked_mul(4) else {
+        return Vec::new();
+    };
+
     // Allocate RGBA buffer
-    let mut rgba = vec![0u8; width * height * 4];
+    let mut rgba = vec![0u8; rgba_len];
 
     // Build 4-color lookup table with alpha
     let mut colors = [[0u8; 4]; 4];
@@ -218,6 +229,7 @@ fn read_rle_code(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::vobsub::VobSubPalette;
 
     #[test]
     fn test_rle_code_4bit() {
@@ -230,5 +242,23 @@ mod tests {
         assert_eq!(color, 0);
         assert_eq!(bp, 0);
         assert_eq!(np, 1);
+    }
+
+    #[test]
+    fn test_decode_vobsub_rle_rejects_oversized_frame() {
+        let packet = SubtitlePacket {
+            timestamp_ms: 0,
+            duration_ms: 1000,
+            x: 0,
+            y: 0,
+            width: 5000,
+            height: 5000,
+            color_indices: [0, 1, 2, 3],
+            alpha_values: [0, 15, 15, 15],
+            even_field_data: Vec::new(),
+            odd_field_data: Vec::new(),
+        };
+
+        assert!(decode_vobsub_rle(&packet, &VobSubPalette::default()).is_empty());
     }
 }
