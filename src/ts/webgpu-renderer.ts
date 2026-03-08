@@ -55,6 +55,12 @@ fn vertexMain(@builtin(vertex_index) vertexIndex: u32) -> VertexOutput {
 
 // WGSL Fragment Shader - sample RGBA texture directly
 const FRAGMENT_SHADER = /* wgsl */ `
+struct Uniforms {
+  resolution: vec2f,
+  opacity: f32,
+}
+
+@group(0) @binding(0) var<uniform> uniforms: Uniforms;
 @group(0) @binding(2) var texSampler: sampler;
 @group(0) @binding(3) var tex: texture_2d<f32>;
 
@@ -113,6 +119,8 @@ export class WebGPURenderer {
   private _canvas: HTMLCanvasElement | null = null
   private _initPromise: Promise<void> | null = null
   private _initialized = false
+  private _lastCanvasWidth = 0
+  private _lastCanvasHeight = 0
 
   /**
    * Initialize the WebGPU renderer.
@@ -122,6 +130,22 @@ export class WebGPURenderer {
     if (this._initPromise) return this._initPromise
     this._initPromise = this._initDevice()
     return this._initPromise
+  }
+
+  private async assertShaderModuleValid(module: GPUShaderModule, label: string): Promise<void> {
+    const info = await module.getCompilationInfo()
+    const errors = info.messages.filter(message => message.type === 'error')
+
+    if (errors.length === 0) return
+
+    const formatted = errors
+      .map(message => {
+        const line = message.lineNum > 0 ? `:${message.lineNum}:${message.linePos}` : ''
+        return `${label}${line} ${message.message}`
+      })
+      .join('\n')
+
+    throw new Error(`WebGPU ${label} shader compilation failed:\n${formatted}`)
   }
 
   private async _initDevice(): Promise<void> {
@@ -148,6 +172,9 @@ export class WebGPURenderer {
     const fragmentModule = this.device.createShaderModule({
       code: FRAGMENT_SHADER
     })
+
+    await this.assertShaderModuleValid(vertexModule, 'vertex')
+    await this.assertShaderModuleValid(fragmentModule, 'fragment')
 
     // Create sampler - use linear filtering for smooth scaling
     this.sampler = this.device.createSampler({
@@ -195,7 +222,7 @@ export class WebGPURenderer {
     })
 
     // Create render pipeline with alpha blending
-    this.pipeline = this.device.createRenderPipeline({
+    this.pipeline = await this.device.createRenderPipelineAsync({
       layout: pipelineLayout,
       vertex: {
         module: vertexModule,
@@ -239,8 +266,17 @@ export class WebGPURenderer {
     if (!this.device) {
       throw new Error('WebGPU device not initialized')
     }
+    if (width <= 0 || height <= 0) {
+      return
+    }
 
     this._canvas = canvas
+
+    // Update canvas size before configuring to keep the swap chain in sync.
+    canvas.width = width
+    canvas.height = height
+    this._lastCanvasWidth = width
+    this._lastCanvasHeight = height
 
     // Get WebGPU context
     if (!this.context) {
@@ -256,10 +292,6 @@ export class WebGPURenderer {
       })
     }
 
-    // Update canvas size
-    canvas.width = width
-    canvas.height = height
-
     // Update uniform buffer with resolution
     this.device.queue.writeBuffer(this.uniformBuffer!, 0, new Float32Array([width, height, 1, 0]))
   }
@@ -268,10 +300,13 @@ export class WebGPURenderer {
    * Update canvas dimensions.
    */
   updateSize(width: number, height: number): void {
-    if (!this.device || !this._canvas) return
+    if (!this.device || !this._canvas || width <= 0 || height <= 0) return
+    if (width === this._lastCanvasWidth && height === this._lastCanvasHeight) return
 
     this._canvas.width = width
     this._canvas.height = height
+    this._lastCanvasWidth = width
+    this._lastCanvasHeight = height
 
     this.device.queue.writeBuffer(this.uniformBuffer!, 0, new Float32Array([width, height, 1, 0]))
   }
@@ -306,7 +341,16 @@ export class WebGPURenderer {
     shiftY: number,
     opacity: number
   ): void {
-    if (!this.device || !this.context || !this.pipeline) return
+    if (!this.device || !this.context || !this.pipeline || !this._canvas) return
+
+    let textureView: GPUTextureView
+    try {
+      const currentTexture = this.context.getCurrentTexture()
+      if (currentTexture.width === 0 || currentTexture.height === 0) return
+      textureView = currentTexture.createView()
+    } catch {
+      return
+    }
 
     this.device.queue.writeBuffer(
       this.uniformBuffer!,
@@ -315,7 +359,6 @@ export class WebGPURenderer {
     )
 
     const commandEncoder = this.device.createCommandEncoder()
-    const textureView = this.context.getCurrentTexture().createView()
 
     // Begin render pass with clear
     const renderPass = commandEncoder.beginRenderPass({
@@ -462,22 +505,27 @@ export class WebGPURenderer {
   clear(): void {
     if (!this.device || !this.context) return
 
-    const commandEncoder = this.device.createCommandEncoder()
-    const textureView = this.context.getCurrentTexture().createView()
+    try {
+      const currentTexture = this.context.getCurrentTexture()
+      if (currentTexture.width === 0 || currentTexture.height === 0) return
 
-    const renderPass = commandEncoder.beginRenderPass({
-      colorAttachments: [
-        {
-          view: textureView,
-          clearValue: { r: 0, g: 0, b: 0, a: 0 },
-          loadOp: 'clear',
-          storeOp: 'store'
-        }
-      ]
-    })
+      const commandEncoder = this.device.createCommandEncoder()
+      const renderPass = commandEncoder.beginRenderPass({
+        colorAttachments: [
+          {
+            view: currentTexture.createView(),
+            clearValue: { r: 0, g: 0, b: 0, a: 0 },
+            loadOp: 'clear',
+            storeOp: 'store'
+          }
+        ]
+      })
 
-    renderPass.end()
-    this.device.queue.submit([commandEncoder.finish()])
+      renderPass.end()
+      this.device.queue.submit([commandEncoder.finish()])
+    } catch {
+      return
+    }
   }
 
   /**
@@ -513,5 +561,7 @@ export class WebGPURenderer {
     this._canvas = null
     this._initialized = false
     this._initPromise = null
+    this._lastCanvasWidth = 0
+    this._lastCanvasHeight = 0
   }
 }
