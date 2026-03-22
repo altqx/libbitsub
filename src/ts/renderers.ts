@@ -103,6 +103,8 @@ abstract class BaseVideoSubtitleRenderer {
 
   /** Display settings for subtitle rendering */
   protected displaySettings: SubtitleDisplaySettings = { ...DEFAULT_DISPLAY_SETTINGS }
+  /** Time offset in seconds added to video.currentTime for subtitle lookup */
+  public timeOffset: number = 0
   protected cacheLimit: number = 24
   protected prefetchBefore: number = 0
   protected prefetchAfter: number = 0
@@ -141,6 +143,7 @@ abstract class BaseVideoSubtitleRenderer {
     this.onWebGL2Fallback = options.onWebGL2Fallback
     this.onEvent = options.onEvent
     this.displaySettings = { ...DEFAULT_DISPLAY_SETTINGS, ...options.displaySettings }
+    this.timeOffset = options.timeOffset ?? 0
     this.cacheLimit = Math.max(0, Math.floor(options.cacheLimit ?? 24))
     this.prefetchBefore = Math.max(0, Math.floor(options.prefetchWindow?.before ?? 0))
     this.prefetchAfter = Math.max(0, Math.floor(options.prefetchWindow?.after ?? 0))
@@ -476,7 +479,7 @@ abstract class BaseVideoSubtitleRenderer {
       if (this.disposed) return
 
       if (this.isLoaded) {
-        const currentTime = this.video.currentTime
+        const currentTime = this.video.currentTime + this.timeOffset
         const currentIndex = this.findCurrentIndex(currentTime)
 
         // Only re-render if index changed

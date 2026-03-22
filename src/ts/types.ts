@@ -111,6 +111,8 @@ export interface VideoSubtitleOptions {
   }
   /** Generic observability hook for renderer lifecycle, cache, worker and cue changes */
   onEvent?: (event: SubtitleRendererEvent) => void
+  /** Time offset in seconds added to video.currentTime for subtitle lookup (e.g., for live TV sync) */
+  timeOffset?: number
 }
 
 /** Options for VobSub video subtitle renderer. */
