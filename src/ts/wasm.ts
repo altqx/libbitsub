@@ -37,15 +37,13 @@ export function getWasm(): typeof import('../../pkg/libbitsub') {
 
 /** Get the WASM file URL (always returns absolute URL). */
 export function getWasmUrl(): string {
-  // In a web environment with libbitsub served from public folder
-  if (typeof window !== 'undefined') {
-    return new URL('/libbitsub/libbitsub_bg.wasm', window.location.origin).href
-  }
-  // Fallback for non-browser environments
   try {
-    const baseUrl = new URL('.', import.meta.url).href
-    return new URL('../../pkg/libbitsub_bg.wasm', baseUrl).href
+    return new URL('../../pkg/libbitsub_bg.wasm', import.meta.url).href
   } catch {
+    if (typeof window !== 'undefined') {
+      return new URL('/libbitsub/libbitsub_bg.wasm', window.location.origin).href
+    }
+
     return '/libbitsub/libbitsub_bg.wasm'
   }
 }

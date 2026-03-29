@@ -14,15 +14,16 @@ npm install libbitsub
 # bun add libbitsub / deno add jsr:@altq/libbitsub
 ```
 
-Then copy WASM assets to your public folder so the browser (and worker) can load them:
+In most bundler-based projects, no manual worker setup is required. `libbitsub` now resolves the WASM asset relative to the package module URL, so bundlers such as Vite, webpack, and Rollup can emit the asset automatically.
+
+If your app serves package files in a way that does not expose that emitted WASM asset to the browser, you can still provide the legacy public fallback by copying the WASM file to `/libbitsub/libbitsub_bg.wasm`:
 
 ```bash
 mkdir -p public/libbitsub
 cp node_modules/libbitsub/pkg/libbitsub_bg.wasm public/libbitsub/
-cp node_modules/libbitsub/pkg/libbitsub.js public/libbitsub/
 ```
 
-The WASM file must be served from `/libbitsub/libbitsub_bg.wasm` (resolved from `window.location.origin`).
+The worker is still created inline. `workerUrl` remains in the option type only for compatibility and does not change runtime behavior.
 
 ## WASM initialization
 

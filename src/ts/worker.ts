@@ -124,70 +124,60 @@ async function initWasm(wasmUrl) {
         throw new Error('Failed to fetch WASM: ' + response.status);
     }
 
-    const jsGlueUrl = wasmUrl.replace('_bg.wasm', '.js').replace('.wasm', '.js');
-
-    try {
-        const mod = await import(/* webpackIgnore: true */ jsGlueUrl);
-        const wasmBytes = await response.arrayBuffer();
-        await mod.default(wasmBytes);
-        wasmModule = mod;
-        wasm = mod.__wasm || mod;
-    } catch {
-        const wasmBytes = await response.arrayBuffer();
-        const result = await WebAssembly.instantiate(wasmBytes, {
-            __wbindgen_placeholder__: {
-                __wbindgen_throw: function(ptr, len) {
-                    throw new Error(getStringFromWasm(ptr, len));
-                }
+    const wasmBytes = await response.arrayBuffer();
+    const result = await WebAssembly.instantiate(wasmBytes, {
+        __wbindgen_placeholder__: {
+            __wbindgen_throw: function(ptr, len) {
+                throw new Error(getStringFromWasm(ptr, len));
             }
-        });
-        wasm = result.instance.exports;
+        }
+    });
+    wasm = result.instance.exports;
 
-        wasmModule = {
-            PgsParser: class {
-                constructor() { this.ptr = wasm.pgsparser_new(); }
-                parse(data) {
-                    const ptr = passArray8ToWasm(data);
-                    return wasm.pgsparser_parse(this.ptr, ptr, WASM_VECTOR_LEN);
-                }
-                getTimestamps() { return wasm.pgsparser_getTimestamps(this.ptr); }
-                renderAtIndex(idx) { return wasm.pgsparser_renderAtIndex(this.ptr, idx); }
-                findIndexAtTimestamp(ts) { return wasm.pgsparser_findIndexAtTimestamp(this.ptr, ts); }
-                clearCache() { wasm.pgsparser_clearCache(this.ptr); }
-                free() { wasm.pgsparser_free(this.ptr); }
-                get count() { return wasm.pgsparser_count(this.ptr); }
-                get screenWidth() { return wasm.pgsparser_screenWidth(this.ptr); }
-                get screenHeight() { return wasm.pgsparser_screenHeight(this.ptr); }
-            },
-            VobSubParser: class {
-                constructor() { this.ptr = wasm.vobsubparser_new(); }
-                loadFromData(idx, sub) {
-                    const idxPtr = passStringToWasm(idx);
-                    const idxLen = WASM_VECTOR_LEN;
-                    const subPtr = passArray8ToWasm(sub);
-                    wasm.vobsubparser_loadFromData(this.ptr, idxPtr, idxLen, subPtr, sub.length);
-                }
-                loadFromSubOnly(sub) {
-                    const ptr = passArray8ToWasm(sub);
-                    wasm.vobsubparser_loadFromSubOnly(this.ptr, ptr, WASM_VECTOR_LEN);
-                }
-                getTimestamps() { return wasm.vobsubparser_getTimestamps(this.ptr); }
-                renderAtIndex(idx) { return wasm.vobsubparser_renderAtIndex(this.ptr, idx); }
-                findIndexAtTimestamp(ts) { return wasm.vobsubparser_findIndexAtTimestamp(this.ptr, ts); }
-                clearCache() { wasm.vobsubparser_clearCache(this.ptr); }
-                free() { wasm.vobsubparser_free(this.ptr); }
-                setDebandEnabled(enabled) { wasm.vobsubparser_setDebandEnabled(this.ptr, enabled); }
-                setDebandThreshold(threshold) { wasm.vobsubparser_setDebandThreshold(this.ptr, threshold); }
-                setDebandRange(range) { wasm.vobsubparser_setDebandRange(this.ptr, range); }
-                get count() { return wasm.vobsubparser_count(this.ptr); }
-                get screenWidth() { return wasm.vobsubparser_screenWidth(this.ptr); }
-                get screenHeight() { return wasm.vobsubparser_screenHeight(this.ptr); }
-                get language() { return wasm.vobsubparser_language(this.ptr); }
-                get trackId() { return wasm.vobsubparser_trackId(this.ptr); }
-                get hasIdxMetadata() { return !!wasm.vobsubparser_hasIdxMetadata(this.ptr); }
+    wasmModule = {
+        PgsParser: class {
+            constructor() { this.ptr = wasm.pgsparser_new(); }
+            parse(data) {
+                const ptr = passArray8ToWasm(data);
+                return wasm.pgsparser_parse(this.ptr, ptr, WASM_VECTOR_LEN);
             }
-        };
-    }
+            getTimestamps() { return wasm.pgsparser_getTimestamps(this.ptr); }
+            renderAtIndex(idx) { return wasm.pgsparser_renderAtIndex(this.ptr, idx); }
+            findIndexAtTimestamp(ts) { return wasm.pgsparser_findIndexAtTimestamp(this.ptr, ts); }
+            clearCache() { wasm.pgsparser_clearCache(this.ptr); }
+            free() { wasm.pgsparser_free(this.ptr); }
+            get count() { return wasm.pgsparser_count(this.ptr); }
+            get screenWidth() { return wasm.pgsparser_screenWidth(this.ptr); }
+            get screenHeight() { return wasm.pgsparser_screenHeight(this.ptr); }
+        },
+        VobSubParser: class {
+            constructor() { this.ptr = wasm.vobsubparser_new(); }
+            loadFromData(idx, sub) {
+                const idxPtr = passStringToWasm(idx);
+                const idxLen = WASM_VECTOR_LEN;
+                const subPtr = passArray8ToWasm(sub);
+                wasm.vobsubparser_loadFromData(this.ptr, idxPtr, idxLen, subPtr, sub.length);
+            }
+            loadFromSubOnly(sub) {
+                const ptr = passArray8ToWasm(sub);
+                wasm.vobsubparser_loadFromSubOnly(this.ptr, ptr, WASM_VECTOR_LEN);
+            }
+            getTimestamps() { return wasm.vobsubparser_getTimestamps(this.ptr); }
+            renderAtIndex(idx) { return wasm.vobsubparser_renderAtIndex(this.ptr, idx); }
+            findIndexAtTimestamp(ts) { return wasm.vobsubparser_findIndexAtTimestamp(this.ptr, ts); }
+            clearCache() { wasm.vobsubparser_clearCache(this.ptr); }
+            free() { wasm.vobsubparser_free(this.ptr); }
+            setDebandEnabled(enabled) { wasm.vobsubparser_setDebandEnabled(this.ptr, enabled); }
+            setDebandThreshold(threshold) { wasm.vobsubparser_setDebandThreshold(this.ptr, threshold); }
+            setDebandRange(range) { wasm.vobsubparser_setDebandRange(this.ptr, range); }
+            get count() { return wasm.vobsubparser_count(this.ptr); }
+            get screenWidth() { return wasm.vobsubparser_screenWidth(this.ptr); }
+            get screenHeight() { return wasm.vobsubparser_screenHeight(this.ptr); }
+            get language() { return wasm.vobsubparser_language(this.ptr); }
+            get trackId() { return wasm.vobsubparser_trackId(this.ptr); }
+            get hasIdxMetadata() { return !!wasm.vobsubparser_hasIdxMetadata(this.ptr); }
+        }
+    };
 }
 
 function convertFrame(frame, isVobSub) {
