@@ -158,6 +158,10 @@ async function initWasm(wasmUrl) {
                 const subPtr = passArray8ToWasm(sub);
                 wasm.vobsubparser_loadFromData(this.ptr, idxPtr, idxLen, subPtr, sub.length);
             }
+            loadFromMks(sub) {
+                const ptr = passArray8ToWasm(sub);
+                wasm.vobsubparser_loadFromMks(this.ptr, ptr, WASM_VECTOR_LEN);
+            }
             loadFromSubOnly(sub) {
                 const ptr = passArray8ToWasm(sub);
                 wasm.vobsubparser_loadFromSubOnly(this.ptr, ptr, WASM_VECTOR_LEN);
@@ -233,6 +237,14 @@ self.onmessage = async function(event) {
                 disposeSession(request.sessionId);
                 const parser = new wasmModule.VobSubParser();
                 parser.loadFromData(request.idxContent, new Uint8Array(request.subData));
+                vobSubParsers.set(request.sessionId, parser);
+                postResponse({ type: 'vobSubLoaded', count: parser.count, metadata: buildVobSubMetadata(parser) }, [], _id);
+                break;
+            }
+            case 'loadVobSubMks': {
+                disposeSession(request.sessionId);
+                const parser = new wasmModule.VobSubParser();
+                parser.loadFromMks(new Uint8Array(request.subData));
                 vobSubParsers.set(request.sessionId, parser);
                 postResponse({ type: 'vobSubLoaded', count: parser.count, metadata: buildVobSubMetadata(parser) }, [], _id);
                 break;

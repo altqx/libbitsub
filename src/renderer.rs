@@ -64,6 +64,20 @@ impl SubtitleRenderer {
         self.format = Some(SubtitleFormat::VobSub);
     }
 
+    /// Load VobSub subtitle data from a Matroska subtitle container.
+    #[wasm_bindgen(js_name = loadVobSubMks)]
+    pub fn load_vobsub_mks(&mut self, mks_data: &[u8]) -> Result<(), JsValue> {
+        self.dispose();
+
+        let mut parser = VobSubParser::new();
+        parser.load_from_mks(mks_data)?;
+
+        self.vobsub_parser = Some(parser);
+        self.format = Some(SubtitleFormat::VobSub);
+
+        Ok(())
+    }
+
     /// Load VobSub from SUB file only.
     #[wasm_bindgen(js_name = loadVobSubOnly)]
     pub fn load_vobsub_only(&mut self, sub_data: &[u8]) {
@@ -97,7 +111,9 @@ impl SubtitleRenderer {
     pub fn screen_width(&self) -> u16 {
         match self.format {
             Some(SubtitleFormat::Pgs) => self.pgs_parser.as_ref().map_or(0, |p| p.screen_width()),
-            Some(SubtitleFormat::VobSub) => self.vobsub_parser.as_ref().map_or(0, |p| p.screen_width()),
+            Some(SubtitleFormat::VobSub) => {
+                self.vobsub_parser.as_ref().map_or(0, |p| p.screen_width())
+            }
             None => 0,
         }
     }
@@ -107,7 +123,9 @@ impl SubtitleRenderer {
     pub fn screen_height(&self) -> u16 {
         match self.format {
             Some(SubtitleFormat::Pgs) => self.pgs_parser.as_ref().map_or(0, |p| p.screen_height()),
-            Some(SubtitleFormat::VobSub) => self.vobsub_parser.as_ref().map_or(0, |p| p.screen_height()),
+            Some(SubtitleFormat::VobSub) => {
+                self.vobsub_parser.as_ref().map_or(0, |p| p.screen_height())
+            }
             None => 0,
         }
     }

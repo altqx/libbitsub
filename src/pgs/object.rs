@@ -121,9 +121,9 @@ impl AssembledObject {
         }
 
         // Combine all data segments
-        let total_size = segments.iter().try_fold(0usize, |acc, segment| {
-            acc.checked_add(segment.data.len())
-        })?;
+        let total_size = segments
+            .iter()
+            .try_fold(0usize, |acc, segment| acc.checked_add(segment.data.len()))?;
         if total_size == 0 || total_size > declared_size {
             return None;
         }

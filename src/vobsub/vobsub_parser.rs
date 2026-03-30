@@ -6,8 +6,8 @@ use std::collections::HashMap;
 use wasm_bindgen::prelude::*;
 
 use super::{
-    DebandConfig, IdxParseResult, SubtitlePacket, VobSubPalette, VobSubTimestamp, apply_deband,
-    decode_vobsub_rle, parse_idx, parse_subtitle_packet,
+    DebandConfig, ExtractedVobSub, IdxParseResult, SubtitlePacket, VobSubPalette, VobSubTimestamp,
+    apply_deband, decode_vobsub_rle, extract_vobsub_from_mks, parse_idx, parse_subtitle_packet,
 };
 use crate::utils::binary_search_timestamp;
 
@@ -47,13 +47,31 @@ impl VobSubParser {
     #[wasm_bindgen(js_name = loadFromData)]
     pub fn load_from_data(&mut self, idx_content: &str, sub_data: &[u8]) {
         self.dispose();
+        self.apply_loaded_data(parse_idx(idx_content), sub_data.to_vec(), true);
+    }
 
-        // Parse IDX
-        let idx = parse_idx(idx_content);
-        self.timestamps_ms = idx.timestamps.iter().map(|t| t.timestamp_ms).collect();
-        self.idx_data = Some(idx);
-        self.sub_data = Some(sub_data.to_vec());
-        self.loaded_from_idx = true;
+    /// Load VobSub from a Matroska subtitle container with embedded S_VOBSUB tracks.
+    #[wasm_bindgen(js_name = loadFromMks)]
+    pub fn load_from_mks(&mut self, mks_data: &[u8]) -> Result<(), JsValue> {
+        self.dispose();
+
+        let ExtractedVobSub {
+            idx_content,
+            sub_data,
+            language,
+            track_id,
+        } = extract_vobsub_from_mks(mks_data).map_err(|error| JsValue::from_str(&error))?;
+
+        let mut idx = parse_idx(&idx_content);
+        if language.is_some() {
+            idx.metadata.language = language;
+        }
+        if track_id.is_some() {
+            idx.metadata.id = track_id;
+        }
+
+        self.apply_loaded_data(idx, sub_data, true);
+        Ok(())
     }
 
     /// Load VobSub from SUB file only (scans for timestamps).
@@ -101,13 +119,12 @@ impl VobSubParser {
         timestamps.sort_by_key(|t| t.timestamp_ms);
         self.timestamps_ms = timestamps.iter().map(|t| t.timestamp_ms).collect();
 
-        self.idx_data = Some(IdxParseResult {
+        let idx = IdxParseResult {
             palette,
             timestamps,
             metadata: Default::default(),
-        });
-        self.sub_data = Some(sub_data.to_vec());
-        self.loaded_from_idx = false;
+        };
+        self.apply_loaded_data(idx, sub_data.to_vec(), false);
     }
 
     /// Dispose of all resources.
@@ -209,7 +226,10 @@ impl VobSubParser {
     /// Get the cue start time in milliseconds.
     #[wasm_bindgen(js_name = getCueStartTime)]
     pub fn get_cue_start_time(&self, index: usize) -> f64 {
-        self.timestamps_ms.get(index).copied().map_or(-1.0, |ts| ts as f64)
+        self.timestamps_ms
+            .get(index)
+            .copied()
+            .map_or(-1.0, |ts| ts as f64)
     }
 
     /// Get the cue end time in milliseconds.
@@ -241,6 +261,19 @@ impl VobSubParser {
             .and_then(|idx_data| idx_data.timestamps.get(index).copied())
             .map_or(-1.0, |timestamp| timestamp.file_position as f64)
     }
+
+    fn apply_loaded_data(
+        &mut self,
+        idx_data: IdxParseResult,
+        sub_data: Vec<u8>,
+        loaded_from_idx: bool,
+    ) {
+        self.timestamps_ms = idx_data.timestamps.iter().map(|t| t.timestamp_ms).collect();
+        self.idx_data = Some(idx_data);
+        self.sub_data = Some(sub_data);
+        self.loaded_from_idx = loaded_from_idx;
+    }
+
     /// Calculate the end time for a subtitle at the given index.
     fn calculate_end_time(&mut self, index: usize, start_time: u32) -> u32 {
         // Maximum duration for the last subtitle (no next subtitle to clamp to)

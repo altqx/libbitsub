@@ -18,7 +18,15 @@ import type {
   WasmSubtitleRenderer
 } from './types'
 import { getWasm } from './wasm'
-import { detectSubtitleFormat, getSubtitleBounds, trimTransparentImageData } from './utils'
+import { detectSubtitleFormat, getSubtitleBounds, isMksSource, trimTransparentImageData } from './utils'
+
+interface WasmVobSubParserWithMks extends WasmVobSubParser {
+  loadFromMks(data: Uint8Array): void
+}
+
+interface WasmSubtitleRendererWithMks extends WasmSubtitleRenderer {
+  loadVobSubMks(data: Uint8Array): void
+}
 
 /**
  * Low-level PGS subtitle parser using WASM.
@@ -194,13 +202,13 @@ export class PgsParser {
  * Use this for programmatic access to VobSub data without video integration.
  */
 export class VobSubParserLowLevel {
-  private parser: WasmVobSubParser | null = null
+  private parser: WasmVobSubParserWithMks | null = null
   private timestamps: Float64Array = new Float64Array(0)
   private cueMetadataCache = new Map<number, SubtitleCueMetadata | null>()
 
   constructor() {
     const wasm = getWasm()
-    this.parser = new wasm.VobSubParser()
+    this.parser = new wasm.VobSubParser() as WasmVobSubParserWithMks
   }
 
   /**
@@ -219,6 +227,16 @@ export class VobSubParserLowLevel {
   loadFromSubOnly(subData: Uint8Array): void {
     if (!this.parser) throw new Error('Parser not initialized')
     this.parser.loadFromSubOnly(subData)
+    this.timestamps = this.parser.getTimestamps()
+    this.cueMetadataCache.clear()
+  }
+
+  /**
+   * Load VobSub from an .mks Matroska subtitle container.
+   */
+  loadFromMks(mksData: Uint8Array): void {
+    if (!this.parser) throw new Error('Parser not initialized')
+    this.parser.loadFromMks(mksData)
     this.timestamps = this.parser.getTimestamps()
     this.cueMetadataCache.clear()
   }
@@ -404,13 +422,13 @@ export class VobSubParserLowLevel {
  * Unified subtitle parser that handles both PGS and VobSub formats.
  */
 export class UnifiedSubtitleParser {
-  private renderer: WasmSubtitleRenderer | null = null
+  private renderer: WasmSubtitleRendererWithMks | null = null
   private timestamps: Float64Array = new Float64Array(0)
   private cueMetadataCache = new Map<number, SubtitleCueMetadata | null>()
 
   constructor() {
     const wasm = getWasm()
-    this.renderer = new wasm.SubtitleRenderer()
+    this.renderer = new wasm.SubtitleRenderer() as WasmSubtitleRendererWithMks
   }
 
   /**
@@ -444,6 +462,16 @@ export class UnifiedSubtitleParser {
     this.cueMetadataCache.clear()
   }
 
+  /**
+   * Load VobSub from an .mks Matroska subtitle container.
+   */
+  loadVobSubMks(mksData: Uint8Array): void {
+    if (!this.renderer) throw new Error('Renderer not initialized')
+    this.renderer.loadVobSubMks(mksData)
+    this.timestamps = this.renderer.getTimestamps()
+    this.cueMetadataCache.clear()
+  }
+
   /** Load subtitle data with automatic format detection. */
   loadAuto(source: AutoSubtitleSource): SubtitleFormatName {
     const format = detectSubtitleFormat(source)
@@ -461,10 +489,14 @@ export class UnifiedSubtitleParser {
     const subBinary = source.subData ?? source.data
     if (!subBinary) throw new Error('No SUB binary data provided for VobSub')
 
+    const subData = subBinary instanceof Uint8Array ? subBinary : new Uint8Array(subBinary)
+
     if (source.idxContent) {
-      this.loadVobSub(source.idxContent, subBinary instanceof Uint8Array ? subBinary : new Uint8Array(subBinary))
+      this.loadVobSub(source.idxContent, subData)
+    } else if (isMksSource(source)) {
+      this.loadVobSubMks(subData)
     } else {
-      this.loadVobSubOnly(subBinary instanceof Uint8Array ? subBinary : new Uint8Array(subBinary))
+      this.loadVobSubOnly(subData)
     }
 
     return 'vobsub'

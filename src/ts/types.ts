@@ -121,6 +121,8 @@ export interface VideoVobSubOptions extends VideoSubtitleOptions {
   idxUrl?: string
   /** Direct .idx content (string) */
   idxContent?: string
+  /** Optional file name hint for non-.sub VobSub containers such as .mks */
+  fileName?: string
 }
 
 /** Display settings for subtitle rendering. */
@@ -200,6 +202,7 @@ export type WorkerRequest =
   | { type: 'init'; wasmUrl: string }
   | { type: 'loadPgs'; sessionId: string; data: ArrayBuffer }
   | { type: 'loadVobSub'; sessionId: string; idxContent: string; subData: ArrayBuffer }
+  | { type: 'loadVobSubMks'; sessionId: string; subData: ArrayBuffer }
   | { type: 'loadVobSubOnly'; sessionId: string; subData: ArrayBuffer }
   | { type: 'renderPgsAtIndex'; sessionId: string; index: number }
   | { type: 'renderVobSubAtIndex'; sessionId: string; index: number }

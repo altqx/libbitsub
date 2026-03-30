@@ -6,8 +6,8 @@ use std::collections::HashMap;
 use wasm_bindgen::prelude::*;
 
 use super::{
-    AssembledObject, DisplaySet, ObjectDefinitionSegment, PaletteDefinitionSegment,
-    WindowDefinition, MAX_PGS_BITMAP_PIXELS, apply_palette, decode_rle_to_indexed,
+    AssembledObject, DisplaySet, MAX_PGS_BITMAP_PIXELS, ObjectDefinitionSegment,
+    PaletteDefinitionSegment, WindowDefinition, apply_palette, decode_rle_to_indexed,
 };
 use crate::utils::binary_search_timestamp;
 
@@ -114,7 +114,11 @@ impl PgsParser {
     pub fn screen_height(&self) -> u16 {
         self.display_sets
             .iter()
-            .find_map(|ds| ds.composition.as_ref().map(|composition| composition.height))
+            .find_map(|ds| {
+                ds.composition
+                    .as_ref()
+                    .map(|composition| composition.height)
+            })
             .unwrap_or(0)
     }
 
@@ -140,7 +144,10 @@ impl PgsParser {
     /// Get the cue start time in milliseconds.
     #[wasm_bindgen(js_name = getCueStartTime)]
     pub fn get_cue_start_time(&self, index: usize) -> f64 {
-        self.timestamps_ms.get(index).copied().map_or(-1.0, |ts| ts as f64)
+        self.timestamps_ms
+            .get(index)
+            .copied()
+            .map_or(-1.0, |ts| ts as f64)
     }
 
     /// Get the cue end time in milliseconds.
@@ -165,7 +172,9 @@ impl PgsParser {
         self.display_sets
             .get(index)
             .and_then(|ds| ds.composition.as_ref())
-            .map_or(0, |composition| composition.composition_objects.len() as u32)
+            .map_or(0, |composition| {
+                composition.composition_objects.len() as u32
+            })
     }
 
     /// Get the cue palette ID.

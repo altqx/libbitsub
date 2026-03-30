@@ -21,6 +21,7 @@ console_error_panic_hook = { version = "0.1.7", optional = true }
 wee_alloc = { version = "0.4.5", optional = true }
 byteorder = "1.5.0"
 memchr = "2.8.0"
+miniz_oxide = "0.8.9"
 
 [dev-dependencies]
 wasm-bindgen-test = "0.3.64"

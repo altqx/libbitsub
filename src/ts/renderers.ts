@@ -23,6 +23,7 @@ import {
   createWorkerState,
   detectSubtitleFormat,
   getSubtitleBounds,
+  isMksSource,
   setCacheLimit as applyCacheLimit,
   setCachedFrame
 } from './utils'
@@ -1020,6 +1021,7 @@ export class VobSubRenderer extends BaseVideoSubtitleRenderer {
   private vobsubParser: VobSubParserLowLevel | null = null
   private idxUrl?: string
   private idxContent?: string
+  private fileName?: string
   private state = createWorkerState()
   private onLoading?: () => void
   private onLoaded?: () => void
@@ -1032,8 +1034,11 @@ export class VobSubRenderer extends BaseVideoSubtitleRenderer {
 
   constructor(options: VideoVobSubOptions) {
     super(options, 'vobsub')
-    this.idxUrl = options.idxUrl || (options.subUrl ? options.subUrl.replace(/\\.sub$/i, '.idx') : undefined)
+    this.idxUrl = options.idxUrl || (options.subUrl && /\.sub$/i.test(options.subUrl)
+      ? options.subUrl.replace(/\.sub$/i, '.idx')
+      : undefined)
     this.idxContent = options.idxContent
+    this.fileName = options.fileName
     this.onLoading = options.onLoading
     this.onLoaded = options.onLoaded
     this.onError = options.onError
@@ -1048,6 +1053,11 @@ export class VobSubRenderer extends BaseVideoSubtitleRenderer {
 
       let subArrayBuffer: ArrayBuffer | undefined
       let idxData: string | undefined
+      const useMksSource = !this.idxContent && !this.idxUrl && isMksSource({
+        subData: this.subContent,
+        fileName: this.fileName,
+        subUrl: this.subUrl
+      })
 
       // Resolve SUB content
       if (this.subContent) {
@@ -1076,7 +1086,7 @@ export class VobSubRenderer extends BaseVideoSubtitleRenderer {
         )
       }
 
-      if (!idxData) {
+      if (!useMksSource && !idxData) {
         if (!this.idxUrl) throw new Error('No IDX content or URL provided')
         promises.push(
           fetch(this.idxUrl)
@@ -1094,7 +1104,7 @@ export class VobSubRenderer extends BaseVideoSubtitleRenderer {
         await Promise.all(promises)
       }
 
-      if (!subArrayBuffer || !idxData) {
+      if (!subArrayBuffer || (!useMksSource && !idxData)) {
         throw new Error('Failed to load VobSub data')
       }
 
@@ -1105,12 +1115,20 @@ export class VobSubRenderer extends BaseVideoSubtitleRenderer {
           this.state.sessionId = createWorkerSessionId()
           await getOrCreateWorker()
           this.emitWorkerState(true, false, this.state.sessionId)
-          const loadResponse = await sendToWorker({
-            type: 'loadVobSub',
-            sessionId: this.state.sessionId,
-            idxContent: idxData,
-            subData: subData.buffer.slice(0)
-          })
+          const loadResponse = await sendToWorker(
+            useMksSource
+              ? {
+                  type: 'loadVobSubMks',
+                  sessionId: this.state.sessionId,
+                  subData: subData.buffer.slice(0)
+                }
+              : {
+                  type: 'loadVobSub',
+                  sessionId: this.state.sessionId,
+                  idxContent: idxData!,
+                  subData: subData.buffer.slice(0)
+                }
+          )
 
           if (loadResponse.type === 'vobSubLoaded') {
             this.state.workerReady = true
@@ -1134,7 +1152,7 @@ export class VobSubRenderer extends BaseVideoSubtitleRenderer {
       }
 
       // Main thread fallback
-      await this.loadOnMainThread(idxData, subData)
+      await this.loadOnMainThread(subData, idxData, useMksSource)
       this.onLoaded?.()
     } catch (error) {
       const resolvedError = error instanceof Error ? error : new Error(String(error))
@@ -1143,7 +1161,7 @@ export class VobSubRenderer extends BaseVideoSubtitleRenderer {
     }
   }
 
-  private async loadOnMainThread(idxData: string, subData: Uint8Array): Promise<void> {
+  private async loadOnMainThread(subData: Uint8Array, idxData?: string, useMksSource: boolean = false): Promise<void> {
     // Yield to browser before heavy parsing
     await this.yieldToMain()
 
@@ -1157,7 +1175,13 @@ export class VobSubRenderer extends BaseVideoSubtitleRenderer {
           : (cb: () => void) => setTimeout(cb, 0)
 
       scheduleTask(() => {
-        this.vobsubParser!.loadFromData(idxData, subData)
+        if (useMksSource) {
+          this.vobsubParser!.loadFromMks(subData)
+        } else if (idxData) {
+          this.vobsubParser!.loadFromData(idxData, subData)
+        } else {
+          this.vobsubParser!.loadFromSubOnly(subData)
+        }
         this.state.timestamps = this.vobsubParser!.getTimestamps()
         this.state.metadata = this.vobsubParser!.getMetadata()
         this.isLoaded = true

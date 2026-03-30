@@ -23,6 +23,16 @@ function looksLikePgsBinary(binary: Uint8Array): boolean {
   return binary.length >= 2 && binary[0] === 0x50 && binary[1] === 0x47
 }
 
+function looksLikeMksBinary(binary: Uint8Array): boolean {
+  if (binary.length < 4) return false
+  if (binary[0] !== 0x1a || binary[1] !== 0x45 || binary[2] !== 0xdf || binary[3] !== 0xa3) {
+    return false
+  }
+
+  const probe = new TextDecoder('latin1').decode(binary.subarray(0, Math.min(binary.length, 1 << 20)))
+  return probe.includes('S_VOBSUB')
+}
+
 function looksLikeVobSubBinary(binary: Uint8Array): boolean {
   const limit = Math.min(binary.length - 3, 65536)
 
@@ -38,6 +48,14 @@ function looksLikeVobSubBinary(binary: Uint8Array): boolean {
   }
 
   return false
+}
+
+export function isMksSource(source: Pick<AutoSubtitleSource, 'data' | 'subData' | 'fileName' | 'subUrl'>): boolean {
+  const fileHint = [source.fileName, source.subUrl].find(Boolean)?.toLowerCase()
+  if (fileHint?.endsWith('.mks')) return true
+
+  const binary = toBinaryView(source.data ?? source.subData)
+  return binary ? looksLikeMksBinary(binary) : false
 }
 
 /** Binary search for timestamp index. */
@@ -211,12 +229,14 @@ export function detectSubtitleFormat(source: AutoSubtitleSource): SubtitleFormat
 
   const fileHint = [source.fileName, source.subUrl].find(Boolean)?.toLowerCase()
   if (fileHint?.endsWith('.sub') || fileHint?.endsWith('.idx')) return 'vobsub'
+  if (fileHint?.endsWith('.mks')) return 'vobsub'
   if (fileHint?.endsWith('.sup') || fileHint?.endsWith('.pgs')) return 'pgs'
 
   const binary = toBinaryView(source.data ?? source.subData)
   if (!binary) return null
 
   if (looksLikePgsBinary(binary)) return 'pgs'
+  if (looksLikeMksBinary(binary)) return 'vobsub'
   if (looksLikeVobSubBinary(binary)) return 'vobsub'
 
   return null
