@@ -1,6 +1,6 @@
 //! Matroska subtitle extraction for embedded VobSub tracks.
 
-use miniz_oxide::inflate::decompress_to_vec_zlib;
+use miniz_oxide::inflate::{TINFLStatus, decompress_to_vec_zlib_with_limit};
 use std::fmt::Write;
 
 const EBML_ID_SEGMENT: u32 = 0x1853_8067;
@@ -30,6 +30,8 @@ const MATROSKA_SUBTITLE_TRACK_TYPE: u64 = 0x11;
 const MAX_CODEC_PRIVATE_SIZE: usize = 1 << 16;
 const MAX_BLOCK_PAYLOAD_SIZE: usize = 1 << 20;
 const MAX_TRACK_FRAMES: usize = 65_536;
+const MAX_EXTRACTED_SUB_SIZE: usize = 128 << 20;
+const MAX_CONTENT_COMP_SETTINGS_SIZE: usize = 1 << 12;
 const MPEG_PACK_HEADER: [u8; 14] = [
     0x00, 0x00, 0x01, 0xBA, 0x44, 0x00, 0x04, 0x00, 0x04, 0x01, 0x00, 0x00, 0x03, 0xF8,
 ];
@@ -82,6 +84,10 @@ pub fn extract_vobsub_from_mks(data: &[u8]) -> Result<ExtractedVobSub, String> {
         .find(|track| track.codec_id == "S_VOBSUB")
         .ok_or_else(|| "No S_VOBSUB track found in Matroska subtitle container".to_string())?;
 
+    if selected_track.codec_private.is_empty() {
+        return Err("Selected S_VOBSUB track is missing CodecPrivate metadata".to_string());
+    }
+
     let mut frames = parse_segment_clusters(data, &segment, &selected_track, timescale_ns)?;
     if frames.is_empty() {
         return Err("Selected S_VOBSUB track contained no subtitle blocks".to_string());
@@ -91,10 +97,19 @@ pub fn extract_vobsub_from_mks(data: &[u8]) -> Result<ExtractedVobSub, String> {
 
     let mut sub_data = Vec::new();
     let mut idx_content = normalize_idx_header(&selected_track.codec_private);
+    if idx_content.trim().is_empty() {
+        return Err("Selected S_VOBSUB track has an empty or invalid CodecPrivate header".to_string());
+    }
 
     for frame in &frames {
+        if sub_data.len() >= MAX_EXTRACTED_SUB_SIZE {
+            return Err("Extracted VobSub output exceeds supported size limit".to_string());
+        }
         let file_position = sub_data.len() as u64;
         append_ps_pes_packet(&mut sub_data, frame.timestamp_ms, 0x20, &frame.payload)?;
+        if sub_data.len() > MAX_EXTRACTED_SUB_SIZE {
+            return Err("Extracted VobSub output exceeds supported size limit".to_string());
+        }
         let _ = writeln!(
             idx_content,
             "timestamp: {}, filepos: {:08X}",
@@ -452,7 +467,13 @@ fn parse_content_compression(
         let (id, data_start, data_end) = next_element(data, pos, end)?;
         match id {
             EBML_ID_CONTENT_COMP_ALGO => algo = read_uint(data, data_start, data_end)?,
-            EBML_ID_CONTENT_COMP_SETTINGS => settings = Some(data[data_start..data_end].to_vec()),
+            EBML_ID_CONTENT_COMP_SETTINGS => {
+                let settings_len = data_end - data_start;
+                if settings_len > MAX_CONTENT_COMP_SETTINGS_SIZE {
+                    return Err("Matroska content compression settings exceed supported size limit".to_string());
+                }
+                settings = Some(data[data_start..data_end].to_vec());
+            }
             _ => {}
         }
         pos = data_end;
@@ -468,17 +489,31 @@ fn parse_content_compression(
 }
 
 fn decode_track_payload(payload: &[u8], compression: &TrackCompression) -> Result<Vec<u8>, String> {
-    match compression {
-        TrackCompression::None => Ok(payload.to_vec()),
-        TrackCompression::Zlib => decompress_to_vec_zlib(payload)
-            .map_err(|_| "Failed to inflate zlib-compressed Matroska subtitle block".to_string()),
+    let decoded = match compression {
+        TrackCompression::None => payload.to_vec(),
+        TrackCompression::Zlib => decompress_to_vec_zlib_with_limit(payload, MAX_BLOCK_PAYLOAD_SIZE)
+            .map_err(|error| match error.status {
+                TINFLStatus::HasMoreOutput => {
+                    "Inflated Matroska subtitle block exceeds supported size limit".to_string()
+                }
+                TINFLStatus::Adler32Mismatch => {
+                    "Matroska subtitle block failed checksum verification".to_string()
+                }
+                _ => "Failed to inflate zlib-compressed Matroska subtitle block".to_string(),
+            })?,
         TrackCompression::HeaderStrip(prefix) => {
+            if prefix.len().saturating_add(payload.len()) > MAX_BLOCK_PAYLOAD_SIZE {
+                return Err("Header-stripped Matroska subtitle block exceeds supported size limit".to_string());
+            }
             let mut out = Vec::with_capacity(prefix.len() + payload.len());
             out.extend_from_slice(prefix);
             out.extend_from_slice(payload);
-            Ok(out)
+            out
         }
-    }
+    };
+
+    validate_vobsub_payload(&decoded)?;
+    Ok(decoded)
 }
 
 fn push_frame(frames: &mut Vec<TrackFrame>, frame: TrackFrame) -> Result<(), String> {
@@ -513,12 +548,25 @@ fn append_ps_pes_packet(
     sub_stream_id: u8,
     payload: &[u8],
 ) -> Result<(), String> {
+    if out.len() >= MAX_EXTRACTED_SUB_SIZE {
+        return Err("Extracted VobSub output exceeds supported size limit".to_string());
+    }
+
     let pes_length = payload
         .len()
         .checked_add(9)
         .ok_or_else(|| "VobSub PES payload length overflowed".to_string())?;
     if pes_length > u16::MAX as usize {
         return Err("VobSub payload exceeds maximum PES packet length".to_string());
+    }
+
+    let packet_size = MPEG_PACK_HEADER
+        .len()
+        .checked_add(6)
+        .and_then(|size| size.checked_add(pes_length))
+        .ok_or_else(|| "VobSub PES packet size overflowed".to_string())?;
+    if out.len().saturating_add(packet_size) > MAX_EXTRACTED_SUB_SIZE {
+        return Err("Extracted VobSub output exceeds supported size limit".to_string());
     }
 
     out.extend_from_slice(&MPEG_PACK_HEADER);
@@ -556,6 +604,27 @@ fn format_timestamp(timestamp_ms: u32) -> String {
     let seconds = (timestamp_ms % 60_000) / 1_000;
     let millis = timestamp_ms % 1_000;
     format!("{hours:02}:{minutes:02}:{seconds:02}:{millis:03}")
+}
+
+fn validate_vobsub_payload(payload: &[u8]) -> Result<(), String> {
+    if payload.len() < 4 {
+        return Err("Matroska subtitle block is too short to contain a VobSub packet".to_string());
+    }
+
+    let packet_size = u16::from_be_bytes([payload[0], payload[1]]) as usize;
+    let dcsq_offset = u16::from_be_bytes([payload[2], payload[3]]) as usize;
+
+    if packet_size < 4 || packet_size > MAX_BLOCK_PAYLOAD_SIZE {
+        return Err("Matroska subtitle block declares an invalid VobSub packet size".to_string());
+    }
+    if payload.len() != packet_size {
+        return Err("Matroska subtitle block size does not match declared VobSub packet length".to_string());
+    }
+    if dcsq_offset < 4 || dcsq_offset > packet_size {
+        return Err("Matroska subtitle block declares an invalid VobSub control offset".to_string());
+    }
+
+    Ok(())
 }
 
 fn next_element(data: &[u8], pos: usize, limit: usize) -> Result<(u32, usize, usize), String> {
@@ -672,6 +741,7 @@ mod tests {
     use super::*;
     use crate::vobsub::{VobSubParser, parse_idx, parse_subtitle_packet};
     use memchr::memchr;
+    use miniz_oxide::deflate::compress_to_vec_zlib;
 
     #[test]
     fn extracts_embedded_vobsub_track_from_mks() {
@@ -765,6 +835,39 @@ mod tests {
             .expect("expected first cue from real MKS fixture to render");
         assert!(frame.width() > 0);
         assert!(frame.height() > 0);
+    }
+
+    #[test]
+    fn rejects_corrupt_vobsub_payload_size_mismatch() {
+        let idx_content = include_str!("../testfiles/vobsub.idx");
+        let sub_data = include_bytes!("../testfiles/vobsub.sub");
+        let idx_header = extract_idx_header(idx_content);
+        let mut payload = extract_first_spu_payload(sub_data);
+        payload[0] = 0;
+        payload[1] = 4;
+
+        let mks = build_test_mks(&idx_header, &payload, 1_000, "eng", 1);
+        let error = extract_vobsub_from_mks(&mks).expect_err("expected corrupt payload to be rejected");
+
+        assert!(error.contains("declared VobSub packet length"));
+    }
+
+    #[test]
+    fn rejects_oversized_inflated_payload() {
+        let idx_header = "size: 720x480\npalette: 000000, ffffff, 808080, 404040\n";
+        let payload = vec![0u8; MAX_BLOCK_PAYLOAD_SIZE + 1];
+        let compressed = compress_to_vec_zlib(&payload, 6);
+        let mks = build_test_mks_with_compression(
+            idx_header,
+            &compressed,
+            TrackCompression::Zlib,
+            1_000,
+            "eng",
+            1,
+        );
+
+        let error = extract_vobsub_from_mks(&mks).expect_err("expected oversized inflation to be rejected");
+        assert!(error.contains("supported size limit"));
     }
 
     fn extract_idx_header(idx_content: &str) -> String {
@@ -862,6 +965,24 @@ mod tests {
         language: &str,
         track_num: u64,
     ) -> Vec<u8> {
+        build_test_mks_with_compression(
+            idx_header,
+            payload,
+            TrackCompression::None,
+            timestamp_ms,
+            language,
+            track_num,
+        )
+    }
+
+    fn build_test_mks_with_compression(
+        idx_header: &str,
+        payload: &[u8],
+        compression: TrackCompression,
+        timestamp_ms: u64,
+        language: &str,
+        track_num: u64,
+    ) -> Vec<u8> {
         let ebml_header = element(0x1A45_DFA3, &element(0x4286, &[0x01]));
 
         let info = element(
@@ -869,17 +990,35 @@ mod tests {
             &element(EBML_ID_TIMECODE_SCALE, &[0x0F, 0x42, 0x40]),
         );
 
-        let track_entry = element(
-            EBML_ID_TRACK_ENTRY,
-            &[
-                element(EBML_ID_TRACK_NUMBER, &[track_num as u8]),
-                element(EBML_ID_TRACK_TYPE, &[MATROSKA_SUBTITLE_TRACK_TYPE as u8]),
-                element(EBML_ID_CODEC_ID, b"S_VOBSUB"),
-                element(EBML_ID_CODEC_PRIVATE, idx_header.as_bytes()),
-                element(EBML_ID_LANGUAGE, language.as_bytes()),
-            ]
-            .concat(),
-        );
+        let mut track_children = vec![
+            element(EBML_ID_TRACK_NUMBER, &[track_num as u8]),
+            element(EBML_ID_TRACK_TYPE, &[MATROSKA_SUBTITLE_TRACK_TYPE as u8]),
+            element(EBML_ID_CODEC_ID, b"S_VOBSUB"),
+            element(EBML_ID_CODEC_PRIVATE, idx_header.as_bytes()),
+            element(EBML_ID_LANGUAGE, language.as_bytes()),
+        ];
+
+        if !matches!(compression, TrackCompression::None) {
+            let compression_payload = match compression {
+                TrackCompression::Zlib => Vec::new(),
+                TrackCompression::HeaderStrip(prefix) => [
+                    element(EBML_ID_CONTENT_COMP_ALGO, &[0x03]),
+                    element(EBML_ID_CONTENT_COMP_SETTINGS, &prefix),
+                ]
+                .concat(),
+                TrackCompression::None => Vec::new(),
+            };
+
+            track_children.push(element(
+                EBML_ID_CONTENT_ENCODINGS,
+                &element(
+                    EBML_ID_CONTENT_ENCODING,
+                    &element(EBML_ID_CONTENT_COMPRESSION, &compression_payload),
+                ),
+            ));
+        }
+
+        let track_entry = element(EBML_ID_TRACK_ENTRY, &track_children.concat());
         let tracks = element(EBML_ID_TRACKS, &track_entry);
 
         let cluster = element(
