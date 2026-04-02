@@ -1,6 +1,6 @@
 # libbit(map)sub
 
-High-performance WASM renderer for graphical subtitles (PGS and VobSub), written in Rust.
+High-performance WASM renderer for graphical subtitles (PGS, VobSub, and MKS-embedded VobSub), written in Rust.
 
 Started as a fork of Arcus92's [libpgs-js](https://github.com/Arcus92/libpgs-js), this project was reworked for higher performance and broader format support. It keeps the familiar high-level PGS-oriented API while adding a lower-level parser surface, VobSub support, GPU backends, and worker-backed rendering.
 
@@ -8,6 +8,7 @@ Started as a fork of Arcus92's [libpgs-js](https://github.com/Arcus92/libpgs-js)
 
 - PGS (Blu-ray) subtitle parsing and rendering
 - VobSub (DVD) subtitle parsing and rendering
+- Matroska `.mks` extraction for embedded `S_VOBSUB` tracks
 - WebGPU, WebGL2, and Canvas2D rendering with automatic fallback
 - Worker-backed parsing/rendering for large subtitle files
 - Rich layout controls: scale, horizontal/vertical offsets, alignment, bottom padding, safe area, opacity
@@ -131,6 +132,12 @@ const renderer = new VobSubRenderer({
   idxUrl: '/subtitles/movie.idx'
 })
 
+const mksRenderer = new VobSubRenderer({
+  video: videoElement,
+  subUrl: '/subtitles/movie.mks',
+  fileName: 'movie.mks'
+})
+
 renderer.setDebandThreshold(64)
 renderer.setDebandRange(15)
 ```
@@ -147,7 +154,7 @@ const renderer = createAutoSubtitleRenderer({
 })
 ```
 
-Automatic detection uses file hints when available and otherwise inspects the binary payload. If the format cannot be identified confidently, it throws instead of silently forcing a parser.
+Automatic detection uses file hints when available and otherwise inspects the binary payload. `.mks` sources are treated as VobSub only when they contain an embedded `S_VOBSUB` track. If the format cannot be identified confidently, it throws instead of silently forcing a parser.
 
 ## Layout controls
 
@@ -195,8 +202,11 @@ Low-level parsers expose the same model:
 ```ts
 import { PgsParser, UnifiedSubtitleParser, VobSubParserLowLevel } from 'libbitsub'
 
+const vob = new VobSubParserLowLevel()
+vob.loadFromMks(new Uint8Array(mksBuffer))
+
 const parser = new UnifiedSubtitleParser()
-const detected = parser.loadAuto({ data: subtitleBytes, fileName: 'track.sup' })
+const detected = parser.loadAuto({ data: subtitleBytes, fileName: 'track.mks' })
 
 console.log(detected)
 console.log(parser.getMetadata())
@@ -210,6 +220,10 @@ Metadata includes:
 - Rendered cue bounds when available
 - PGS composition count, palette ID, composition state
 - VobSub language, track ID, IDX metadata presence, file position where available
+
+## MKS security and corruption checks
+
+The `.mks` path validates Matroska structure before handing payloads to the VobSub decoder. Embedded subtitle blocks are size-checked, compressed blocks use bounded zlib inflation, and extracted SPU packets are rejected if their declared payload lengths or control offsets are inconsistent. Malformed or oversized `.mks` payloads fail fast instead of being partially decoded.
 
 ## Cache control and prefetching
 

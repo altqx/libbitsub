@@ -8,7 +8,7 @@
 | `isWasmInitialized` | `() => boolean` | |
 | `isWebGPUSupported` | `() => boolean` | |
 | `isWebGL2Supported` | `() => boolean` | |
-| `detectSubtitleFormat` | `(source: AutoSubtitleSource) => 'pgs' \| 'vobsub' \| null` | Uses file hints and binary magic bytes |
+| `detectSubtitleFormat` | `(source: AutoSubtitleSource) => 'pgs' \| 'vobsub' \| null` | Uses file hints and binary magic bytes, including `.mks` sources carrying embedded `S_VOBSUB` |
 | `createAutoSubtitleRenderer` | `(options: AutoVideoSubtitleOptions) => PgsRenderer \| VobSubRenderer` | Throws if format cannot be determined |
 | `getWasm` | `() => WasmModule` | Returns initialized WASM module; throws if not yet initialized |
 | `getWasmUrl` | `() => string` | Returns absolute URL to `libbitsub_bg.wasm` |
@@ -41,6 +41,7 @@ interface VideoSubtitleOptions {
 `VideoVobSubOptions` extends `VideoSubtitleOptions` with:
 - `idxUrl?: string` — URL to the .idx file (defaults to `subUrl` with `.idx` extension)
 - `idxContent?: string` — in-memory .idx content
+- `fileName?: string` — file name hint used to classify `.mks` inputs as embedded VobSub sources
 
 `AutoVideoSubtitleOptions` extends `VideoVobSubOptions` with:
 - `fileName?: string` — file name hint for format detection
@@ -108,6 +109,8 @@ Both extend `BaseVideoSubtitleRenderer` and expose the same API surface.
 | `setDebandThreshold(value: number): void` | Debanding threshold |
 | `setDebandRange(value: number): void` | Debanding range |
 
+`VobSubRenderer` also accepts `.mks` input through `subUrl` or `subContent` when `fileName` or binary inspection identifies an embedded `S_VOBSUB` track. In that case `idxUrl` and `idxContent` are ignored because track metadata is synthesized from the Matroska container.
+
 ---
 
 ## `PgsParser` (low-level)
@@ -130,6 +133,7 @@ parser.getCueMetadata(index: number): SubtitleCueMetadata | null
 ```ts
 const parser = new VobSubParserLowLevel()
 parser.loadFromData(idxContent: string, subData: Uint8Array): void
+parser.loadFromMks(mksData: Uint8Array): void
 parser.setDebandEnabled(enabled: boolean): void
 parser.setDebandThreshold(value: number): void
 parser.setDebandRange(value: number): void
@@ -137,6 +141,8 @@ parser.renderAtTimestamp(seconds: number): SubtitleData | undefined
 parser.getCueMetadata(index: number): SubtitleCueMetadata | null
 parser.getMetadata(): SubtitleParserMetadata
 ```
+
+`loadFromMks()` extracts the first embedded `S_VOBSUB` track from a Matroska `.mks` payload, synthesizes equivalent IDX/SUB metadata in memory, and then exposes the same rendering surface as `loadFromData()`.
 
 ---
 
@@ -146,9 +152,14 @@ parser.getMetadata(): SubtitleParserMetadata
 const parser = new UnifiedSubtitleParser()
 parser.loadAuto(source: AutoSubtitleSource): SubtitleFormatName
 // source: { data?, subData?, idxContent?, fileName?, subUrl?, idxUrl? }
+parser.loadVobSubMks(mksData: Uint8Array): void
 parser.getMetadata(): SubtitleParserMetadata
 parser.getCueMetadata(index: number): SubtitleCueMetadata | null
 ```
+
+`loadAuto()` treats `.mks` input as VobSub only for embedded `S_VOBSUB` tracks. `loadVobSubMks()` is the explicit low-level entry point for that path.
+
+Malformed `.mks` payloads are rejected before decode. The extractor validates Matroska structure, bounds decompression, and checks embedded VobSub packet headers for corrupt sizes and control offsets.
 
 ---
 

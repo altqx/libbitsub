@@ -1,11 +1,11 @@
 ---
 name: libbitsub
-description: Integration guide for libbitsub — a WASM-based high-performance bitmap subtitle renderer (PGS and VobSub) for the browser. Use when adding graphical subtitle support to a video player, integrating PGS (.sup) or VobSub (.sub/.idx) rendering, configuring layout controls (scale, offset, opacity), or using the low-level parser APIs.
+description: Integration guide for libbitsub — a WASM-based high-performance bitmap subtitle renderer (PGS, VobSub, and MKS-embedded VobSub) for the browser. Use when adding graphical subtitle support to a video player, integrating PGS (.sup), VobSub (.sub/.idx), or `.mks` files carrying embedded `S_VOBSUB`, configuring layout controls (scale, offset, opacity), or using the low-level parser APIs.
 ---
 
 # libbitsub Integration
 
-libbitsub is a Rust/WASM-powered bitmap subtitle renderer for PGS (Blu-ray .sup) and VobSub (DVD .sub/.idx). It manages canvas overlay, video sync, resize, worker offloading, and GPU rendering automatically.
+libbitsub is a Rust/WASM-powered bitmap subtitle renderer for PGS (Blu-ray .sup), VobSub (DVD .sub/.idx), and Matroska `.mks` files with embedded `S_VOBSUB` tracks. It manages canvas overlay, video sync, resize, worker offloading, and GPU rendering automatically.
 
 ## Installation
 
@@ -78,6 +78,12 @@ const renderer = new VobSubRenderer({
   idxUrl: '/subtitles/movie.idx' // optional, defaults to subUrl with .idx extension
 })
 
+const mksRenderer = new VobSubRenderer({
+  video: videoElement,
+  subUrl: '/subtitles/movie.mks',
+  fileName: 'movie.mks'
+})
+
 renderer.setDebandEnabled(true)
 renderer.setDebandThreshold(64)
 renderer.setDebandRange(15)
@@ -96,7 +102,7 @@ const renderer = createAutoSubtitleRenderer({
 })
 ```
 
-Detection uses file extension + binary magic bytes. Throws if format cannot be determined.
+Detection uses file extension + binary magic bytes. `.mks` sources resolve to VobSub only when they contain an embedded `S_VOBSUB` track. Throws if format cannot be determined.
 
 ## Layout controls
 
@@ -185,6 +191,10 @@ vob.loadFromData(idxString, new Uint8Array(subBuffer))
 vob.setDebandEnabled(true)
 const frame2 = vob.renderAtTimestamp(120.5)
 
+// MKS with embedded S_VOBSUB
+const mksVob = new VobSubParserLowLevel()
+mksVob.loadFromMks(new Uint8Array(mksBuffer))
+
 // Unified auto-detect
 const parser = new UnifiedSubtitleParser()
 const detected = parser.loadAuto({ data: subtitleBytes, fileName: 'track.sup' })
@@ -207,7 +217,8 @@ new PgsRenderer({
 
 ## Key constraints
 
-- Bitmap subtitles only (PGS and VobSub). Does **not** handle SRT, ASS, or any text-based formats.
+- Bitmap subtitles only (PGS, VobSub, and `.mks` files carrying embedded `S_VOBSUB`). Does **not** handle SRT, ASS, or any text-based formats.
+- `.mks` support is limited to embedded `S_VOBSUB` tracks. It is not a general Matroska subtitle parser.
 - Multiple renderers can coexist; each has its own isolated parser session.
 - If the shared worker fails to start, the API silently falls back to main-thread rendering.
 - `dispose()` must be called when removing a renderer to release DOM nodes, parser memory, and worker sessions.
