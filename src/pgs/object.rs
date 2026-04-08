@@ -120,11 +120,15 @@ impl AssembledObject {
             return None;
         }
 
+        // data_length in the ODS includes 4 bytes for width (u16) + height (u16),
+        // but those were already parsed above — `data` only contains the RLE payload.
+        let payload_size = declared_size.saturating_sub(4);
+
         // Combine all data segments
         let total_size = segments
             .iter()
             .try_fold(0usize, |acc, segment| acc.checked_add(segment.data.len()))?;
-        if total_size == 0 || total_size > declared_size {
+        if total_size == 0 || total_size > payload_size {
             return None;
         }
 
@@ -134,7 +138,7 @@ impl AssembledObject {
             data.extend_from_slice(&segment.data);
         }
 
-        if data.len() != declared_size {
+        if data.len() != payload_size {
             return None;
         }
 
