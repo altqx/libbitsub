@@ -178,4 +178,22 @@ mod tests {
 
         assert!(AssembledObject::from_segments(&[segment]).is_none());
     }
+
+    #[test]
+    fn test_from_segments_accepts_matching_payload() {
+        let segment = ObjectDefinitionSegment {
+            id: 1,
+            version: 0,
+            sequence_flag: 0xC0, // first + last
+            data_length: 7,      // 4 (width + height) + 3 bytes RLE
+            width: 32,
+            height: 32,
+            data: vec![1, 2, 3],
+        };
+
+        let obj = AssembledObject::from_segments(&[segment]).expect("should assemble");
+        assert_eq!(obj.data, vec![1, 2, 3]);
+        assert_eq!(obj.width, 32);
+        assert_eq!(obj.height, 32);
+    }
 }
