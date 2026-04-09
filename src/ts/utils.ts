@@ -23,14 +23,180 @@ function looksLikePgsBinary(binary: Uint8Array): boolean {
   return binary.length >= 2 && binary[0] === 0x50 && binary[1] === 0x47
 }
 
-function looksLikeMksBinary(binary: Uint8Array): boolean {
-  if (binary.length < 4) return false
-  if (binary[0] !== 0x1a || binary[1] !== 0x45 || binary[2] !== 0xdf || binary[3] !== 0xa3) {
-    return false
+const EBML_HEADER_ID = 0x1a45dfa3
+const EBML_DOC_TYPE_ID = 0x4282
+const EBML_SEGMENT_ID = 0x18538067
+const EBML_TRACKS_ID = 0x1654ae6b
+const EBML_TRACK_ENTRY_ID = 0xae
+const EBML_TRACK_TYPE_ID = 0x83
+const EBML_CODEC_ID = 0x86
+const MATROSKA_SUBTITLE_TRACK_TYPE = 0x11
+const MATROSKA_VOBSUB_CODEC_ID = 'S_VOBSUB'
+const MAX_MKS_PROBE_BYTES = 1 << 20
+
+interface EbmlVint {
+  value: number
+  length: number
+  isUnknownSize: boolean
+}
+
+function readEbmlVint(binary: Uint8Array, offset: number, keepMarker: boolean): EbmlVint | null {
+  if (offset >= binary.length) return null
+
+  const firstByte = binary[offset]
+  if (firstByte === 0) return null
+
+  let mask = 0x80
+  let length = 1
+
+  while ((firstByte & mask) === 0) {
+    mask >>= 1
+    length += 1
+    if (mask === 0 || length > 8) return null
   }
 
-  const probe = new TextDecoder('latin1').decode(binary.subarray(0, Math.min(binary.length, 1 << 20)))
-  return probe.includes('S_VOBSUB')
+  if (offset + length > binary.length) return null
+
+  let isUnknownSize = !keepMarker
+  let value = keepMarker ? firstByte : firstByte & (mask - 1)
+  for (let index = 1; index < length; index += 1) {
+    value = value * 256 + binary[offset + index]
+    if (!keepMarker && binary[offset + index] !== 0xff) {
+      isUnknownSize = false
+    }
+  }
+
+  if (!keepMarker && (firstByte & (mask - 1)) !== mask - 1) {
+    isUnknownSize = false
+  }
+
+  return { value, length, isUnknownSize }
+}
+
+function readEbmlElementBounds(binary: Uint8Array, offset: number, limit: number): { id: number; dataStart: number; dataEnd: number } | null {
+  const id = readEbmlVint(binary, offset, true)
+  if (!id) return null
+
+  const size = readEbmlVint(binary, offset + id.length, false)
+  if (!size) return null
+
+  const dataStart = offset + id.length + size.length
+  if (dataStart > limit) return null
+
+  const dataEnd = size.isUnknownSize ? limit : Math.min(dataStart + size.value, limit)
+
+  return { id: id.value, dataStart, dataEnd }
+}
+
+function readMatroskaDocType(binary: Uint8Array, limit: number): string | null {
+  const header = readEbmlElementBounds(binary, 0, limit)
+  if (!header || header.id !== EBML_HEADER_ID) return null
+
+  let offset = header.dataStart
+  while (offset < header.dataEnd) {
+    const element = readEbmlElementBounds(binary, offset, header.dataEnd)
+    if (!element) return null
+
+    if (element.id === EBML_DOC_TYPE_ID) {
+      return new TextDecoder('ascii').decode(binary.subarray(element.dataStart, element.dataEnd)).toLowerCase()
+    }
+
+    offset = element.dataEnd
+  }
+
+  return null
+}
+
+function readAscii(binary: Uint8Array, start: number, end: number): string {
+  return new TextDecoder('ascii').decode(binary.subarray(start, end))
+}
+
+function hasVobSubTrack(binary: Uint8Array, headerEnd: number, limit: number): boolean {
+  let offset = headerEnd
+
+  while (offset < limit) {
+    const element = readEbmlElementBounds(binary, offset, limit)
+    if (!element) return false
+
+    if (element.id === EBML_SEGMENT_ID) {
+      return segmentHasVobSubTrack(binary, element.dataStart, element.dataEnd)
+    }
+
+    offset = element.dataEnd
+  }
+
+  return false
+}
+
+function segmentHasVobSubTrack(binary: Uint8Array, start: number, end: number): boolean {
+  let offset = start
+
+  while (offset < end) {
+    const element = readEbmlElementBounds(binary, offset, end)
+    if (!element) return false
+
+    if (element.id === EBML_TRACKS_ID) {
+      return tracksContainVobSubTrack(binary, element.dataStart, element.dataEnd)
+    }
+
+    offset = element.dataEnd
+  }
+
+  return false
+}
+
+function tracksContainVobSubTrack(binary: Uint8Array, start: number, end: number): boolean {
+  let offset = start
+
+  while (offset < end) {
+    const element = readEbmlElementBounds(binary, offset, end)
+    if (!element) return false
+
+    if (element.id === EBML_TRACK_ENTRY_ID && trackEntryIsVobSub(binary, element.dataStart, element.dataEnd)) {
+      return true
+    }
+
+    offset = element.dataEnd
+  }
+
+  return false
+}
+
+function trackEntryIsVobSub(binary: Uint8Array, start: number, end: number): boolean {
+  let offset = start
+  let trackType: number | null = null
+  let codecId: string | null = null
+
+  while (offset < end) {
+    const element = readEbmlElementBounds(binary, offset, end)
+    if (!element) return false
+
+    if (element.id === EBML_TRACK_TYPE_ID) {
+      trackType = 0
+      for (let index = element.dataStart; index < element.dataEnd; index += 1) {
+        trackType = trackType * 256 + binary[index]
+      }
+    } else if (element.id === EBML_CODEC_ID) {
+      codecId = readAscii(binary, element.dataStart, element.dataEnd)
+    }
+
+    offset = element.dataEnd
+  }
+
+  return trackType === MATROSKA_SUBTITLE_TRACK_TYPE && codecId === MATROSKA_VOBSUB_CODEC_ID
+}
+
+function looksLikeMksBinary(binary: Uint8Array): boolean {
+  const probeLength = Math.min(binary.length, MAX_MKS_PROBE_BYTES)
+  if (probeLength < 4) return false
+
+  const docType = readMatroskaDocType(binary, probeLength)
+  if (docType !== 'matroska') return false
+
+  const header = readEbmlElementBounds(binary, 0, probeLength)
+  if (!header || header.id !== EBML_HEADER_ID) return false
+
+  return hasVobSubTrack(binary, header.dataEnd, probeLength)
 }
 
 function looksLikeVobSubBinary(binary: Uint8Array): boolean {
