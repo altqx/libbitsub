@@ -138,7 +138,16 @@ impl PgsParser {
         if self.timestamps_ms.is_empty() {
             return -1;
         }
-        binary_search_timestamp(&self.timestamps_ms, time_ms as u32) as i32
+
+        let time_ms_u32 = time_ms as u32;
+        let index = binary_search_timestamp(&self.timestamps_ms, time_ms_u32);
+        let start_time = self.timestamps_ms[index];
+
+        if time_ms_u32 < start_time {
+            return -1;
+        }
+
+        index as i32
     }
 
     /// Get the cue start time in milliseconds.
@@ -483,6 +492,17 @@ impl SubtitleFrame {
 mod tests {
     use super::*;
     use crate::pgs::{CompositionObject, PresentationCompositionSegment};
+
+    #[test]
+    fn find_index_at_timestamp_returns_none_before_first_pts() {
+        let mut parser = PgsParser::new();
+        parser.timestamps_ms = vec![1200, 2400, 3600];
+
+        assert_eq!(parser.find_index_at_timestamp(0.0), -1);
+        assert_eq!(parser.find_index_at_timestamp(1199.0), -1);
+        assert_eq!(parser.find_index_at_timestamp(1200.0), 0);
+        assert_eq!(parser.find_index_at_timestamp(2500.0), 1);
+    }
 
     #[test]
     fn test_render_at_index_skips_oversized_objects() {
