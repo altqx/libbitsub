@@ -11,7 +11,7 @@ Started as a fork of Arcus92's [libpgs-js](https://github.com/Arcus92/libpgs-js)
 - Matroska `.mks` extraction for embedded `S_VOBSUB` tracks
 - WebGPU, WebGL2, and Canvas2D rendering with automatic fallback
 - Worker-backed parsing/rendering for large subtitle files
-- Rich layout controls: scale, horizontal/vertical offsets, alignment, bottom padding, safe area, opacity
+- Rich layout controls: scale, aspect mode, horizontal/vertical offsets, alignment, bottom padding, safe area, opacity
 - Cue metadata and parser introspection APIs
 - Frame prefetching and cache control for high-level renderers
 - Automatic format detection and unified loading helpers
@@ -106,6 +106,7 @@ const renderer = new PgsRenderer({
   subUrl: '/subtitles/movie.sup',
   displaySettings: {
     scale: 1.1,
+    aspectMode: 'stretch',
     bottomPadding: 4,
     safeArea: 5
   },
@@ -163,6 +164,7 @@ Both `PgsRenderer` and `VobSubRenderer` support runtime layout changes:
 ```ts
 renderer.setDisplaySettings({
   scale: 1.2,
+  aspectMode: 'stretch',
   verticalOffset: -8,
   horizontalOffset: 2,
   horizontalAlign: 'center',
@@ -175,11 +177,18 @@ const settings = renderer.getDisplaySettings()
 renderer.resetDisplaySettings()
 ```
 
+`aspectMode` controls how the subtitle track's own presentation size is mapped into the video content box:
+
+- `stretch` default behavior, scales X/Y independently.
+- `contain` preserves subtitle bitmap shape and fits the track inside the visible video box.
+- `cover` preserves subtitle bitmap shape while filling the video box.
+
 `SubtitleDisplaySettings`:
 
 | Field | Type | Range / values | Meaning |
 | --- | --- | --- | --- |
 | `scale` | number | `0.1` to `3.0` | Overall subtitle scale |
+| `aspectMode` | `'stretch' \| 'contain' \| 'cover'` | fixed set | How subtitle screen coordinates map into the visible video box |
 | `verticalOffset` | number | `-50` to `50` | Vertical movement as percent of video height |
 | `horizontalOffset` | number | `-50` to `50` | Horizontal movement as percent of video width |
 | `horizontalAlign` | `'left' \| 'center' \| 'right'` | fixed set | Anchor used when scaling subtitle groups |
@@ -528,6 +537,7 @@ interface AutoVideoSubtitleOptions extends Omit<VideoVobSubOptions, 'subUrl' | '
 ```ts
 interface SubtitleDisplaySettings {
   scale: number
+  aspectMode: 'stretch' | 'contain' | 'cover'
   verticalOffset: number
   horizontalOffset: number
   horizontalAlign: 'left' | 'center' | 'right'

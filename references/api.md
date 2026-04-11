@@ -53,6 +53,7 @@ interface VideoSubtitleOptions {
 ```ts
 interface SubtitleDisplaySettings {
   scale: number            // 0.1–3.0, default 1.0
+  aspectMode: 'stretch' | 'contain' | 'cover' // default 'stretch'
   verticalOffset: number   // -50 to 50, % of video height; negative = up
   horizontalOffset: number // -50 to 50, % of video width
   horizontalAlign: 'left' | 'center' | 'right'  // default 'center'
@@ -61,6 +62,12 @@ interface SubtitleDisplaySettings {
   opacity: number          // 0.0–1.0, default 1.0
 }
 ```
+
+`aspectMode` controls how the subtitle track's presentation grid is projected into the visible video box:
+
+- `stretch`: independent X/Y scaling, default behavior.
+- `contain`: uniform scaling that keeps subtitle bitmap pixels undistorted inside the box.
+- `cover`: uniform scaling that fills the box while preserving subtitle shape. Use this when subtitles were authored for a taller frame than the encoded video, for example `1920x1080` PGS bitmaps over `3840x1600` cropped-scope video.
 
 ---
 

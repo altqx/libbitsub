@@ -1,6 +1,6 @@
 ---
 name: libbitsub
-description: Integration guide for libbitsub — a WASM-based high-performance bitmap subtitle renderer (PGS, VobSub, and MKS-embedded VobSub) for the browser. Use when adding graphical subtitle support to a video player, integrating PGS (.sup), VobSub (.sub/.idx), or `.mks` files carrying embedded `S_VOBSUB`, configuring layout controls (scale, offset, opacity), or using the low-level parser APIs.
+description: Integration guide for libbitsub — a WASM-based high-performance bitmap subtitle renderer (PGS, VobSub, and MKS-embedded VobSub) for the browser. Use when adding graphical subtitle support to a video player, integrating PGS (.sup), VobSub (.sub/.idx), or `.mks` files carrying embedded `S_VOBSUB`, configuring layout controls (scale, aspect mode, offset, opacity), or using the low-level parser APIs.
 ---
 
 # libbitsub Integration
@@ -54,7 +54,7 @@ const renderer = new PgsRenderer({
   video: videoElement,
   subUrl: '/subtitles/movie.sup',
   // or pass subContent: arrayBuffer for in-memory data
-  displaySettings: { scale: 1.1, bottomPadding: 4, safeArea: 5 },
+  displaySettings: { scale: 1.1, aspectMode: 'stretch', bottomPadding: 4, safeArea: 5 },
   cacheLimit: 32,
   prefetchWindow: { before: 1, after: 2 },
   onLoading: () => setLoading(true),
@@ -111,6 +111,7 @@ Apply at construction via `displaySettings` or at runtime:
 ```ts
 renderer.setDisplaySettings({
   scale: 1.2,            // 0.1–3.0
+  aspectMode: 'cover',   // 'stretch' | 'contain' | 'cover'
   verticalOffset: -8,    // -50 to 50, % of video height (negative = up)
   horizontalOffset: 2,   // -50 to 50, % of video width
   horizontalAlign: 'center', // 'left' | 'center' | 'right'
@@ -122,6 +123,12 @@ renderer.setDisplaySettings({
 renderer.getDisplaySettings()
 renderer.resetDisplaySettings()
 ```
+
+`aspectMode` controls how the subtitle track's presentation size is mapped into the visible video box:
+
+- `stretch`: default behavior, scales X/Y independently.
+- `contain`: preserves subtitle bitmap shape and fits the subtitle grid inside the visible video box.
+- `cover`: preserves subtitle bitmap shape while filling the visible video box. This is the recommended mode when subtitles were authored for a taller frame, such as `1920x1080`, but the encoded video has cropped black bars, such as `3840x1600`.
 
 ## Cache and prefetch
 
