@@ -5,7 +5,7 @@
 use super::{MAX_VOBSUB_IMAGE_PIXELS, SubtitlePacket, VobSubPalette};
 
 /// Decode VobSub RLE-encoded bitmap and render to RGBA.
-pub fn decode_vobsub_rle(packet: &SubtitlePacket, palette: &VobSubPalette) -> Vec<u8> {
+pub fn decode_vobsub_rle(packet: &SubtitlePacket, sub_data: &[u8], palette: &VobSubPalette) -> Vec<u8> {
     let width = packet.width as usize;
     let height = packet.height as usize;
 
@@ -40,7 +40,7 @@ pub fn decode_vobsub_rle(packet: &SubtitlePacket, palette: &VobSubPalette) -> Ve
 
     // Decode even field (lines 0, 2, 4, ...)
     decode_field(
-        &packet.even_field_data,
+        packet.even_field_data(sub_data),
         &mut rgba,
         width,
         height,
@@ -49,7 +49,7 @@ pub fn decode_vobsub_rle(packet: &SubtitlePacket, palette: &VobSubPalette) -> Ve
     );
 
     // Decode odd field (lines 1, 3, 5, ...)
-    decode_field(&packet.odd_field_data, &mut rgba, width, height, 1, &colors);
+    decode_field(packet.odd_field_data(sub_data), &mut rgba, width, height, 1, &colors);
 
     rgba
 }
@@ -255,10 +255,11 @@ mod tests {
             height: 5000,
             color_indices: [0, 1, 2, 3],
             alpha_values: [0, 15, 15, 15],
-            even_field_data: Vec::new(),
-            odd_field_data: Vec::new(),
+            packet_data: crate::vobsub::SubtitlePacketData::Owned(Vec::new()),
+            even_field_range: 0..0,
+            odd_field_range: 0..0,
         };
 
-        assert!(decode_vobsub_rle(&packet, &VobSubPalette::default()).is_empty());
+        assert!(decode_vobsub_rle(&packet, &[], &VobSubPalette::default()).is_empty());
     }
 }

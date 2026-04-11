@@ -45,9 +45,9 @@ impl VobSubParser {
 
     /// Load VobSub from IDX content and SUB data.
     #[wasm_bindgen(js_name = loadFromData)]
-    pub fn load_from_data(&mut self, idx_content: &str, sub_data: &[u8]) {
+    pub fn load_from_data(&mut self, idx_content: &str, sub_data: Vec<u8>) {
         self.dispose();
-        self.apply_loaded_data(parse_idx(idx_content), sub_data.to_vec(), true);
+        self.apply_loaded_data(parse_idx(idx_content), sub_data, true);
     }
 
     /// Load VobSub from a Matroska subtitle container with embedded S_VOBSUB tracks.
@@ -76,7 +76,7 @@ impl VobSubParser {
 
     /// Load VobSub from SUB file only (scans for timestamps).
     #[wasm_bindgen(js_name = loadFromSubOnly)]
-    pub fn load_from_sub_only(&mut self, sub_data: &[u8]) {
+    pub fn load_from_sub_only(&mut self, sub_data: Vec<u8>) {
         self.dispose();
 
         // Default palette
@@ -99,7 +99,7 @@ impl VobSubParser {
                     && sub_data[candidate + 1] == 0x00
                     && sub_data[candidate + 2] == 0x01
                     && sub_data[candidate + 3] == 0xBA
-                    && let Some((packet, _)) = parse_subtitle_packet(sub_data, candidate, &palette)
+                    && let Some((packet, _)) = parse_subtitle_packet(&sub_data, candidate, &palette)
                     && packet.width > 0
                     && packet.height > 0
                 {
@@ -124,7 +124,7 @@ impl VobSubParser {
             timestamps,
             metadata: Default::default(),
         };
-        self.apply_loaded_data(idx, sub_data.to_vec(), false);
+        self.apply_loaded_data(idx, sub_data, false);
     }
 
     /// Dispose of all resources.
@@ -280,8 +280,9 @@ impl VobSubParser {
         const MAX_LAST_DURATION_MS: u32 = 5000;
 
         // Try to get explicit duration from control sequence first
+        self.ensure_packet_cached(index);
         let explicit_duration = self
-            .get_or_parse_packet(index)
+            .cached_packet(index)
             .filter(|p| p.duration_ms > 0 && p.duration_ms != 5000)
             .map(|p| p.duration_ms);
 
@@ -305,52 +306,57 @@ impl VobSubParser {
         }
     }
 
-    /// Get a packet from cache or parse it.
-    fn get_or_parse_packet(&mut self, index: usize) -> Option<SubtitlePacket> {
+    fn ensure_packet_cached(&mut self, index: usize) -> Option<()> {
         let idx_data = self.idx_data.as_ref()?;
-        let sub_data = self.sub_data.as_ref()?;
-
         if index >= idx_data.timestamps.len() {
             return None;
         }
 
-        // Check cache first
-        if let Some(cached) = self.packet_cache.get(&index) {
-            return cached.clone();
+        if self.packet_cache.contains_key(&index) {
+            return Some(());
         }
 
-        // Parse packet at file position
-        let timestamp = &idx_data.timestamps[index];
-        let packet = parse_subtitle_packet(
-            sub_data,
-            timestamp.file_position as usize,
-            &idx_data.palette,
-        )
-        .map(|(p, _)| p);
+        let packet = {
+            let idx_data = self.idx_data.as_ref()?;
+            let sub_data = self.sub_data.as_ref()?;
+            let timestamp = idx_data.timestamps.get(index)?;
 
-        // Cache result
-        self.packet_cache.insert(index, packet.clone());
+            parse_subtitle_packet(
+                sub_data,
+                timestamp.file_position as usize,
+                &idx_data.palette,
+            )
+            .map(|(p, _)| p)
+        };
 
-        packet
+        self.packet_cache.insert(index, packet);
+        Some(())
+    }
+
+    fn cached_packet(&self, index: usize) -> Option<&SubtitlePacket> {
+        self.packet_cache.get(&index).and_then(|packet| packet.as_ref())
     }
 
     /// Render subtitle at the given index and return RGBA data.
     #[wasm_bindgen(js_name = renderAtIndex)]
     pub fn render_at_index(&mut self, index: usize) -> Option<VobSubFrame> {
-        let packet = self.get_or_parse_packet(index)?;
+        self.ensure_packet_cached(index)?;
         let idx_data = self.idx_data.as_ref()?;
+        let sub_data = self.sub_data.as_ref()?;
+        let packet = self.cached_packet(index)?;
 
-        Some(self.render_packet(&packet, &idx_data.palette, &idx_data.metadata))
+        Some(self.render_packet(packet, sub_data, &idx_data.palette, &idx_data.metadata))
     }
 
     /// Render a packet to a frame.
     fn render_packet(
         &self,
         packet: &SubtitlePacket,
+        sub_data: &[u8],
         palette: &VobSubPalette,
         metadata: &super::VobSubMetadata,
     ) -> VobSubFrame {
-        let mut rgba = decode_vobsub_rle(packet, palette);
+        let mut rgba = decode_vobsub_rle(packet, sub_data, palette);
 
         // Apply debanding if enabled
         if self.deband_config.enabled {
@@ -413,13 +419,13 @@ impl Default for VobSubParser {
 /// A VobSub subtitle frame.
 #[wasm_bindgen]
 pub struct VobSubFrame {
-    screen_width: u16,
-    screen_height: u16,
-    x: u16,
-    y: u16,
-    width: u16,
-    height: u16,
-    rgba: Vec<u8>,
+    pub(crate) screen_width: u16,
+    pub(crate) screen_height: u16,
+    pub(crate) x: u16,
+    pub(crate) y: u16,
+    pub(crate) width: u16,
+    pub(crate) height: u16,
+    pub(crate) rgba: Vec<u8>,
 }
 
 #[wasm_bindgen]

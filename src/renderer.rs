@@ -54,7 +54,7 @@ impl SubtitleRenderer {
 
     /// Load VobSub subtitle data from IDX and SUB.
     #[wasm_bindgen(js_name = loadVobSub)]
-    pub fn load_vobsub(&mut self, idx_content: &str, sub_data: &[u8]) {
+    pub fn load_vobsub(&mut self, idx_content: &str, sub_data: Vec<u8>) {
         self.dispose();
 
         let mut parser = VobSubParser::new();
@@ -80,7 +80,7 @@ impl SubtitleRenderer {
 
     /// Load VobSub from SUB file only.
     #[wasm_bindgen(js_name = loadVobSubOnly)]
-    pub fn load_vobsub_only(&mut self, sub_data: &[u8]) {
+    pub fn load_vobsub_only(&mut self, sub_data: Vec<u8>) {
         self.dispose();
 
         let mut parser = VobSubParser::new();
@@ -251,24 +251,21 @@ impl SubtitleRenderer {
             Some(SubtitleFormat::Pgs) => {
                 let parser = self.pgs_parser.as_mut()?;
                 let frame = parser.render_at_index(index)?;
-
-                // Convert to unified format
-                let mut compositions = Vec::new();
-                for i in 0..frame.composition_count() {
-                    if let Some(comp) = frame.get_composition(i) {
-                        compositions.push(RenderComposition {
-                            x: comp.x(),
-                            y: comp.y(),
-                            width: comp.width(),
-                            height: comp.height(),
-                            rgba: comp.get_rgba().to_vec(),
-                        });
-                    }
-                }
+                let compositions = frame
+                    .compositions
+                    .into_iter()
+                    .map(|comp| RenderComposition {
+                        x: comp.x,
+                        y: comp.y,
+                        width: comp.width,
+                        height: comp.height,
+                        rgba: comp.rgba,
+                    })
+                    .collect();
 
                 Some(RenderResult {
-                    screen_width: frame.width(),
-                    screen_height: frame.height(),
+                    screen_width: frame.width,
+                    screen_height: frame.height,
                     compositions,
                 })
             }
@@ -277,14 +274,14 @@ impl SubtitleRenderer {
                 let frame = parser.render_at_index(index)?;
 
                 Some(RenderResult {
-                    screen_width: frame.screen_width(),
-                    screen_height: frame.screen_height(),
+                    screen_width: frame.screen_width,
+                    screen_height: frame.screen_height,
                     compositions: vec![RenderComposition {
-                        x: frame.x(),
-                        y: frame.y(),
-                        width: frame.width(),
-                        height: frame.height(),
-                        rgba: frame.get_rgba().to_vec(),
+                        x: frame.x,
+                        y: frame.y,
+                        width: frame.width,
+                        height: frame.height,
+                        rgba: frame.rgba,
                     }],
                 })
             }

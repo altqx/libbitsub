@@ -3,8 +3,15 @@
 //! The SUB file contains MPEG-2 Private Stream 1 packets with DVD subtitle data.
 
 use memchr::memchr;
+use std::ops::Range;
 
 use super::{MAX_VOBSUB_IMAGE_PIXELS, VobSubPalette};
+
+#[derive(Debug, Clone)]
+pub enum SubtitlePacketData {
+    SharedRange { start: usize, end: usize },
+    Owned(Vec<u8>),
+}
 
 /// Parsed subtitle packet from the SUB file.
 #[derive(Debug, Clone)]
@@ -25,10 +32,31 @@ pub struct SubtitlePacket {
     pub color_indices: [u8; 4],
     /// 4 alpha values (0-15, where 0 is transparent, 15 is opaque)
     pub alpha_values: [u8; 4],
-    /// RLE-encoded pixel data (even field / top field)
-    pub even_field_data: Vec<u8>,
-    /// RLE-encoded pixel data (odd field / bottom field)
-    pub odd_field_data: Vec<u8>,
+    /// Underlying subtitle packet payload.
+    pub(crate) packet_data: SubtitlePacketData,
+    /// RLE-encoded pixel data range for the even field / top field.
+    pub(crate) even_field_range: Range<usize>,
+    /// RLE-encoded pixel data range for the odd field / bottom field.
+    pub(crate) odd_field_range: Range<usize>,
+}
+
+impl SubtitlePacket {
+    fn packet_slice<'a>(&'a self, sub_data: &'a [u8]) -> &'a [u8] {
+        match &self.packet_data {
+            SubtitlePacketData::SharedRange { start, end } => &sub_data[*start..*end],
+            SubtitlePacketData::Owned(data) => data,
+        }
+    }
+
+    pub fn even_field_data<'a>(&'a self, sub_data: &'a [u8]) -> &'a [u8] {
+        let packet = self.packet_slice(sub_data);
+        &packet[self.even_field_range.clone()]
+    }
+
+    pub fn odd_field_data<'a>(&'a self, sub_data: &'a [u8]) -> &'a [u8] {
+        let packet = self.packet_slice(sub_data);
+        &packet[self.odd_field_range.clone()]
+    }
 }
 
 /// Parse a subtitle packet from the SUB file at the given position.
@@ -44,7 +72,7 @@ pub fn parse_subtitle_packet(
     let max_scan = (start_offset + 262144).min(data_len);
 
     let mut pts: u32 = 0;
-    let mut data_chunks: Vec<Vec<u8>> = Vec::new();
+    let mut data_chunks: Vec<(usize, usize)> = Vec::new();
     let mut expected_size: usize = 0;
     let mut collected_size: usize = 0;
 
@@ -130,14 +158,12 @@ pub fn parse_subtitle_packet(
             let payload_length = packet_end.saturating_sub(offset);
 
             if payload_length > 0 {
-                let payload = data[offset..offset + payload_length].to_vec();
-
                 // First packet - read expected subtitle size
-                if expected_size == 0 && payload.len() >= 2 {
-                    expected_size = ((payload[0] as usize) << 8) | (payload[1] as usize);
+                if expected_size == 0 && payload_length >= 2 {
+                    expected_size = ((data[offset] as usize) << 8) | (data[offset + 1] as usize);
                 }
 
-                data_chunks.push(payload);
+                data_chunks.push((offset, offset + payload_length));
                 collected_size += payload_length;
                 offset += payload_length;
 
@@ -183,18 +209,47 @@ pub fn parse_subtitle_packet(
         return None;
     }
 
-    let subtitle_data: Vec<u8> = if data_chunks.len() == 1 {
-        data_chunks.into_iter().next().unwrap()
+    if data_chunks.len() == 1 {
+        let (start, end) = data_chunks.into_iter().next().unwrap();
+        let trimmed_end = if expected_size > 0 {
+            start + expected_size.min(end - start)
+        } else {
+            end
+        };
+        let packet_source = SubtitlePacketData::SharedRange {
+            start,
+            end: trimmed_end,
+        };
+        let subtitle_data = &data[start..trimmed_end];
+        if subtitle_data.len() < 4 {
+            return None;
+        }
+
+        return parse_subtitle_data(packet_source, data, pts).map(|packet| (packet, offset));
     } else {
-        data_chunks.into_iter().flatten().collect()
-    };
+        let final_size = if expected_size > 0 {
+            expected_size.min(collected_size)
+        } else {
+            collected_size
+        };
+        let mut merged = Vec::with_capacity(final_size);
+        for (start, end) in data_chunks {
+            if merged.len() >= final_size {
+                break;
+            }
 
-    if subtitle_data.len() < 4 {
-        return None;
+            let remaining = final_size - merged.len();
+            let chunk = &data[start..end];
+            let take = remaining.min(chunk.len());
+            merged.extend_from_slice(&chunk[..take]);
+        }
+
+        if merged.len() < 4 {
+            return None;
+        }
+
+        return parse_subtitle_data(SubtitlePacketData::Owned(merged), data, pts).map(|packet| (packet, offset));
     }
-
-    // Parse subtitle packet
-    parse_subtitle_data(&subtitle_data, pts).map(|packet| (packet, offset))
 }
 
 /// Extract PTS (Presentation Time Stamp) from PES header.
@@ -215,7 +270,12 @@ fn extract_pts(data: &[u8], offset: usize) -> u32 {
 }
 
 /// Parse the subtitle control and bitmap data.
-fn parse_subtitle_data(data: &[u8], pts: u32) -> Option<SubtitlePacket> {
+fn parse_subtitle_data(packet_data: SubtitlePacketData, source_data: &[u8], pts: u32) -> Option<SubtitlePacket> {
+    let data = match &packet_data {
+        SubtitlePacketData::SharedRange { start, end } => &source_data[*start..*end],
+        SubtitlePacketData::Owned(data) => data.as_slice(),
+    };
+
     if data.len() < 4 {
         return None;
     }
@@ -376,16 +436,16 @@ fn parse_subtitle_data(data: &[u8], pts: u32) -> Option<SubtitlePacket> {
     let even_field_end = odd_start;
     let odd_field_end = packet_start + dcsq_offset;
 
-    let even_field_data = if even_start < even_field_end.min(end_offset) {
-        data[even_start..even_field_end.min(end_offset)].to_vec()
+    let even_field_range = if even_start < even_field_end.min(end_offset) {
+        even_start..even_field_end.min(end_offset)
     } else {
-        Vec::new()
+        0..0
     };
 
-    let odd_field_data = if odd_start < odd_field_end.min(end_offset) {
-        data[odd_start..odd_field_end.min(end_offset)].to_vec()
+    let odd_field_range = if odd_start < odd_field_end.min(end_offset) {
+        odd_start..odd_field_end.min(end_offset)
     } else {
-        Vec::new()
+        0..0
     };
 
     Some(SubtitlePacket {
@@ -397,8 +457,9 @@ fn parse_subtitle_data(data: &[u8], pts: u32) -> Option<SubtitlePacket> {
         height,
         color_indices,
         alpha_values,
-        even_field_data,
-        odd_field_data,
+        packet_data,
+        even_field_range,
+        odd_field_range,
     })
 }
 
@@ -417,6 +478,6 @@ mod tests {
     fn test_parse_subtitle_packet_rejects_invalid_control_offset() {
         let data = [0x00, 0x08, 0x00, 0x09, 0x11, 0x22, 0x33, 0x44];
 
-        assert!(parse_subtitle_data(&data, 0).is_none());
+        assert!(parse_subtitle_data(SubtitlePacketData::Owned(data.to_vec()), &data, 0).is_none());
     }
 }

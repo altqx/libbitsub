@@ -1,6 +1,7 @@
 //! Matroska subtitle extraction for embedded VobSub tracks.
 
 use miniz_oxide::inflate::{TINFLStatus, decompress_to_vec_zlib_with_limit};
+use std::ops::Range;
 use std::fmt::Write;
 
 const EBML_ID_SEGMENT: u32 = 0x1853_8067;
@@ -50,7 +51,7 @@ struct ParsedTrack {
     codec_id: String,
     language: Option<String>,
     name: Option<String>,
-    codec_private: Vec<u8>,
+    codec_private: Option<Range<usize>>,
     compression: TrackCompression,
 }
 
@@ -59,13 +60,28 @@ enum TrackCompression {
     #[default]
     None,
     Zlib,
-    HeaderStrip(Vec<u8>),
+    HeaderStrip(Range<usize>),
+}
+
+#[derive(Debug, Clone)]
+enum TrackPayload {
+    BorrowedRange(Range<usize>),
+    Owned(Vec<u8>),
+}
+
+impl TrackPayload {
+    fn as_slice<'a>(&'a self, data: &'a [u8]) -> &'a [u8] {
+        match self {
+            TrackPayload::BorrowedRange(range) => &data[range.clone()],
+            TrackPayload::Owned(payload) => payload,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
 struct TrackFrame {
     timestamp_ms: u32,
-    payload: Vec<u8>,
+    payload: TrackPayload,
 }
 
 #[derive(Debug, Clone)]
@@ -84,7 +100,12 @@ pub fn extract_vobsub_from_mks(data: &[u8]) -> Result<ExtractedVobSub, String> {
         .find(|track| track.codec_id == "S_VOBSUB")
         .ok_or_else(|| "No S_VOBSUB track found in Matroska subtitle container".to_string())?;
 
-    if selected_track.codec_private.is_empty() {
+    let codec_private = selected_track
+        .codec_private
+        .clone()
+        .ok_or_else(|| "Selected S_VOBSUB track is missing CodecPrivate metadata".to_string())?;
+
+    if codec_private.is_empty() {
         return Err("Selected S_VOBSUB track is missing CodecPrivate metadata".to_string());
     }
 
@@ -96,7 +117,7 @@ pub fn extract_vobsub_from_mks(data: &[u8]) -> Result<ExtractedVobSub, String> {
     frames.sort_by_key(|frame| frame.timestamp_ms);
 
     let mut sub_data = Vec::new();
-    let mut idx_content = normalize_idx_header(&selected_track.codec_private);
+    let mut idx_content = normalize_idx_header(&data[codec_private]);
     if idx_content.trim().is_empty() {
         return Err("Selected S_VOBSUB track has an empty or invalid CodecPrivate header".to_string());
     }
@@ -106,7 +127,7 @@ pub fn extract_vobsub_from_mks(data: &[u8]) -> Result<ExtractedVobSub, String> {
             return Err("Extracted VobSub output exceeds supported size limit".to_string());
         }
         let file_position = sub_data.len() as u64;
-        append_ps_pes_packet(&mut sub_data, frame.timestamp_ms, 0x20, &frame.payload)?;
+        append_ps_pes_packet(&mut sub_data, frame.timestamp_ms, 0x20, frame.payload.as_slice(data))?;
         if sub_data.len() > MAX_EXTRACTED_SUB_SIZE {
             return Err("Extracted VobSub output exceeds supported size limit".to_string());
         }
@@ -243,7 +264,7 @@ fn parse_track_entry(data: &[u8], start: usize, end: usize) -> Result<ParsedTrac
                 if size > MAX_CODEC_PRIVATE_SIZE {
                     return Err("Matroska CodecPrivate exceeds supported size limit".to_string());
                 }
-                track.codec_private = data[data_start..data_end].to_vec();
+                track.codec_private = Some(data_start..data_end);
             }
             EBML_ID_LANGUAGE => track.language = Some(read_string(data, data_start, data_end)),
             EBML_ID_LANGUAGE_IETF => track.language = Some(read_string(data, data_start, data_end)),
@@ -311,7 +332,9 @@ fn parse_cluster(
             }
             EBML_ID_SIMPLE_BLOCK => {
                 if let Some(frame) = parse_block(
-                    &data[data_start..data_end],
+                    data,
+                    data_start,
+                    data_end,
                     selected_track,
                     cluster_timestamp,
                     timescale_ns,
@@ -354,7 +377,9 @@ fn parse_block_group(
         let (id, data_start, data_end) = next_element(data, pos, end)?;
         if id == EBML_ID_BLOCK {
             return parse_block(
-                &data[data_start..data_end],
+                data,
+                data_start,
+                data_end,
                 selected_track,
                 cluster_timestamp,
                 timescale_ns,
@@ -367,11 +392,14 @@ fn parse_block_group(
 }
 
 fn parse_block(
-    data: &[u8],
+    source_data: &[u8],
+    start: usize,
+    end: usize,
     selected_track: &ParsedTrack,
     cluster_timestamp: i64,
     timescale_ns: u64,
 ) -> Result<Option<TrackFrame>, String> {
+    let data = &source_data[start..end];
     let (track_num, track_num_len) =
         read_vint(data, 0).ok_or_else(|| "Invalid Matroska block track number".to_string())?;
 
@@ -390,6 +418,8 @@ fn parse_block(
         return Err("Laced Matroska VobSub blocks are not supported".to_string());
     }
 
+    let payload_start = start + track_num_len + 3;
+    let payload_end = end;
     let payload = &data[track_num_len + 3..];
     if payload.is_empty() {
         return Ok(None);
@@ -407,7 +437,12 @@ fn parse_block(
 
     Ok(Some(TrackFrame {
         timestamp_ms,
-        payload: decode_track_payload(payload, &selected_track.compression)?,
+        payload: decode_track_payload(
+            payload,
+            payload_start..payload_end,
+            source_data,
+            &selected_track.compression,
+        )?,
     }))
 }
 
@@ -472,7 +507,7 @@ fn parse_content_compression(
                 if settings_len > MAX_CONTENT_COMP_SETTINGS_SIZE {
                     return Err("Matroska content compression settings exceed supported size limit".to_string());
                 }
-                settings = Some(data[data_start..data_end].to_vec());
+                settings = Some(data_start..data_end);
             }
             _ => {}
         }
@@ -481,16 +516,21 @@ fn parse_content_compression(
 
     match algo {
         0 => Ok(TrackCompression::Zlib),
-        3 => Ok(TrackCompression::HeaderStrip(settings.unwrap_or_default())),
+        3 => Ok(TrackCompression::HeaderStrip(settings.unwrap_or(0..0))),
         other => Err(format!(
             "Unsupported Matroska content compression algorithm: {other}"
         )),
     }
 }
 
-fn decode_track_payload(payload: &[u8], compression: &TrackCompression) -> Result<Vec<u8>, String> {
+fn decode_track_payload(
+    payload: &[u8],
+    payload_range: Range<usize>,
+    source_data: &[u8],
+    compression: &TrackCompression,
+) -> Result<TrackPayload, String> {
     let decoded = match compression {
-        TrackCompression::None => payload.to_vec(),
+        TrackCompression::None => TrackPayload::BorrowedRange(payload_range),
         TrackCompression::Zlib => decompress_to_vec_zlib_with_limit(payload, MAX_BLOCK_PAYLOAD_SIZE)
             .map_err(|error| match error.status {
                 TINFLStatus::HasMoreOutput => {
@@ -500,19 +540,21 @@ fn decode_track_payload(payload: &[u8], compression: &TrackCompression) -> Resul
                     "Matroska subtitle block failed checksum verification".to_string()
                 }
                 _ => "Failed to inflate zlib-compressed Matroska subtitle block".to_string(),
-            })?,
+            })
+            .map(TrackPayload::Owned)?,
         TrackCompression::HeaderStrip(prefix) => {
-            if prefix.len().saturating_add(payload.len()) > MAX_BLOCK_PAYLOAD_SIZE {
+            let prefix_slice = &source_data[prefix.clone()];
+            if prefix_slice.len().saturating_add(payload.len()) > MAX_BLOCK_PAYLOAD_SIZE {
                 return Err("Header-stripped Matroska subtitle block exceeds supported size limit".to_string());
             }
-            let mut out = Vec::with_capacity(prefix.len() + payload.len());
-            out.extend_from_slice(prefix);
+            let mut out = Vec::with_capacity(prefix_slice.len() + payload.len());
+            out.extend_from_slice(prefix_slice);
             out.extend_from_slice(payload);
-            out
+            TrackPayload::Owned(out)
         }
     };
 
-    validate_vobsub_payload(&decoded)?;
+    validate_vobsub_payload(decoded.as_slice(source_data))?;
     Ok(decoded)
 }
 
@@ -1001,11 +1043,7 @@ mod tests {
         if !matches!(compression, TrackCompression::None) {
             let compression_payload = match compression {
                 TrackCompression::Zlib => Vec::new(),
-                TrackCompression::HeaderStrip(prefix) => [
-                    element(EBML_ID_CONTENT_COMP_ALGO, &[0x03]),
-                    element(EBML_ID_CONTENT_COMP_SETTINGS, &prefix),
-                ]
-                .concat(),
+                TrackCompression::HeaderStrip(_) => panic!("header-strip test helper is not implemented for borrowed range compression state"),
                 TrackCompression::None => Vec::new(),
             };
 
