@@ -51,6 +51,19 @@ interface SubtitleRenderLayout {
   opacity: number
 }
 
+function createTransferableBuffer(data: Uint8Array, preserveSource: boolean): ArrayBuffer {
+  if (
+    !preserveSource &&
+    data.buffer instanceof ArrayBuffer &&
+    data.byteOffset === 0 &&
+    data.byteLength === data.buffer.byteLength
+  ) {
+    return data.buffer
+  }
+
+  return data.slice().buffer
+}
+
 /** Performance statistics for subtitle renderer */
 export interface SubtitleRendererStats {
   /** Total frames rendered since initialization */
@@ -810,26 +823,24 @@ export class PgsRenderer extends BaseVideoSubtitleRenderer {
         throw new Error('No subtitle content or URL provided')
       }
 
-      const data = new Uint8Array(arrayBuffer)
+      let data = new Uint8Array(arrayBuffer)
 
       if (this.state.useWorker) {
         try {
           this.state.sessionId = createWorkerSessionId()
           await getOrCreateWorker()
           this.emitWorkerState(true, false, this.state.sessionId)
+          const transferableData = createTransferableBuffer(data, Boolean(this.subContent))
           const loadResponse = await sendToWorker({
             type: 'loadPgs',
             sessionId: this.state.sessionId,
-            data: data.buffer.slice(0)
+            data: transferableData
           })
 
           if (loadResponse.type === 'pgsLoaded') {
             this.state.workerReady = true
             this.state.metadata = loadResponse.metadata
-            const tsResponse = await sendToWorker({ type: 'getPgsTimestamps', sessionId: this.state.sessionId })
-            if (tsResponse.type === 'pgsTimestamps') {
-              this.state.timestamps = tsResponse.timestamps
-            }
+            this.state.timestamps = loadResponse.timestamps
             this.isLoaded = true
             this.setParserMetadata(loadResponse.metadata)
             this.emitWorkerState(true, true, this.state.sessionId)
@@ -841,6 +852,11 @@ export class PgsRenderer extends BaseVideoSubtitleRenderer {
         } catch (workerError) {
           this.state.useWorker = false
           this.emitWorkerState(false, false, this.state.sessionId, true)
+          if (!this.subContent && this.subUrl && data.byteLength === 0) {
+            const response = await fetch(this.subUrl)
+            if (!response.ok) throw new Error(`Failed to fetch subtitle: ${response.status}`)
+            data = new Uint8Array(await response.arrayBuffer())
+          }
         }
       }
 
@@ -1131,35 +1147,33 @@ export class VobSubRenderer extends BaseVideoSubtitleRenderer {
         throw new Error('Failed to load VobSub data')
       }
 
-      const subData = new Uint8Array(subArrayBuffer)
+      let subData = new Uint8Array(subArrayBuffer)
 
       if (this.state.useWorker) {
         try {
           this.state.sessionId = createWorkerSessionId()
           await getOrCreateWorker()
           this.emitWorkerState(true, false, this.state.sessionId)
+          const transferableSubData = createTransferableBuffer(subData, Boolean(this.subContent))
           const loadResponse = await sendToWorker(
             useMksSource
               ? {
                   type: 'loadVobSubMks',
                   sessionId: this.state.sessionId,
-                  subData: subData.buffer.slice(0)
+                  subData: transferableSubData
                 }
               : {
                   type: 'loadVobSub',
                   sessionId: this.state.sessionId,
                   idxContent: idxData!,
-                  subData: subData.buffer.slice(0)
+                  subData: transferableSubData
                 }
           )
 
           if (loadResponse.type === 'vobSubLoaded') {
             this.state.workerReady = true
             this.state.metadata = loadResponse.metadata
-            const tsResponse = await sendToWorker({ type: 'getVobSubTimestamps', sessionId: this.state.sessionId })
-            if (tsResponse.type === 'vobSubTimestamps') {
-              this.state.timestamps = tsResponse.timestamps
-            }
+            this.state.timestamps = loadResponse.timestamps
             this.isLoaded = true
             this.setParserMetadata(loadResponse.metadata)
             this.emitWorkerState(true, true, this.state.sessionId)
@@ -1171,6 +1185,11 @@ export class VobSubRenderer extends BaseVideoSubtitleRenderer {
         } catch (workerError) {
           this.state.useWorker = false
           this.emitWorkerState(false, false, this.state.sessionId, true)
+          if (!this.subContent && this.subUrl && subData.byteLength === 0) {
+            const response = await fetch(this.subUrl)
+            if (!response.ok) throw new Error(`Failed to fetch .sub file: ${response.status}`)
+            subData = new Uint8Array(await response.arrayBuffer())
+          }
         }
       }
 

@@ -154,11 +154,7 @@ export class PgsParser {
         continue
       }
 
-      // Copy to new Uint8ClampedArray to ensure proper buffer ownership
-      const clampedData = new Uint8ClampedArray(rgba.length)
-      clampedData.set(rgba)
-
-      const trimmed = trimTransparentImageData(clampedData, comp.width, comp.height)
+      const trimmed = trimTransparentImageData(rgba, comp.width, comp.height)
 
       if (!trimmed) {
         continue
@@ -344,11 +340,7 @@ export class VobSubParserLowLevel {
       }
     }
 
-    // Copy to new Uint8ClampedArray to ensure proper buffer ownership
-    const clampedData = new Uint8ClampedArray(rgba.length)
-    clampedData.set(rgba)
-
-    const trimmed = trimTransparentImageData(clampedData, frame.width, frame.height)
+    const trimmed = trimTransparentImageData(rgba, frame.width, frame.height)
 
     if (!trimmed) {
       return {
@@ -613,10 +605,7 @@ export class UnifiedSubtitleParser {
       const expectedLength = width * height * 4
 
       if (width > 0 && height > 0 && rgba.length === expectedLength) {
-        const clampedData = new Uint8ClampedArray(rgba.length)
-        clampedData.set(rgba)
-
-        const trimmed = trimTransparentImageData(clampedData, width, height)
+        const trimmed = trimTransparentImageData(rgba, width, height)
 
         if (!trimmed) {
           continue

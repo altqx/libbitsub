@@ -189,9 +189,7 @@ function convertFrame(frame, isVobSub) {
     if (isVobSub) {
         const rgba = frame.getRgba();
         if (frame.width > 0 && frame.height > 0 && rgba.length === frame.width * frame.height * 4) {
-            const rgbaCopy = new Uint8Array(rgba.length);
-            rgbaCopy.set(rgba);
-            compositions.push({ rgba: rgbaCopy, x: frame.x, y: frame.y, width: frame.width, height: frame.height });
+            compositions.push({ rgba, x: frame.x, y: frame.y, width: frame.width, height: frame.height });
         }
         return { width: frame.screenWidth, height: frame.screenHeight, compositions };
     }
@@ -201,9 +199,7 @@ function convertFrame(frame, isVobSub) {
         if (!comp) continue;
         const rgba = comp.getRgba();
         if (comp.width > 0 && comp.height > 0 && rgba.length === comp.width * comp.height * 4) {
-            const rgbaCopy = new Uint8Array(rgba.length);
-            rgbaCopy.set(rgba);
-            compositions.push({ rgba: rgbaCopy, x: comp.x, y: comp.y, width: comp.width, height: comp.height });
+            compositions.push({ rgba, x: comp.x, y: comp.y, width: comp.width, height: comp.height });
         }
     }
 
@@ -229,32 +225,52 @@ self.onmessage = async function(event) {
                 disposeSession(request.sessionId);
                 const parser = new wasmModule.PgsParser();
                 const count = parser.parse(new Uint8Array(request.data));
+                const timestamps = parser.getTimestamps();
                 pgsParsers.set(request.sessionId, parser);
-                postResponse({ type: 'pgsLoaded', count, byteLength: request.data.byteLength, metadata: buildPgsMetadata(parser) }, [], _id);
+                postResponse(
+                    { type: 'pgsLoaded', count, byteLength: request.data.byteLength, metadata: buildPgsMetadata(parser), timestamps },
+                    [timestamps.buffer],
+                    _id
+                );
                 break;
             }
             case 'loadVobSub': {
                 disposeSession(request.sessionId);
                 const parser = new wasmModule.VobSubParser();
                 parser.loadFromData(request.idxContent, new Uint8Array(request.subData));
+                const timestamps = parser.getTimestamps();
                 vobSubParsers.set(request.sessionId, parser);
-                postResponse({ type: 'vobSubLoaded', count: parser.count, metadata: buildVobSubMetadata(parser) }, [], _id);
+                postResponse(
+                    { type: 'vobSubLoaded', count: parser.count, metadata: buildVobSubMetadata(parser), timestamps },
+                    [timestamps.buffer],
+                    _id
+                );
                 break;
             }
             case 'loadVobSubMks': {
                 disposeSession(request.sessionId);
                 const parser = new wasmModule.VobSubParser();
                 parser.loadFromMks(new Uint8Array(request.subData));
+                const timestamps = parser.getTimestamps();
                 vobSubParsers.set(request.sessionId, parser);
-                postResponse({ type: 'vobSubLoaded', count: parser.count, metadata: buildVobSubMetadata(parser) }, [], _id);
+                postResponse(
+                    { type: 'vobSubLoaded', count: parser.count, metadata: buildVobSubMetadata(parser), timestamps },
+                    [timestamps.buffer],
+                    _id
+                );
                 break;
             }
             case 'loadVobSubOnly': {
                 disposeSession(request.sessionId);
                 const parser = new wasmModule.VobSubParser();
                 parser.loadFromSubOnly(new Uint8Array(request.subData));
+                const timestamps = parser.getTimestamps();
                 vobSubParsers.set(request.sessionId, parser);
-                postResponse({ type: 'vobSubLoaded', count: parser.count, metadata: buildVobSubMetadata(parser) }, [], _id);
+                postResponse(
+                    { type: 'vobSubLoaded', count: parser.count, metadata: buildVobSubMetadata(parser), timestamps },
+                    [timestamps.buffer],
+                    _id
+                );
                 break;
             }
             case 'renderPgsAtIndex': {

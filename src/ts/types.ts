@@ -224,8 +224,8 @@ export type WorkerRequest =
 
 export type WorkerResponse =
   | { type: 'initComplete'; success: boolean; error?: string }
-  | { type: 'pgsLoaded'; count: number; byteLength: number; metadata: WorkerSessionMetadata }
-  | { type: 'vobSubLoaded'; count: number; metadata: WorkerSessionMetadata }
+  | { type: 'pgsLoaded'; count: number; byteLength: number; metadata: WorkerSessionMetadata; timestamps: Float64Array }
+  | { type: 'vobSubLoaded'; count: number; metadata: WorkerSessionMetadata; timestamps: Float64Array }
   | { type: 'pgsFrame'; frame: FrameData | null }
   | { type: 'vobSubFrame'; frame: FrameData | null }
   | { type: 'pgsIndex'; index: number }

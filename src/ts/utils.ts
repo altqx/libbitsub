@@ -19,6 +19,17 @@ function toBinaryView(binary?: ArrayBuffer | Uint8Array): Uint8Array | null {
   return null
 }
 
+function toClampedView(pixels: Uint8Array | Uint8ClampedArray): Uint8ClampedArray {
+  if (pixels.buffer instanceof ArrayBuffer) {
+    if (pixels instanceof Uint8ClampedArray) return pixels
+    return new Uint8ClampedArray(pixels.buffer, pixels.byteOffset, pixels.byteLength)
+  }
+
+  const ownedPixels = new Uint8ClampedArray(pixels.byteLength)
+  ownedPixels.set(pixels)
+  return ownedPixels
+}
+
 function looksLikePgsBinary(binary: Uint8Array): boolean {
   return binary.length >= 2 && binary[0] === 0x50 && binary[1] === 0x47
 }
@@ -249,9 +260,7 @@ export function binarySearchTimestamp(timestamps: Float64Array, timeMs: number):
 /** Convert worker frame data to SubtitleData. */
 export function convertFrameData(frame: FrameData): SubtitleData {
   const compositionData: SubtitleCompositionData[] = frame.compositions.flatMap((comp) => {
-    const clampedData = new Uint8ClampedArray(comp.rgba.length)
-    clampedData.set(comp.rgba)
-    const trimmed = trimTransparentImageData(clampedData, comp.width, comp.height)
+    const trimmed = trimTransparentImageData(comp.rgba, comp.width, comp.height)
 
     if (!trimmed) return []
 
@@ -266,11 +275,13 @@ export function convertFrameData(frame: FrameData): SubtitleData {
 }
 
 export function trimTransparentImageData(
-  pixels: Uint8ClampedArray,
+  pixels: Uint8Array | Uint8ClampedArray,
   width: number,
   height: number
 ): { pixelData: ImageData; offsetX: number; offsetY: number } | null {
-  if (width <= 0 || height <= 0 || pixels.length !== width * height * 4) {
+  const clampedPixels = toClampedView(pixels)
+
+  if (width <= 0 || height <= 0 || clampedPixels.length !== width * height * 4) {
     return null
   }
 
@@ -279,8 +290,8 @@ export function trimTransparentImageData(
   let maxX = -1
   let maxY = -1
 
-  for (let index = 3; index < pixels.length; index += 4) {
-    if (pixels[index] === 0) continue
+  for (let index = 3; index < clampedPixels.length; index += 4) {
+    if (clampedPixels[index] === 0) continue
 
     const pixelIndex = (index - 3) >> 2
     const y = Math.floor(pixelIndex / width)
@@ -297,11 +308,10 @@ export function trimTransparentImageData(
   }
 
   if (minX === 0 && minY === 0 && maxX === width - 1 && maxY === height - 1) {
-    const untrimmedPixels = new Uint8ClampedArray(pixels.length)
-    untrimmedPixels.set(pixels)
+    const imageDataPixels = clampedPixels as Uint8ClampedArray<ArrayBuffer>
 
     return {
-      pixelData: new ImageData(untrimmedPixels, width, height),
+      pixelData: new ImageData(imageDataPixels, width, height),
       offsetX: 0,
       offsetY: 0
     }
@@ -314,7 +324,7 @@ export function trimTransparentImageData(
   for (let y = 0; y < trimmedHeight; y++) {
     const sourceStart = ((minY + y) * width + minX) * 4
     const sourceEnd = sourceStart + trimmedWidth * 4
-    trimmedPixels.set(pixels.subarray(sourceStart, sourceEnd), y * trimmedWidth * 4)
+    trimmedPixels.set(clampedPixels.subarray(sourceStart, sourceEnd), y * trimmedWidth * 4)
   }
 
   return {
