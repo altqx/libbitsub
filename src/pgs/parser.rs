@@ -7,7 +7,8 @@ use wasm_bindgen::prelude::*;
 
 use super::{
     AssembledObject, DisplaySet, MAX_PGS_BITMAP_PIXELS, ObjectDefinitionSegment,
-    PaletteDefinitionSegment, WindowDefinition, apply_palette, decode_rle_to_indexed,
+    PaletteDefinitionSegment, WindowDefinition, apply_palette_rgba_bytes,
+    decode_rle_to_indexed,
 };
 use crate::utils::binary_search_timestamp;
 
@@ -22,8 +23,10 @@ pub struct PgsParser {
     indexed_cache: HashMap<(u16, u8), DecodedBitmap>,
     /// Last rendered boundary index (for cache invalidation)
     last_boundary_index: Option<usize>,
-    /// Reusable buffer for RGBA output during rendering
-    rgba_buffer: Vec<u32>,
+    /// Incrementally maintained rendering context for the active epoch.
+    cached_context: Option<RenderContext>,
+    /// Highest display-set index applied to the cached context.
+    cached_context_index: Option<usize>,
 }
 
 /// Cached decoded bitmap (indexed pixels, before palette)
@@ -43,7 +46,8 @@ impl PgsParser {
             timestamps_ms: Vec::new(),
             indexed_cache: HashMap::new(),
             last_boundary_index: None,
-            rgba_buffer: Vec::new(),
+            cached_context: None,
+            cached_context_index: None,
         }
     }
 
@@ -55,7 +59,8 @@ impl PgsParser {
         self.timestamps_ms.clear();
         self.indexed_cache.clear();
         self.last_boundary_index = None;
-        self.rgba_buffer.clear();
+        self.cached_context = None;
+        self.cached_context_index = None;
 
         let len = data.len();
 
@@ -214,12 +219,7 @@ impl PgsParser {
 
         // Find boundary (epoch start or acquisition point) for context building
         let boundary_index = self.find_boundary_index(index);
-
-        // Clear cache if we moved to a different epoch/boundary
-        if self.last_boundary_index != Some(boundary_index) {
-            self.indexed_cache.clear();
-            self.last_boundary_index = Some(boundary_index);
-        }
+        self.ensure_context_for_index(boundary_index, index);
 
         // Get current display set
         let ds = &self.display_sets[index];
@@ -233,8 +233,7 @@ impl PgsParser {
         let width = composition.width;
         let height = composition.height;
 
-        // Build context from boundary to current index
-        let context = self.build_context(boundary_index, index);
+        let context = self.cached_context.as_ref()?;
 
         // Find the palette to use
         let palette = context.palettes.get(&composition.palette_id)?;
@@ -281,26 +280,24 @@ impl PgsParser {
                 None => continue,
             };
 
-            if self.rgba_buffer.len() < pixel_count {
-                self.rgba_buffer.resize(pixel_count, 0);
-            }
-            apply_palette(
+            let rgba_len = match pixel_count.checked_mul(4) {
+                Some(rgba_len) => rgba_len,
+                None => continue,
+            };
+
+            let mut rgba = vec![0u8; rgba_len];
+            apply_palette_rgba_bytes(
                 &decoded.indexed,
                 &palette.rgba,
-                &mut self.rgba_buffer[..pixel_count],
+                &mut rgba,
             );
-
-            let rgba_bytes: Vec<u8> = self.rgba_buffer[..pixel_count]
-                .iter()
-                .flat_map(|&color| color.to_le_bytes())
-                .collect();
 
             compositions.push(SubtitleComposition {
                 x: comp_obj.x,
                 y: comp_obj.y,
                 width: decoded.width,
                 height: decoded.height,
-                rgba: rgba_bytes,
+                rgba,
             });
         }
 
@@ -316,6 +313,40 @@ impl PgsParser {
     pub fn clear_cache(&mut self) {
         self.indexed_cache.clear();
         self.last_boundary_index = None;
+        self.cached_context = None;
+        self.cached_context_index = None;
+    }
+
+    fn ensure_context_for_index(&mut self, boundary_index: usize, target_index: usize) {
+        let needs_rebuild = self.last_boundary_index != Some(boundary_index)
+            || self.cached_context.is_none()
+            || self
+                .cached_context_index
+                .is_none_or(|cached_index| target_index < cached_index);
+
+        if needs_rebuild {
+            self.indexed_cache.clear();
+            self.last_boundary_index = Some(boundary_index);
+
+            let mut context = RenderContext::new();
+            self.apply_display_sets(&mut context, boundary_index, target_index);
+            self.cached_context = Some(context);
+            self.cached_context_index = Some(target_index);
+            return;
+        }
+
+        let Some(cached_index) = self.cached_context_index else {
+            return;
+        };
+
+        if cached_index >= target_index {
+            return;
+        }
+
+        let mut context = self.cached_context.take().unwrap_or_else(RenderContext::new);
+        self.apply_display_sets(&mut context, cached_index + 1, target_index);
+        self.cached_context = Some(context);
+        self.cached_context_index = Some(target_index);
     }
 
     /// Find the boundary index (epoch start or acquisition point) before the given index.
@@ -330,43 +361,10 @@ impl PgsParser {
         0
     }
 
-    /// Build rendering context from boundary to target index.
-    fn build_context(&self, boundary_index: usize, target_index: usize) -> RenderContext {
-        let mut context = RenderContext::new();
-
-        for i in boundary_index..=target_index {
-            let ds = &self.display_sets[i];
-
-            // Process objects - need to handle multi-segment objects correctly
-            for obj in &ds.objects {
-                if obj.is_first_in_sequence() {
-                    context.object_parts.insert(obj.id, vec![obj.clone()]);
-                } else if let Some(parts) = context.object_parts.get_mut(&obj.id) {
-                    parts.push(obj.clone());
-                }
-            }
-
-            // Latest palette wins (by ID and version)
-            for palette in &ds.palettes {
-                context.palettes.insert(palette.id, palette.clone());
-            }
-
-            // Latest window wins
-            for wds in &ds.windows {
-                for window in &wds.windows {
-                    context.windows.insert(window.id, *window);
-                }
-            }
+    fn apply_display_sets(&self, context: &mut RenderContext, start_index: usize, end_index: usize) {
+        for i in start_index..=end_index {
+            context.apply_display_set(&self.display_sets[i]);
         }
-
-        // Assemble multi-part objects
-        for (id, parts) in &context.object_parts {
-            if let Some(assembled) = AssembledObject::from_segments(parts) {
-                context.objects.insert(*id, assembled);
-            }
-        }
-
-        context
     }
 
     fn bitmap_pixel_count(width: u16, height: u16) -> Option<usize> {
@@ -413,17 +411,53 @@ impl RenderContext {
             windows: HashMap::new(),
         }
     }
+
+    fn apply_display_set(&mut self, ds: &DisplaySet) {
+        let mut updated_object_ids = Vec::new();
+
+        for obj in &ds.objects {
+            if obj.is_first_in_sequence() {
+                self.object_parts.insert(obj.id, vec![obj.clone()]);
+                updated_object_ids.push(obj.id);
+            } else if let Some(parts) = self.object_parts.get_mut(&obj.id) {
+                parts.push(obj.clone());
+                if !updated_object_ids.contains(&obj.id) {
+                    updated_object_ids.push(obj.id);
+                }
+            }
+        }
+
+        for object_id in updated_object_ids {
+            if let Some(parts) = self.object_parts.get(&object_id) {
+                if let Some(assembled) = AssembledObject::from_segments(parts) {
+                    self.objects.insert(object_id, assembled);
+                } else {
+                    self.objects.remove(&object_id);
+                }
+            }
+        }
+
+        for palette in &ds.palettes {
+            self.palettes.insert(palette.id, palette.clone());
+        }
+
+        for wds in &ds.windows {
+            for window in &wds.windows {
+                self.windows.insert(window.id, *window);
+            }
+        }
+    }
 }
 
 /// A single subtitle composition element.
 #[wasm_bindgen]
 #[derive(Clone)]
 pub struct SubtitleComposition {
-    x: u16,
-    y: u16,
-    width: u16,
-    height: u16,
-    rgba: Vec<u8>,
+    pub(crate) x: u16,
+    pub(crate) y: u16,
+    pub(crate) width: u16,
+    pub(crate) height: u16,
+    pub(crate) rgba: Vec<u8>,
 }
 
 #[wasm_bindgen]
@@ -458,9 +492,9 @@ impl SubtitleComposition {
 /// A complete subtitle frame with all compositions.
 #[wasm_bindgen]
 pub struct SubtitleFrame {
-    width: u16,
-    height: u16,
-    compositions: Vec<SubtitleComposition>,
+    pub(crate) width: u16,
+    pub(crate) height: u16,
+    pub(crate) compositions: Vec<SubtitleComposition>,
 }
 
 #[wasm_bindgen]
@@ -549,7 +583,8 @@ mod tests {
             timestamps_ms: vec![0],
             indexed_cache: HashMap::new(),
             last_boundary_index: None,
-            rgba_buffer: Vec::new(),
+            cached_context: None,
+            cached_context_index: None,
         };
 
         let frame = parser.render_at_index(0).expect("frame should exist");

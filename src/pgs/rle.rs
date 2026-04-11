@@ -225,6 +225,30 @@ pub fn apply_palette(indexed: &[u8], palette: &[u32], target: &mut [u32]) {
     }
 }
 
+/// Apply a palette to indexed pixel data, producing RGBA bytes.
+#[inline]
+pub fn apply_palette_rgba_bytes(indexed: &[u8], palette: &[u32], target: &mut [u8]) {
+    let len = indexed.len().min(target.len() / 4);
+
+    if palette.len() >= 256 {
+        for (pixel_index, &palette_index) in indexed.iter().take(len).enumerate() {
+            let start = pixel_index * 4;
+            target[start..start + 4].copy_from_slice(&palette[palette_index as usize].to_le_bytes());
+        }
+    } else {
+        let palette_len = palette.len();
+        for (pixel_index, &palette_index) in indexed.iter().take(len).enumerate() {
+            let start = pixel_index * 4;
+            let rgba = if (palette_index as usize) < palette_len {
+                palette[palette_index as usize]
+            } else {
+                0
+            };
+            target[start..start + 4].copy_from_slice(&rgba.to_le_bytes());
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
