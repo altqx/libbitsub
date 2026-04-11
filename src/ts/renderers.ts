@@ -34,6 +34,7 @@ import { WebGL2Renderer, isWebGL2Supported } from './webgl2-renderer'
 /** Default display settings */
 const DEFAULT_DISPLAY_SETTINGS: SubtitleDisplaySettings = {
   scale: 1.0,
+  aspectMode: 'stretch',
   verticalOffset: 0,
   horizontalOffset: 0,
   horizontalAlign: 'center',
@@ -212,6 +213,9 @@ abstract class BaseVideoSubtitleRenderer {
     }
 
     nextSettings.scale = Math.max(0.1, Math.min(3.0, nextSettings.scale))
+    if (!['stretch', 'contain', 'cover'].includes(nextSettings.aspectMode)) {
+      nextSettings.aspectMode = DEFAULT_DISPLAY_SETTINGS.aspectMode
+    }
     nextSettings.verticalOffset = Math.max(-50, Math.min(50, nextSettings.verticalOffset))
     nextSettings.horizontalOffset = Math.max(-50, Math.min(50, nextSettings.horizontalOffset))
     nextSettings.bottomPadding = Math.max(0, Math.min(50, nextSettings.bottomPadding))
@@ -557,18 +561,37 @@ abstract class BaseVideoSubtitleRenderer {
       return { scaleX: 1, scaleY: 1, shiftX: 0, shiftY: 0, opacity: this.displaySettings.opacity }
     }
 
-    const baseScaleX = this.canvas.width / data.width
-    const baseScaleY = this.canvas.height / data.height
+    const safeDataWidth = data.width > 0 ? data.width : this.canvas.width
+    const safeDataHeight = data.height > 0 ? data.height : this.canvas.height
+    const stretchScaleX = this.canvas.width / safeDataWidth
+    const stretchScaleY = this.canvas.height / safeDataHeight
     const bounds =
       getSubtitleBounds(data) ??
       ({
         x: 0,
         y: 0,
-        width: data.width,
-        height: data.height
+        width: safeDataWidth,
+        height: safeDataHeight
       } as const)
-    const { scale, verticalOffset, horizontalOffset, horizontalAlign, bottomPadding, safeArea, opacity } =
+    const { scale, aspectMode, verticalOffset, horizontalOffset, horizontalAlign, bottomPadding, safeArea, opacity } =
       this.displaySettings
+
+    let baseScaleX = stretchScaleX
+    let baseScaleY = stretchScaleY
+    let frameShiftX = 0
+    let frameShiftY = 0
+
+    if (aspectMode !== 'stretch') {
+      const uniformScale =
+        aspectMode === 'cover'
+          ? Math.max(stretchScaleX, stretchScaleY)
+          : Math.min(stretchScaleX, stretchScaleY)
+
+      baseScaleX = uniformScale
+      baseScaleY = uniformScale
+      frameShiftX = (this.canvas.width - safeDataWidth * uniformScale) / 2
+      frameShiftY = (this.canvas.height - safeDataHeight * uniformScale) / 2
+    }
 
     const anchorX =
       horizontalAlign === 'left'
@@ -580,8 +603,8 @@ abstract class BaseVideoSubtitleRenderer {
 
     const scaleX = baseScaleX * scale
     const scaleY = baseScaleY * scale
-    const anchorShiftX = anchorX * baseScaleX * (1 - scale)
-    const anchorShiftY = anchorY * baseScaleY * (1 - scale)
+    const anchorShiftX = frameShiftX + anchorX * baseScaleX * (1 - scale)
+    const anchorShiftY = frameShiftY + anchorY * baseScaleY * (1 - scale)
 
     let shiftX = anchorShiftX + (horizontalOffset / 100) * this.canvas.width
     let shiftY = anchorShiftY + (verticalOffset / 100) * this.canvas.height

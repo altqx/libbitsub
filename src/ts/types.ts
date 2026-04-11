@@ -18,6 +18,8 @@ export type SubtitleFormatName = 'pgs' | 'vobsub'
 
 export type SubtitleHorizontalAlign = 'left' | 'center' | 'right'
 
+export type SubtitleAspectMode = 'stretch' | 'contain' | 'cover'
+
 // =============================================================================
 // Subtitle Data Types
 // =============================================================================
@@ -129,6 +131,8 @@ export interface VideoVobSubOptions extends VideoSubtitleOptions {
 export interface SubtitleDisplaySettings {
   /** Scale factor for subtitles (1.0 = 100%, 0.5 = 50%, 2.0 = 200%) */
   scale: number
+  /** How subtitle track coordinates are mapped into the video content box */
+  aspectMode: SubtitleAspectMode
   /** Vertical offset as percentage of video height (-50 to 50, negative = up, positive = down) */
   verticalOffset: number
   /** Horizontal offset as percentage of video width (-50 to 50, negative = left, positive = right) */

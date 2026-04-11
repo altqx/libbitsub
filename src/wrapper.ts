@@ -7,6 +7,7 @@
 export type {
   AutoSubtitleSource,
   AutoVideoSubtitleOptions,
+  SubtitleAspectMode,
   SubtitleCueBounds,
   SubtitleCueMetadata,
   SubtitleData,

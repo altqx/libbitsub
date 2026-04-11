@@ -25,6 +25,7 @@ export {
   detectSubtitleFormat,
   type AutoSubtitleSource,
   type AutoVideoSubtitleOptions,
+  type SubtitleAspectMode,
   type SubtitleCueBounds,
   type SubtitleCueMetadata,
   type SubtitleData,
