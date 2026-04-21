@@ -938,7 +938,7 @@ export class PgsRenderer extends BaseVideoSubtitleRenderer {
           this.state.pendingRenders.delete(index)
           this.emitCacheChange(this.state.frameCache.size, this.state.pendingRenders.size)
           // Force re-render on next frame by resetting lastRenderedIndex
-          if (this.findCurrentIndex(this.video.currentTime) === index) {
+          if (this.findCurrentIndex(this.video.currentTime + this.timeOffset) === index) {
             this.lastRenderedIndex = -1
           }
         })
@@ -1308,7 +1308,7 @@ export class VobSubRenderer extends BaseVideoSubtitleRenderer {
           this.state.pendingRenders.delete(index)
           this.emitCacheChange(this.state.frameCache.size, this.state.pendingRenders.size)
           // Force re-render on next frame by resetting lastRenderedIndex
-          if (this.findCurrentIndex(this.video.currentTime) === index) {
+          if (this.findCurrentIndex(this.video.currentTime + this.timeOffset) === index) {
             this.lastRenderedIndex = -1
           }
         })
