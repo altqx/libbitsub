@@ -74,6 +74,45 @@ export interface SubtitleData {
   compositionData: SubtitleCompositionData[]
 }
 
+export type SubtitleFrameCropMode = 'bounds' | 'screen'
+
+export interface SubtitleFrameRenderOptions {
+  /** Compose only the visible cue bounds or the full subtitle presentation area. */
+  crop?: SubtitleFrameCropMode
+}
+
+export interface SubtitleRenderedFrameData {
+  /** Flattened RGBA pixels for the composed subtitle frame export. */
+  imageData: ImageData
+  /** Tight cue bounds inside the original subtitle presentation area. */
+  bounds: SubtitleCueBounds | null
+  /** Top-left draw offset inside the original subtitle presentation area. */
+  offsetX: number
+  /** Top-left draw offset inside the original subtitle presentation area. */
+  offsetY: number
+  /** Original subtitle presentation width. */
+  screenWidth: number
+  /** Original subtitle presentation height. */
+  screenHeight: number
+  /** Crop mode used to compose imageData. */
+  crop: SubtitleFrameCropMode
+  /** Number of source compositions folded into the export. */
+  compositionCount: number
+}
+
+export type SubtitleFrameCanvasTarget =
+  | HTMLCanvasElement
+  | OffscreenCanvas
+  | CanvasRenderingContext2D
+  | OffscreenCanvasRenderingContext2D
+
+export interface SubtitleFrameCanvasOptions extends SubtitleFrameRenderOptions {
+  /** Resize the target canvas to the rendered frame size before drawing. */
+  resizeCanvas?: boolean
+  /** Clear the target canvas before drawing. */
+  clearCanvas?: boolean
+}
+
 /** A single composition element. */
 export interface SubtitleCompositionData {
   /** The compiled pixel data of the subtitle. */

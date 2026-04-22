@@ -10,6 +10,8 @@ import type {
   SubtitleDiagnosticWarning,
   SubtitleCueMetadata,
   SubtitleCompositionData,
+  SubtitleFrameRenderOptions,
+  SubtitleRenderedFrameData,
   SubtitleParserMetadata,
   SubtitleFrame,
   SubtitleFormatName,
@@ -26,6 +28,7 @@ import {
   normalizeSubtitleError,
   warningFromRenderIssue
 } from './diagnostics'
+import { renderFrameData } from './frame-export'
 import { getWasm } from './wasm'
 import { detectSubtitleFormat, getSubtitleBounds, isMksSource, trimTransparentImageData } from './utils'
 
@@ -157,6 +160,22 @@ export class PgsParser {
     const index = this.findIndexAtTimestamp(timeSeconds)
     if (index < 0) return undefined
     return this.renderAtIndex(index)
+  }
+
+  /**
+   * Render flattened frame pixels at the given index.
+   */
+  renderFrameDataAtIndex(index: number, options: SubtitleFrameRenderOptions = {}): SubtitleRenderedFrameData | undefined {
+    const frame = this.renderAtIndex(index)
+    return frame ? renderFrameData(frame, options) ?? undefined : undefined
+  }
+
+  /**
+   * Render flattened frame pixels at the given timestamp in seconds.
+   */
+  renderFrameDataAtTimestamp(timeSeconds: number, options: SubtitleFrameRenderOptions = {}): SubtitleRenderedFrameData | undefined {
+    const frame = this.renderAtTimestamp(timeSeconds)
+    return frame ? renderFrameData(frame, options) ?? undefined : undefined
   }
 
   /**
@@ -392,6 +411,22 @@ export class VobSubParserLowLevel {
     const index = this.findIndexAtTimestamp(timeSeconds)
     if (index < 0) return undefined
     return this.renderAtIndex(index)
+  }
+
+  /**
+   * Render flattened frame pixels at the given index.
+   */
+  renderFrameDataAtIndex(index: number, options: SubtitleFrameRenderOptions = {}): SubtitleRenderedFrameData | undefined {
+    const frame = this.renderAtIndex(index)
+    return frame ? renderFrameData(frame, options) ?? undefined : undefined
+  }
+
+  /**
+   * Render flattened frame pixels at the given timestamp in seconds.
+   */
+  renderFrameDataAtTimestamp(timeSeconds: number, options: SubtitleFrameRenderOptions = {}): SubtitleRenderedFrameData | undefined {
+    const frame = this.renderAtTimestamp(timeSeconds)
+    return frame ? renderFrameData(frame, options) ?? undefined : undefined
   }
 
   /**
@@ -722,6 +757,22 @@ export class UnifiedSubtitleParser {
     if (!result) return undefined
 
     return this.convertResult(result)
+  }
+
+  /**
+   * Render flattened frame pixels at the given index.
+   */
+  renderFrameDataAtIndex(index: number, options: SubtitleFrameRenderOptions = {}): SubtitleRenderedFrameData | undefined {
+    const frame = this.renderAtIndex(index)
+    return frame ? renderFrameData(frame, options) ?? undefined : undefined
+  }
+
+  /**
+   * Render flattened frame pixels at the given timestamp in seconds.
+   */
+  renderFrameDataAtTimestamp(timeSeconds: number, options: SubtitleFrameRenderOptions = {}): SubtitleRenderedFrameData | undefined {
+    const frame = this.renderAtTimestamp(timeSeconds)
+    return frame ? renderFrameData(frame, options) ?? undefined : undefined
   }
 
   /**

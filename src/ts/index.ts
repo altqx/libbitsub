@@ -8,6 +8,11 @@ export type {
   SubtitleAspectMode,
   SubtitleCacheStats,
   AutoVideoSubtitleOptions,
+  SubtitleFrameCanvasOptions,
+  SubtitleFrameCanvasTarget,
+  SubtitleFrameCropMode,
+  SubtitleFrameRenderOptions,
+  SubtitleRenderedFrameData,
   SubtitleCueBounds,
   SubtitleCueMetadata,
   SubtitleData,
@@ -57,6 +62,9 @@ export {
   setCacheLimit,
   setCachedFrame
 } from './utils'
+
+// Frame export helpers
+export { renderFrameData, toBlob, toCanvas, toImageBitmap } from './frame-export'
 
 // Parsers
 export { PgsParser, VobSubParserLowLevel, UnifiedSubtitleParser } from './parsers'

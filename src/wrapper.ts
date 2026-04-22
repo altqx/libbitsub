@@ -9,6 +9,11 @@ export type {
   AutoVideoSubtitleOptions,
   SubtitleAspectMode,
   SubtitleCacheStats,
+  SubtitleFrameCanvasOptions,
+  SubtitleFrameCanvasTarget,
+  SubtitleFrameCropMode,
+  SubtitleFrameRenderOptions,
+  SubtitleRenderedFrameData,
   SubtitleCueBounds,
   SubtitleCueMetadata,
   SubtitleData,
@@ -44,6 +49,9 @@ export { isWebGPUSupported } from './ts/webgpu-renderer'
 
 // Re-export parsers
 export { PgsParser, VobSubParserLowLevel, UnifiedSubtitleParser } from './ts/parsers'
+
+// Re-export frame export helpers
+export { renderFrameData, toBlob, toCanvas, toImageBitmap } from './ts/frame-export'
 
 // Re-export renderers
 export { PgsRenderer, VobSubRenderer, createAutoSubtitleRenderer, type SubtitleRendererStats } from './ts/renderers'
