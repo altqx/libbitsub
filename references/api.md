@@ -9,6 +9,7 @@
 | `isWebGPUSupported` | `() => boolean` | |
 | `detectSubtitleFormat` | `(source: AutoSubtitleSource) => 'pgs' \| 'vobsub' \| null` | Uses file hints and binary magic bytes, including `.mks` sources carrying embedded `S_VOBSUB` |
 | `createAutoSubtitleRenderer` | `(options: AutoVideoSubtitleOptions) => PgsRenderer \| VobSubRenderer` | Throws if format cannot be determined |
+| `openSubtitles` | `(source: AutoSubtitleSource, options?: SubtitleDiagnosticsOptions) => Promise<OpenedSubtitles>` | Initializes WASM, auto-detects the format, and returns a normalized low-level handle |
 | `renderFrameData` | `(frame: SubtitleData, options?: SubtitleFrameRenderOptions) => SubtitleRenderedFrameData \| null` | Composes subtitle compositions into a single `ImageData` export |
 | `toCanvas` | `(frame: SubtitleData \| SubtitleRenderedFrameData, target?: SubtitleFrameCanvasTarget, options?: SubtitleFrameCanvasOptions) => HTMLCanvasElement \| OffscreenCanvas` | Draws a frame export to a new or existing canvas or 2D context |
 | `toImageBitmap` | `(frame: SubtitleData \| SubtitleRenderedFrameData, options?: SubtitleFrameRenderOptions) => Promise<ImageBitmap>` | Creates an `ImageBitmap` from a composed subtitle frame |
@@ -125,6 +126,37 @@ Notes:
 - `crop: 'screen'` preserves the full subtitle presentation width and height.
 - `renderFrameData()` returns `null` when `crop: 'bounds'` is requested for an empty frame with no visible subtitle pixels.
 - `toCanvas()` creates a new canvas when `target` is omitted. Existing canvas targets resize by default; existing 2D contexts draw in place by default.
+
+---
+
+## `openSubtitles()`
+
+```ts
+const subtitles = await openSubtitles(source, options)
+```
+
+`openSubtitles()` is a one-shot low-level helper built on top of `UnifiedSubtitleParser.loadAuto()`. It calls `initWasm()` for you, loads the in-memory subtitle source, and returns a normalized handle with format-agnostic render and inspection methods.
+
+```ts
+interface OpenedSubtitles {
+  readonly format: SubtitleFormatName
+  readonly metadata: SubtitleParserMetadata
+  readonly timestamps: Float64Array
+  renderAtIndex(index: number): SubtitleData | undefined
+  renderAtTimestamp(timeSeconds: number): SubtitleData | undefined
+  renderFrameDataAtIndex(index: number, options?: SubtitleFrameRenderOptions): SubtitleRenderedFrameData | undefined
+  renderFrameDataAtTimestamp(timeSeconds: number, options?: SubtitleFrameRenderOptions): SubtitleRenderedFrameData | undefined
+  getCueMetadata(index: number): SubtitleCueMetadata | null
+  getLastRenderIssue(): string | null
+  clearCache(): void
+  dispose(): void
+}
+```
+
+Notes:
+
+- `format`, `metadata`, and `timestamps` are snapshots taken when the subtitle source is opened.
+- This is still the low-level in-memory parser path. Provide binary data via `data` or `subData`; `fileName`, `subUrl`, `idxContent`, and `idxUrl` act as format hints or companion metadata.
 
 ---
 

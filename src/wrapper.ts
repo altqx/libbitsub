@@ -7,6 +7,7 @@
 export type {
   AutoSubtitleSource,
   AutoVideoSubtitleOptions,
+  OpenedSubtitles,
   SubtitleAspectMode,
   SubtitleCacheStats,
   SubtitleFrameCanvasOptions,
@@ -48,7 +49,7 @@ export { initWasm, isWasmInitialized } from './ts/wasm'
 export { isWebGPUSupported } from './ts/webgpu-renderer'
 
 // Re-export parsers
-export { PgsParser, VobSubParserLowLevel, UnifiedSubtitleParser } from './ts/parsers'
+export { PgsParser, VobSubParserLowLevel, UnifiedSubtitleParser, openSubtitles } from './ts/parsers'
 
 // Re-export frame export helpers
 export { renderFrameData, toBlob, toCanvas, toImageBitmap } from './ts/frame-export'

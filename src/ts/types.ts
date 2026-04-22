@@ -157,6 +157,31 @@ export interface SubtitleParserMetadata {
   hasIdxMetadata?: boolean
 }
 
+export interface OpenedSubtitles {
+  /** Detected subtitle format after the source has been opened. */
+  readonly format: SubtitleFormatName
+  /** Snapshot of the loaded parser metadata. */
+  readonly metadata: SubtitleParserMetadata
+  /** Snapshot of subtitle timestamps in milliseconds. */
+  readonly timestamps: Float64Array
+  /** Render subtitle data for a cue index. */
+  renderAtIndex(index: number): SubtitleData | undefined
+  /** Render subtitle data at a timestamp in seconds. */
+  renderAtTimestamp(timeSeconds: number): SubtitleData | undefined
+  /** Render flattened frame pixels for a cue index. */
+  renderFrameDataAtIndex(index: number, options?: SubtitleFrameRenderOptions): SubtitleRenderedFrameData | undefined
+  /** Render flattened frame pixels at a timestamp in seconds. */
+  renderFrameDataAtTimestamp(timeSeconds: number, options?: SubtitleFrameRenderOptions): SubtitleRenderedFrameData | undefined
+  /** Get cue metadata for a specific cue index. */
+  getCueMetadata(index: number): SubtitleCueMetadata | null
+  /** Get the latest non-fatal render issue. */
+  getLastRenderIssue(): string | null
+  /** Clear parser-side caches. */
+  clearCache(): void
+  /** Dispose parser resources. */
+  dispose(): void
+}
+
 // =============================================================================
 // Video Renderer Options
 // =============================================================================

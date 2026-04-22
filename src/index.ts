@@ -15,7 +15,7 @@ export {
 } from './wrapper'
 
 // Low-level parsers for programmatic use
-export { PgsParser, VobSubParserLowLevel, UnifiedSubtitleParser } from './wrapper'
+export { PgsParser, VobSubParserLowLevel, UnifiedSubtitleParser, openSubtitles } from './wrapper'
 
 // Utility exports
 export {
@@ -32,6 +32,7 @@ export {
   SubtitleDiagnosticError,
   type AutoSubtitleSource,
   type AutoVideoSubtitleOptions,
+  type OpenedSubtitles,
   type SubtitleAspectMode,
   type SubtitleCacheStats,
   type SubtitleCueBounds,

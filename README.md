@@ -218,7 +218,7 @@ const lastRender = renderer.getLastRenderInfo()
 Low-level parsers expose the same model:
 
 ```ts
-import { PgsParser, UnifiedSubtitleParser, VobSubParserLowLevel } from 'libbitsub'
+import { PgsParser, UnifiedSubtitleParser, VobSubParserLowLevel, openSubtitles } from 'libbitsub'
 
 const vob = new VobSubParserLowLevel()
 vob.loadFromMks(new Uint8Array(mksBuffer))
@@ -226,9 +226,13 @@ vob.loadFromMks(new Uint8Array(mksBuffer))
 const parser = new UnifiedSubtitleParser()
 const detected = parser.loadAuto({ data: subtitleBytes, fileName: 'track.mks' })
 
+const opened = await openSubtitles({ data: subtitleBytes, fileName: 'track.mks' })
+
 console.log(detected)
 console.log(parser.getMetadata())
 console.log(parser.getCueMetadata(0))
+console.log(opened.format)
+opened.dispose()
 ```
 
 Metadata includes:
@@ -238,6 +242,33 @@ Metadata includes:
 - Rendered cue bounds when available
 - PGS composition count, palette ID, composition state
 - VobSub language, track ID, IDX metadata presence, file position where available
+
+## One-shot auto API
+
+If you do not care whether the input is PGS or VobSub and only want one stable low-level surface, use `openSubtitles()`.
+
+```ts
+import { openSubtitles } from 'libbitsub'
+
+const subtitles = await openSubtitles({
+  data: subtitleBytes,
+  fileName: 'track.sup'
+})
+
+console.log(subtitles.format)
+console.log(subtitles.metadata)
+console.log(subtitles.timestamps)
+
+const frame = subtitles.renderAtTimestamp(120.5)
+const rendered = subtitles.renderFrameDataAtTimestamp(120.5)
+const cue = subtitles.getCueMetadata(0)
+
+subtitles.dispose()
+```
+
+`openSubtitles()` initializes WASM for you, auto-detects the format, loads the subtitle source, and returns a normalized handle with snapshot properties plus shared low-level helpers such as `renderAtIndex()`, `renderAtTimestamp()`, `renderFrameDataAtIndex()`, `renderFrameDataAtTimestamp()`, `getCueMetadata()`, `getLastRenderIssue()`, `clearCache()`, and `dispose()`.
+
+Like `UnifiedSubtitleParser.loadAuto()`, this is a low-level in-memory API: pass binary subtitle content via `data` or `subData`, and optionally include `fileName`, `idxContent`, `idxUrl`, or `subUrl` as format hints or companion metadata.
 
 ## Frame export helpers
 
@@ -550,6 +581,7 @@ WebGL2 and Canvas2D fallback remain automatic. Use `onWebGPUFallback`, `onWebGL2
 - `isWebGPUSupported(): boolean` checks WebGPU support.
 - `detectSubtitleFormat(source: AutoSubtitleSource): 'pgs' | 'vobsub' | null` detects the bitmap subtitle format from file hints or binary data.
 - `createAutoSubtitleRenderer(options: AutoVideoSubtitleOptions): PgsRenderer | VobSubRenderer` creates a high-level renderer after format detection.
+- `openSubtitles(source, options?): Promise<OpenedSubtitles>` initializes WASM, auto-detects the low-level format, and returns a normalized parser handle.
 - `renderFrameData(frame, options?): SubtitleRenderedFrameData | null` composes a `SubtitleData` frame into exportable pixels.
 - `toCanvas(frame, target?, options?): HTMLCanvasElement | OffscreenCanvas` draws a rendered frame to a new or existing canvas/context.
 - `toImageBitmap(frame, options?): Promise<ImageBitmap>` creates an `ImageBitmap` from a subtitle frame export.

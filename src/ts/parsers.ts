@@ -5,6 +5,7 @@
 
 import type {
   AutoSubtitleSource,
+  OpenedSubtitles,
   SubtitleDiagnosticsOptions,
   SubtitleData,
   SubtitleDiagnosticWarning,
@@ -29,6 +30,7 @@ import {
   warningFromRenderIssue
 } from './diagnostics'
 import { renderFrameData } from './frame-export'
+import { initWasm } from './wasm'
 import { getWasm } from './wasm'
 import { detectSubtitleFormat, getSubtitleBounds, isMksSource, trimTransparentImageData } from './utils'
 
@@ -846,5 +848,48 @@ export class UnifiedSubtitleParser {
     if (this.debug && !this.onWarning) {
       console.warn(formatSubtitleWarningForConsole(warning), warning.details ?? {})
     }
+  }
+}
+
+/**
+ * Open subtitle data with automatic format detection and return a normalized low-level handle.
+ */
+export async function openSubtitles(
+  source: AutoSubtitleSource,
+  options: SubtitleDiagnosticsOptions = {}
+): Promise<OpenedSubtitles> {
+  await initWasm()
+
+  const parser = new UnifiedSubtitleParser(options)
+
+  try {
+    const format = parser.loadAuto(source)
+    const metadata = parser.getMetadata()
+
+    if (!metadata) {
+      throw createSubtitleDiagnosticError('UNKNOWN', 'Subtitle source loaded without parser metadata.', {
+        format
+      })
+    }
+
+    const timestamps = parser.getTimestamps()
+
+    return {
+      format,
+      metadata,
+      timestamps,
+      renderAtIndex: (index) => parser.renderAtIndex(index),
+      renderAtTimestamp: (timeSeconds) => parser.renderAtTimestamp(timeSeconds),
+      renderFrameDataAtIndex: (index, renderOptions = {}) => parser.renderFrameDataAtIndex(index, renderOptions),
+      renderFrameDataAtTimestamp: (timeSeconds, renderOptions = {}) =>
+        parser.renderFrameDataAtTimestamp(timeSeconds, renderOptions),
+      getCueMetadata: (index) => parser.getCueMetadata(index),
+      getLastRenderIssue: () => parser.getLastRenderIssue(),
+      clearCache: () => parser.clearCache(),
+      dispose: () => parser.dispose()
+    }
+  } catch (error) {
+    parser.dispose()
+    throw error
   }
 }

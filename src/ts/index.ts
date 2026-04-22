@@ -5,6 +5,7 @@
 // Types
 export type {
   AutoSubtitleSource,
+  OpenedSubtitles,
   SubtitleAspectMode,
   SubtitleCacheStats,
   AutoVideoSubtitleOptions,
@@ -67,7 +68,7 @@ export {
 export { renderFrameData, toBlob, toCanvas, toImageBitmap } from './frame-export'
 
 // Parsers
-export { PgsParser, VobSubParserLowLevel, UnifiedSubtitleParser } from './parsers'
+export { PgsParser, VobSubParserLowLevel, UnifiedSubtitleParser, openSubtitles } from './parsers'
 
 // Renderers
 export { PgsRenderer, VobSubRenderer, createAutoSubtitleRenderer } from './renderers'

@@ -175,6 +175,30 @@ Key points:
 - `toCanvas(frame)` creates a new export-sized canvas.
 - Passing an existing canvas resizes it by default. Passing an existing 2D context draws in place by default.
 
+## One-shot auto opener
+
+When the caller only wants a stable low-level surface and does not care whether the source is PGS or VobSub, use `openSubtitles()` instead of manually combining `initWasm()`, `UnifiedSubtitleParser`, and `loadAuto()`.
+
+```ts
+import { openSubtitles } from 'libbitsub'
+
+const subtitles = await openSubtitles({
+  data: subtitleBytes,
+  fileName: 'track.sup'
+})
+
+console.log(subtitles.format)
+console.log(subtitles.metadata)
+console.log(subtitles.timestamps)
+
+const frame = subtitles.renderAtTimestamp(120.5)
+const rendered = subtitles.renderFrameDataAtTimestamp(120.5)
+
+subtitles.dispose()
+```
+
+The returned handle exposes the format-agnostic low-level operations you usually need: `renderAtIndex()`, `renderAtTimestamp()`, `renderFrameDataAtIndex()`, `renderFrameDataAtTimestamp()`, `getCueMetadata()`, `getLastRenderIssue()`, `clearCache()`, and `dispose()`.
+
 ## Cache and prefetch
 
 ```ts
@@ -263,7 +287,7 @@ renderer.getLastRenderInfo()     // last render attempt in debug mode
 Use when you need programmatic access to subtitle data without video integration.
 
 ```ts
-import { initWasm, PgsParser, VobSubParserLowLevel, UnifiedSubtitleParser } from 'libbitsub'
+import { initWasm, PgsParser, VobSubParserLowLevel, UnifiedSubtitleParser, openSubtitles } from 'libbitsub'
 
 await initWasm()
 
@@ -290,6 +314,11 @@ mksVob.loadFromMks(new Uint8Array(mksBuffer))
 // Unified auto-detect
 const parser = new UnifiedSubtitleParser({ debug: true })
 const detected = parser.loadAuto({ data: subtitleBytes, fileName: 'track.sup' })
+
+// One-shot open + normalized surface
+const opened = await openSubtitles({ data: subtitleBytes, fileName: 'track.sup' })
+const openedFrame = opened.renderAtTimestamp(120.5)
+opened.dispose()
 ```
 
 ## GPU backends
