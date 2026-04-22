@@ -9,6 +9,10 @@
 | `isWebGPUSupported` | `() => boolean` | |
 | `detectSubtitleFormat` | `(source: AutoSubtitleSource) => 'pgs' \| 'vobsub' \| null` | Uses file hints and binary magic bytes, including `.mks` sources carrying embedded `S_VOBSUB` |
 | `createAutoSubtitleRenderer` | `(options: AutoVideoSubtitleOptions) => PgsRenderer \| VobSubRenderer` | Throws if format cannot be determined |
+| `renderFrameData` | `(frame: SubtitleData, options?: SubtitleFrameRenderOptions) => SubtitleRenderedFrameData \| null` | Composes subtitle compositions into a single `ImageData` export |
+| `toCanvas` | `(frame: SubtitleData \| SubtitleRenderedFrameData, target?: SubtitleFrameCanvasTarget, options?: SubtitleFrameCanvasOptions) => HTMLCanvasElement \| OffscreenCanvas` | Draws a frame export to a new or existing canvas or 2D context |
+| `toImageBitmap` | `(frame: SubtitleData \| SubtitleRenderedFrameData, options?: SubtitleFrameRenderOptions) => Promise<ImageBitmap>` | Creates an `ImageBitmap` from a composed subtitle frame |
+| `toBlob` | `(frame: SubtitleData \| SubtitleRenderedFrameData, type?: string, quality?: number, options?: SubtitleFrameRenderOptions) => Promise<Blob>` | Encodes a composed subtitle frame, defaulting to PNG |
 | `SubtitleDiagnosticError` | `class extends Error` | Structured diagnostic error with `code`, `format`, and `details` |
 | `createSubtitleDiagnosticError` | `(code, message, options?) => SubtitleDiagnosticError` | Create a typed diagnostics error manually |
 | `normalizeSubtitleError` | `(error, context?) => SubtitleDiagnosticError` | Map generic errors into stable libbitsub diagnostic codes |
@@ -83,6 +87,47 @@ interface SubtitleDisplaySettings {
 
 ---
 
+## Frame export helpers
+
+```ts
+type SubtitleFrameCropMode = 'bounds' | 'screen'
+
+interface SubtitleFrameRenderOptions {
+  crop?: SubtitleFrameCropMode
+}
+
+interface SubtitleRenderedFrameData {
+  imageData: ImageData
+  bounds: SubtitleCueBounds | null
+  offsetX: number
+  offsetY: number
+  screenWidth: number
+  screenHeight: number
+  crop: SubtitleFrameCropMode
+  compositionCount: number
+}
+
+type SubtitleFrameCanvasTarget =
+  | HTMLCanvasElement
+  | OffscreenCanvas
+  | CanvasRenderingContext2D
+  | OffscreenCanvasRenderingContext2D
+
+interface SubtitleFrameCanvasOptions extends SubtitleFrameRenderOptions {
+  resizeCanvas?: boolean
+  clearCanvas?: boolean
+}
+```
+
+Notes:
+
+- `crop: 'bounds'` is the default. It returns a tightly cropped `ImageData` plus `offsetX` and `offsetY` for re-placement into the original subtitle presentation area.
+- `crop: 'screen'` preserves the full subtitle presentation width and height.
+- `renderFrameData()` returns `null` when `crop: 'bounds'` is requested for an empty frame with no visible subtitle pixels.
+- `toCanvas()` creates a new canvas when `target` is omitted. Existing canvas targets resize by default; existing 2D contexts draw in place by default.
+
+---
+
 ## `PgsRenderer` / `VobSubRenderer`
 
 Both extend `BaseVideoSubtitleRenderer` and expose the same API surface.
@@ -143,6 +188,8 @@ parser.getTimestamps(): Float64Array           // timestamps in ms
 parser.get count: number                       // display set count
 parser.findIndexAtTimestamp(seconds: number): number
 parser.renderAtIndex(index: number): SubtitleData | undefined
+parser.renderFrameDataAtIndex(index: number, options?: SubtitleFrameRenderOptions): SubtitleRenderedFrameData | undefined
+parser.renderFrameDataAtTimestamp(seconds: number, options?: SubtitleFrameRenderOptions): SubtitleRenderedFrameData | undefined
 parser.getMetadata(): SubtitleParserMetadata
 parser.getCueMetadata(index: number): SubtitleCueMetadata | null
 parser.getLastRenderIssue(): string | null
@@ -160,6 +207,8 @@ parser.setDebandEnabled(enabled: boolean): void
 parser.setDebandThreshold(value: number): void
 parser.setDebandRange(value: number): void
 parser.renderAtTimestamp(seconds: number): SubtitleData | undefined
+parser.renderFrameDataAtIndex(index: number, options?: SubtitleFrameRenderOptions): SubtitleRenderedFrameData | undefined
+parser.renderFrameDataAtTimestamp(seconds: number, options?: SubtitleFrameRenderOptions): SubtitleRenderedFrameData | undefined
 parser.getCueMetadata(index: number): SubtitleCueMetadata | null
 parser.getMetadata(): SubtitleParserMetadata
 parser.getLastRenderIssue(): string | null
@@ -176,6 +225,8 @@ const parser = new UnifiedSubtitleParser({ debug: true, onWarning: (warning) => 
 parser.loadAuto(source: AutoSubtitleSource): SubtitleFormatName
 // source: { data?, subData?, idxContent?, fileName?, subUrl?, idxUrl? }
 parser.loadVobSubMks(mksData: Uint8Array): void
+parser.renderFrameDataAtIndex(index: number, options?: SubtitleFrameRenderOptions): SubtitleRenderedFrameData | undefined
+parser.renderFrameDataAtTimestamp(seconds: number, options?: SubtitleFrameRenderOptions): SubtitleRenderedFrameData | undefined
 parser.getMetadata(): SubtitleParserMetadata
 parser.getCueMetadata(index: number): SubtitleCueMetadata | null
 parser.getLastRenderIssue(): string | null

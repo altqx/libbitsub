@@ -13,6 +13,7 @@ Started as a fork of Arcus92's [libpgs-js](https://github.com/Arcus92/libpgs-js)
 - Worker-backed parsing/rendering for large subtitle files
 - Rich layout controls: scale, aspect mode, horizontal/vertical offsets, alignment, bottom padding, safe area, opacity
 - Cue metadata and parser introspection APIs
+- Rendered-frame export helpers for ImageData, ImageBitmap, Blob, and custom canvas targets
 - Frame prefetching and cache control for high-level renderers
 - Automatic format detection and unified loading helpers
 - First-class diagnostics with structured error codes, warning hooks, and render/cache snapshots
@@ -238,6 +239,64 @@ Metadata includes:
 - PGS composition count, palette ID, composition state
 - VobSub language, track ID, IDX metadata presence, file position where available
 
+## Frame export helpers
+
+Low-level parser output can be flattened into a single exportable frame for previews, editors, snapshots, fixture generation, or visual diffing.
+
+```ts
+import {
+  PgsParser,
+  initWasm,
+  renderFrameData,
+  toBlob,
+  toCanvas,
+  toImageBitmap
+} from 'libbitsub'
+
+await initWasm()
+
+const parser = new PgsParser()
+parser.load(new Uint8Array(arrayBuffer))
+
+const subtitleFrame = parser.renderAtTimestamp(120.5)
+const rendered = subtitleFrame ? renderFrameData(subtitleFrame, { crop: 'bounds' }) : null
+
+if (rendered) {
+  const canvas = toCanvas(rendered)
+  const bitmap = await toImageBitmap(rendered)
+  const pngBlob = await toBlob(rendered)
+
+  console.log({
+    width: rendered.imageData.width,
+    height: rendered.imageData.height,
+    offsetX: rendered.offsetX,
+    offsetY: rendered.offsetY,
+    bounds: rendered.bounds,
+    canvas,
+    bitmap,
+    pngBlob
+  })
+}
+```
+
+Parser convenience methods avoid the extra `renderAtTimestamp()` step:
+
+```ts
+const rendered = parser.renderFrameDataAtTimestamp(120.5)
+const fullScreenFrame = parser.renderFrameDataAtIndex(42, { crop: 'screen' })
+```
+
+Cropping modes:
+
+- `bounds` is the default. It returns a tightly cropped composed image and records where that image belongs in the original subtitle presentation area via `offsetX` and `offsetY`.
+- `screen` preserves the full subtitle presentation dimensions, which is useful when you need stable frame sizes for test fixtures or when drawing into a presentation-sized surface.
+
+Drawing behavior:
+
+- `toCanvas(frame)` creates a new canvas sized to the rendered export.
+- Passing an existing canvas target resizes it by default before drawing.
+- Passing an existing 2D context draws in place by default, which is useful when you want subtitles composited into your own pre-sized surface.
+
 ## Diagnostics mode
 
 Enable `debug: true` on high-level renderers when you need richer field diagnostics for malformed subtitle files. In debug mode, libbitsub records the most recent render attempt and emits structured warnings in addition to the existing lifecycle events.
@@ -423,6 +482,7 @@ parser.load(new Uint8Array(arrayBuffer))
 
 const timestamps = parser.getTimestamps()
 const frame = parser.renderAtIndex(0)
+const rendered = parser.renderFrameDataAtTimestamp(120.5)
 const metadata = parser.getMetadata()
 const lastIssue = parser.getLastRenderIssue()
 ```
@@ -437,6 +497,7 @@ parser.loadFromData(idxContent, new Uint8Array(subArrayBuffer))
 parser.setDebandEnabled(true)
 
 const frame = parser.renderAtTimestamp(120.5)
+const rendered = parser.renderFrameDataAtIndex(0, { crop: 'screen' })
 const cue = parser.getCueMetadata(0)
 const lastIssue = parser.getLastRenderIssue()
 ```
@@ -489,6 +550,10 @@ WebGL2 and Canvas2D fallback remain automatic. Use `onWebGPUFallback`, `onWebGL2
 - `isWebGPUSupported(): boolean` checks WebGPU support.
 - `detectSubtitleFormat(source: AutoSubtitleSource): 'pgs' | 'vobsub' | null` detects the bitmap subtitle format from file hints or binary data.
 - `createAutoSubtitleRenderer(options: AutoVideoSubtitleOptions): PgsRenderer | VobSubRenderer` creates a high-level renderer after format detection.
+- `renderFrameData(frame, options?): SubtitleRenderedFrameData | null` composes a `SubtitleData` frame into exportable pixels.
+- `toCanvas(frame, target?, options?): HTMLCanvasElement | OffscreenCanvas` draws a rendered frame to a new or existing canvas/context.
+- `toImageBitmap(frame, options?): Promise<ImageBitmap>` creates an `ImageBitmap` from a subtitle frame export.
+- `toBlob(frame, type?, quality?, options?): Promise<Blob>` encodes a subtitle frame export, defaulting to PNG.
 - `SubtitleDiagnosticError` is the structured error class libbitsub uses for coded diagnostics.
 - `createSubtitleDiagnosticError(...)` and `normalizeSubtitleError(...)` are exported for integrations that want to preserve libbitsub-style error codes.
 - Legacy aliases remain exported: `PGSRenderer`, `VobsubRenderer`, `UnifiedSubtitleRenderer`.

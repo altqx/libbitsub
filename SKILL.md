@@ -132,6 +132,49 @@ renderer.resetDisplaySettings()
 - `contain`: preserves subtitle bitmap shape and fits the subtitle grid inside the visible video box.
 - `cover`: preserves subtitle bitmap shape while filling the visible video box. This is the recommended mode when subtitles were authored for a taller frame, such as `1920x1080`, but the encoded video has cropped black bars, such as `3840x1600`.
 
+## Rendered frame exports
+
+Use the low-level parser surface when you need exportable subtitle bitmaps for previews, image snapshots, editor thumbnails, or visual diff fixtures.
+
+```ts
+import {
+  PgsParser,
+  initWasm,
+  renderFrameData,
+  toBlob,
+  toCanvas,
+  toImageBitmap
+} from 'libbitsub'
+
+await initWasm()
+
+const parser = new PgsParser()
+parser.load(new Uint8Array(arrayBuffer))
+
+const frame = parser.renderAtTimestamp(120.5)
+const rendered = frame ? renderFrameData(frame, { crop: 'bounds' }) : null
+
+if (rendered) {
+  const canvas = toCanvas(rendered)
+  const bitmap = await toImageBitmap(rendered)
+  const blob = await toBlob(rendered, 'image/png')
+}
+```
+
+Low-level parsers also expose direct convenience methods:
+
+```ts
+parser.renderFrameDataAtTimestamp(120.5)
+parser.renderFrameDataAtIndex(42, { crop: 'screen' })
+```
+
+Key points:
+
+- `crop: 'bounds'` is the default and returns a tight image plus `offsetX` and `offsetY` telling you where that crop belongs in the original subtitle presentation area.
+- `crop: 'screen'` preserves the original subtitle presentation width and height.
+- `toCanvas(frame)` creates a new export-sized canvas.
+- Passing an existing canvas resizes it by default. Passing an existing 2D context draws in place by default.
+
 ## Cache and prefetch
 
 ```ts
@@ -228,6 +271,7 @@ await initWasm()
 const pgs = new PgsParser({ debug: true })
 pgs.load(new Uint8Array(arrayBuffer))
 const frame = pgs.renderAtIndex(pgs.findIndexAtTimestamp(120.5))
+const rendered = pgs.renderFrameDataAtTimestamp(120.5)
 const meta = pgs.getMetadata()
 const renderIssue = pgs.getLastRenderIssue()
 
@@ -236,6 +280,7 @@ const vob = new VobSubParserLowLevel({ debug: true })
 vob.loadFromData(idxString, new Uint8Array(subBuffer))
 vob.setDebandEnabled(true)
 const frame2 = vob.renderAtTimestamp(120.5)
+const renderedVob = vob.renderFrameDataAtIndex(0, { crop: 'screen' })
 const vobRenderIssue = vob.getLastRenderIssue()
 
 // MKS with embedded S_VOBSUB
