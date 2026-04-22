@@ -57,9 +57,11 @@ const renderer = new PgsRenderer({
   displaySettings: { scale: 1.1, aspectMode: 'stretch', bottomPadding: 4, safeArea: 5 },
   cacheLimit: 32,
   prefetchWindow: { before: 1, after: 2 },
+  debug: true,
   onLoading: () => setLoading(true),
   onLoaded: () => setLoading(false),
   onError: (err) => console.error(err),
+  onWarning: (warning) => console.warn(warning.code, warning.message, warning.details),
   onEvent: (event) => console.log(event)
 })
 
@@ -156,6 +158,7 @@ new PgsRenderer({
       case 'loading':        // format starting to load
       case 'loaded':         // { format, metadata } ready
       case 'error':          // { format, error }
+      case 'warning':        // { warning }
       case 'renderer-change':// { renderer: 'webgpu' | 'webgl2' | 'canvas2d' }
       case 'worker-state':   // { enabled, ready, sessionId, fallback? }
       case 'cache-change':   // { cachedFrames, pendingRenders, cacheLimit }
@@ -168,6 +171,39 @@ new PgsRenderer({
 
 Use `cue-change` to track what subtitle is active; use `loaded` to kick off prefetching.
 
+## Diagnostics mode
+
+libbitsub now has a first-class diagnostics layer on top of the existing observability hooks. Use it when debugging malformed PGS/VobSub inputs in the field.
+
+High-level renderers accept:
+
+```ts
+debug: true
+onWarning: (warning) => { ... }
+```
+
+Key diagnostics APIs:
+
+```ts
+renderer.getStats()
+renderer.getCacheStats()
+renderer.getLastRenderInfo()
+```
+
+Low-level parsers accept `SubtitleDiagnosticsOptions` in their constructor and expose `getLastRenderIssue()`:
+
+```ts
+const parser = new UnifiedSubtitleParser({
+  debug: true,
+  onWarning: (warning) => console.warn(warning.code, warning.message)
+})
+
+parser.loadAuto({ data: subtitleBytes, fileName: 'track.sup' })
+console.log(parser.getLastRenderIssue())
+```
+
+Structured error codes include `UNSUPPORTED_FORMAT`, `BAD_IDX`, `MISSING_PALETTE`, `TRACK_NOT_FOUND`, `MISSING_INPUT`, `FETCH_FAILED`, and `INVALID_SUBTITLE_DATA`.
+
 ## Metadata inspection
 
 ```ts
@@ -175,6 +211,8 @@ renderer.getMetadata()           // track-level: format, cueCount, screenWidth, 
 renderer.getCurrentCueMetadata() // currently displayed cue
 renderer.getCueMetadata(42)      // specific cue by index
 renderer.getStats()              // framesRendered, avgRenderTime, usingWorker, etc.
+renderer.getCacheStats()         // cache occupancy + worker/session state
+renderer.getLastRenderInfo()     // last render attempt in debug mode
 ```
 
 ## Low-level parsers
@@ -187,23 +225,25 @@ import { initWasm, PgsParser, VobSubParserLowLevel, UnifiedSubtitleParser } from
 await initWasm()
 
 // PGS
-const pgs = new PgsParser()
+const pgs = new PgsParser({ debug: true })
 pgs.load(new Uint8Array(arrayBuffer))
 const frame = pgs.renderAtIndex(pgs.findIndexAtTimestamp(120.5))
 const meta = pgs.getMetadata()
+const renderIssue = pgs.getLastRenderIssue()
 
 // VobSub
-const vob = new VobSubParserLowLevel()
+const vob = new VobSubParserLowLevel({ debug: true })
 vob.loadFromData(idxString, new Uint8Array(subBuffer))
 vob.setDebandEnabled(true)
 const frame2 = vob.renderAtTimestamp(120.5)
+const vobRenderIssue = vob.getLastRenderIssue()
 
 // MKS with embedded S_VOBSUB
 const mksVob = new VobSubParserLowLevel()
 mksVob.loadFromMks(new Uint8Array(mksBuffer))
 
 // Unified auto-detect
-const parser = new UnifiedSubtitleParser()
+const parser = new UnifiedSubtitleParser({ debug: true })
 const detected = parser.loadAuto({ data: subtitleBytes, fileName: 'track.sup' })
 ```
 
@@ -212,7 +252,7 @@ const detected = parser.loadAuto({ data: subtitleBytes, fileName: 'track.sup' })
 libbitsub prefers WebGPU → WebGL2 → Canvas2D, with automatic fallback:
 
 ```ts
-import { isWebGPUSupported, isWebGL2Supported } from 'libbitsub'
+import { isWebGPUSupported } from 'libbitsub'
 
 new PgsRenderer({
   video,
@@ -222,12 +262,14 @@ new PgsRenderer({
 })
 ```
 
+WebGL2 and Canvas2D fallback are automatic. Use the fallback callbacks or diagnostics hooks if you need to observe the active backend path.
+
 ## Key constraints
 
 - Bitmap subtitles only (PGS, VobSub, and `.mks` files carrying embedded `S_VOBSUB`). Does **not** handle SRT, ASS, or any text-based formats.
 - `.mks` support is limited to embedded `S_VOBSUB` tracks. It is not a general Matroska subtitle parser.
 - Multiple renderers can coexist; each has its own isolated parser session.
-- If the shared worker fails to start, the API silently falls back to main-thread rendering.
+- If the shared worker fails to start, the API falls back to main-thread rendering and emits `WORKER_FALLBACK` through diagnostics/event hooks.
 - `dispose()` must be called when removing a renderer to release DOM nodes, parser memory, and worker sessions.
 
 ## Full API reference

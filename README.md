@@ -15,6 +15,7 @@ Started as a fork of Arcus92's [libpgs-js](https://github.com/Arcus92/libpgs-js)
 - Cue metadata and parser introspection APIs
 - Frame prefetching and cache control for high-level renderers
 - Automatic format detection and unified loading helpers
+- First-class diagnostics with structured error codes, warning hooks, and render/cache snapshots
 - TypeScript support with exported event and metadata types
 
 ## Showcase
@@ -104,6 +105,7 @@ import { PgsRenderer } from 'libbitsub'
 const renderer = new PgsRenderer({
   video: videoElement,
   subUrl: '/subtitles/movie.sup',
+  debug: true,
   displaySettings: {
     scale: 1.1,
     aspectMode: 'stretch',
@@ -112,6 +114,9 @@ const renderer = new PgsRenderer({
   },
   cacheLimit: 32,
   prefetchWindow: { before: 1, after: 2 },
+  onWarning: (warning) => {
+    console.warn(warning.code, warning.message, warning.details)
+  },
   onEvent: (event) => {
     if (event.type === 'worker-state') {
       console.log('worker', event.ready ? 'ready' : 'starting', event.sessionId)
@@ -204,6 +209,9 @@ High-level renderers expose parser and cue metadata:
 const metadata = renderer.getMetadata()
 const currentCue = renderer.getCurrentCueMetadata()
 const cue42 = renderer.getCueMetadata(42)
+const stats = renderer.getStats()
+const cache = renderer.getCacheStats()
+const lastRender = renderer.getLastRenderInfo()
 ```
 
 Low-level parsers expose the same model:
@@ -229,6 +237,49 @@ Metadata includes:
 - Rendered cue bounds when available
 - PGS composition count, palette ID, composition state
 - VobSub language, track ID, IDX metadata presence, file position where available
+
+## Diagnostics mode
+
+Enable `debug: true` on high-level renderers when you need richer field diagnostics for malformed subtitle files. In debug mode, libbitsub records the most recent render attempt and emits structured warnings in addition to the existing lifecycle events.
+
+```ts
+import { PgsRenderer, SubtitleDiagnosticError } from 'libbitsub'
+
+const renderer = new PgsRenderer({
+  video: videoElement,
+  subUrl: '/subtitles/movie.sup',
+  debug: true,
+  onWarning: (warning) => {
+    console.warn('[warning]', warning.code, warning.message, warning.details)
+  },
+  onError: (error) => {
+    if (error instanceof SubtitleDiagnosticError) {
+      console.error('[error]', error.code, error.message, error.details)
+      return
+    }
+
+    console.error(error)
+  }
+})
+
+console.log(renderer.getStats())
+console.log(renderer.getCacheStats())
+console.log(renderer.getLastRenderInfo())
+```
+
+Structured diagnostic error codes currently include:
+
+- `UNSUPPORTED_FORMAT`
+- `BAD_IDX`
+- `MISSING_PALETTE`
+- `TRACK_NOT_FOUND`
+- `MISSING_INPUT`
+- `FETCH_FAILED`
+- `INVALID_SUBTITLE_DATA`
+- `WORKER_FALLBACK`
+- `UNKNOWN`
+
+Warnings use a smaller code set focused on non-fatal conditions such as malformed bitmap buffers, worker fallback, and missing PGS palettes during render.
 
 ## MKS security and corruption checks
 
@@ -260,6 +311,7 @@ const renderer = new PgsRenderer({
       case 'loading':
       case 'loaded':
       case 'error':
+      case 'warning':
       case 'renderer-change':
       case 'worker-state':
       case 'cache-change':
@@ -328,7 +380,8 @@ Emitted events:
 | --- | --- |
 | `loading` | subtitle format |
 | `loaded` | subtitle format and parser metadata |
-| `error` | subtitle format and `Error` |
+| `error` | subtitle format and `SubtitleDiagnosticErrorLike` |
+| `warning` | `SubtitleDiagnosticWarning` |
 | `renderer-change` | active backend: `webgpu`, `webgl2`, or `canvas2d` |
 | `worker-state` | whether worker mode is enabled, ready, fallback status, and the active session ID |
 | `cache-change` | cached frame count, pending renders, and configured cache limit |
@@ -356,6 +409,8 @@ const stats = renderer.getStats()
 - `totalEntries`
 - `currentIndex`
 
+`getCacheStats()` adds worker/session state for the current renderer cache, while `getLastRenderInfo()` exposes the most recent render outcome with a status of `rendered`, `cleared`, `pending`, `empty`, or `failed`.
+
 ## Low-level APIs
 
 ### PGS parser
@@ -369,6 +424,7 @@ parser.load(new Uint8Array(arrayBuffer))
 const timestamps = parser.getTimestamps()
 const frame = parser.renderAtIndex(0)
 const metadata = parser.getMetadata()
+const lastIssue = parser.getLastRenderIssue()
 ```
 
 ### VobSub parser
@@ -382,6 +438,7 @@ parser.setDebandEnabled(true)
 
 const frame = parser.renderAtTimestamp(120.5)
 const cue = parser.getCueMetadata(0)
+const lastIssue = parser.getLastRenderIssue()
 ```
 
 ### Unified parser
@@ -391,7 +448,10 @@ import { UnifiedSubtitleParser, detectSubtitleFormat } from 'libbitsub'
 
 const format = detectSubtitleFormat({ data: subtitleBytes, fileName: 'track.sup' })
 
-const parser = new UnifiedSubtitleParser()
+const parser = new UnifiedSubtitleParser({
+  debug: true,
+  onWarning: (warning) => console.warn(warning.code, warning.message)
+})
 parser.loadAuto({ data: subtitleBytes, fileName: 'track.sup' })
 ```
 
@@ -404,19 +464,20 @@ libbitsub prefers:
 3. Canvas2D
 
 ```ts
-import { isWebGL2Supported, isWebGPUSupported } from 'libbitsub'
+import { isWebGPUSupported } from 'libbitsub'
 
 console.log({
-  webgpu: isWebGPUSupported(),
-  webgl2: isWebGL2Supported()
+  webgpu: isWebGPUSupported()
 })
 ```
+
+WebGL2 and Canvas2D fallback remain automatic. Use `onWebGPUFallback`, `onWebGL2Fallback`, `onEvent`, or `onWarning` if you need to observe backend changes.
 
 ## Notes
 
 - Worker mode is shared, but subtitle parser state is isolated per renderer session.
 - Multiple subtitle renderers can coexist without reusing the same parser instance.
-- If worker startup fails, the high-level API falls back to main-thread parsing.
+- If worker startup fails, the high-level API falls back to main-thread parsing and emits a `WORKER_FALLBACK` warning/event when diagnostics are being observed.
 - The library only handles bitmap subtitle formats. It does not parse text subtitle formats such as SRT or ASS.
 
 ## API Reference
@@ -428,6 +489,8 @@ console.log({
 - `isWebGPUSupported(): boolean` checks WebGPU support.
 - `detectSubtitleFormat(source: AutoSubtitleSource): 'pgs' | 'vobsub' | null` detects the bitmap subtitle format from file hints or binary data.
 - `createAutoSubtitleRenderer(options: AutoVideoSubtitleOptions): PgsRenderer | VobSubRenderer` creates a high-level renderer after format detection.
+- `SubtitleDiagnosticError` is the structured error class libbitsub uses for coded diagnostics.
+- `createSubtitleDiagnosticError(...)` and `normalizeSubtitleError(...)` are exported for integrations that want to preserve libbitsub-style error codes.
 - Legacy aliases remain exported: `PGSRenderer`, `VobsubRenderer`, `UnifiedSubtitleRenderer`.
 
 ### High-level renderers
@@ -439,6 +502,8 @@ console.log({
 - `setDisplaySettings(settings: Partial<SubtitleDisplaySettings>): void` updates layout settings.
 - `resetDisplaySettings(): void` resets layout settings to defaults.
 - `getStats(): SubtitleRendererStats` returns render statistics.
+- `getCacheStats(): SubtitleCacheStats` returns cache occupancy, worker readiness, and session ID details.
+- `getLastRenderInfo(): SubtitleLastRenderInfo | null` returns the last render attempt recorded in debug mode.
 - `getMetadata(): SubtitleParserMetadata | null` returns track-level metadata.
 - `getCurrentCueMetadata(): SubtitleCueMetadata | null` returns the currently displayed cue metadata.
 - `getCueMetadata(index: number): SubtitleCueMetadata | null` returns metadata for a specific cue.
@@ -553,7 +618,8 @@ interface SubtitleDisplaySettings {
 type SubtitleRendererEvent =
   | { type: 'loading'; format: SubtitleFormatName }
   | { type: 'loaded'; format: SubtitleFormatName; metadata: SubtitleParserMetadata }
-  | { type: 'error'; format: SubtitleFormatName; error: Error }
+  | { type: 'error'; format: SubtitleFormatName; error: SubtitleDiagnosticErrorLike }
+  | { type: 'warning'; warning: SubtitleDiagnosticWarning }
   | { type: 'renderer-change'; renderer: 'webgpu' | 'webgl2' | 'canvas2d' }
   | { type: 'worker-state'; enabled: boolean; ready: boolean; sessionId: string | null; fallback?: boolean }
   | { type: 'cache-change'; cachedFrames: number; pendingRenders: number; cacheLimit: number }
@@ -577,6 +643,11 @@ Both shapes expose:
 - `pendingRenders`
 - `totalEntries`
 - `currentIndex`
+
+Related diagnostics shapes:
+
+- `SubtitleCacheStats` from `getCacheStats()`.
+- `SubtitleLastRenderInfo` from `getLastRenderInfo()` when `debug` is enabled.
 
 #### `SubtitleParserMetadata`
 
