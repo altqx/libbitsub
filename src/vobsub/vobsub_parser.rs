@@ -137,6 +137,7 @@ impl VobSubParser {
         self.sub_data = None;
         self.timestamps_ms.clear();
         self.packet_cache.clear();
+        self.deband_config = DebandConfig::default();
         self.loaded_from_idx = false;
         self.last_render_issue = None;
     }
@@ -445,6 +446,26 @@ impl VobSubParser {
 impl Default for VobSubParser {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dispose_restores_default_deband_config() {
+        let mut parser = VobSubParser::new();
+
+        parser.set_deband_enabled(false);
+        parser.set_deband_threshold(12.0);
+        parser.set_deband_range(3);
+
+        parser.dispose();
+
+        assert!(parser.deband_enabled());
+        assert_eq!(parser.deband_config.threshold, DebandConfig::default().threshold);
+        assert_eq!(parser.deband_config.range, DebandConfig::default().range);
     }
 }
 
