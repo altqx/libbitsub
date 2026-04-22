@@ -51,6 +51,6 @@ export function getWasmUrl(): string {
 // Pre-initialize WASM module on first import (non-blocking)
 if (typeof window !== 'undefined') {
   setTimeout(() => {
-    initWasm().catch((err) => console.warn('[libbitsub] WASM pre-init failed:', err))
+    initWasm().catch(() => {})
   }, 100)
 }

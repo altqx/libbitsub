@@ -248,7 +248,8 @@ pub fn parse_subtitle_packet(
             return None;
         }
 
-        return parse_subtitle_data(SubtitlePacketData::Owned(merged), data, pts).map(|packet| (packet, offset));
+        return parse_subtitle_data(SubtitlePacketData::Owned(merged), data, pts)
+            .map(|packet| (packet, offset));
     }
 }
 
@@ -270,7 +271,11 @@ fn extract_pts(data: &[u8], offset: usize) -> u32 {
 }
 
 /// Parse the subtitle control and bitmap data.
-fn parse_subtitle_data(packet_data: SubtitlePacketData, source_data: &[u8], pts: u32) -> Option<SubtitlePacket> {
+fn parse_subtitle_data(
+    packet_data: SubtitlePacketData,
+    source_data: &[u8],
+    pts: u32,
+) -> Option<SubtitlePacket> {
     let data = match &packet_data {
         SubtitlePacketData::SharedRange { start, end } => &source_data[*start..*end],
         SubtitlePacketData::Owned(data) => data.as_slice(),

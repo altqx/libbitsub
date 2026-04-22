@@ -174,7 +174,6 @@ export class WebGL2Renderer {
     gl.viewport(0, 0, width, height)
 
     this._initialized = true
-    console.log('[libbitsub] WebGL2 renderer initialized')
   }
 
   private _compileShader(type: GLenum, src: string): WebGLShader {

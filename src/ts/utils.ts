@@ -363,17 +363,28 @@ export function getSubtitleBounds(data: SubtitleData): SubtitleCueBounds | null 
 }
 
 /** Store a frame in the cache and evict older entries when the limit is exceeded. */
-export function setCachedFrame(state: WorkerRendererState, index: number, frame: SubtitleData | null): void {
+export function setCachedFrame(
+  state: WorkerRendererState,
+  index: number,
+  frame: SubtitleData | null,
+  renderIssue: string | null = null
+): void {
   if (state.frameCache.has(index)) {
     state.frameCache.delete(index)
   }
 
+  if (state.renderIssues.has(index)) {
+    state.renderIssues.delete(index)
+  }
+
   state.frameCache.set(index, frame)
+  state.renderIssues.set(index, renderIssue)
 
   while (state.frameCache.size > state.cacheLimit) {
     const oldestKey = state.frameCache.keys().next().value
     if (oldestKey === undefined) break
     state.frameCache.delete(oldestKey)
+    state.renderIssues.delete(oldestKey)
   }
 }
 
@@ -385,6 +396,7 @@ export function setCacheLimit(state: WorkerRendererState, cacheLimit: number): n
     const oldestKey = state.frameCache.keys().next().value
     if (oldestKey === undefined) break
     state.frameCache.delete(oldestKey)
+    state.renderIssues.delete(oldestKey)
   }
 
   return state.cacheLimit
@@ -426,6 +438,7 @@ export function createWorkerState(): WorkerRendererState {
     sessionId: null,
     timestamps: new Float64Array(0),
     frameCache: new Map(),
+    renderIssues: new Map(),
     pendingRenders: new Map(),
     cacheLimit: 24,
     metadata: null

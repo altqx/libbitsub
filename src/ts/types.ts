@@ -20,6 +20,46 @@ export type SubtitleHorizontalAlign = 'left' | 'center' | 'right'
 
 export type SubtitleAspectMode = 'stretch' | 'contain' | 'cover'
 
+export type SubtitleDiagnosticDetailValue = string | number | boolean | null | undefined
+
+export type SubtitleDiagnosticErrorCode =
+  | 'UNSUPPORTED_FORMAT'
+  | 'BAD_IDX'
+  | 'MISSING_PALETTE'
+  | 'TRACK_NOT_FOUND'
+  | 'MISSING_INPUT'
+  | 'FETCH_FAILED'
+  | 'INVALID_SUBTITLE_DATA'
+  | 'WORKER_FALLBACK'
+  | 'UNKNOWN'
+
+export type SubtitleDiagnosticWarningCode =
+  | 'BAD_IDX'
+  | 'INVALID_FRAME_DATA'
+  | 'INVALID_SUBTITLE_DATA'
+  | 'MISSING_PALETTE'
+  | 'WORKER_FALLBACK'
+
+export interface SubtitleDiagnosticWarning {
+  code: SubtitleDiagnosticWarningCode
+  message: string
+  format?: SubtitleFormatName
+  cueIndex?: number
+  details?: Record<string, SubtitleDiagnosticDetailValue>
+}
+
+export interface SubtitleDiagnosticErrorLike extends Error {
+  code: SubtitleDiagnosticErrorCode
+  format?: SubtitleFormatName
+  details?: Record<string, SubtitleDiagnosticDetailValue>
+  cause?: unknown
+}
+
+export interface SubtitleDiagnosticsOptions {
+  debug?: boolean
+  onWarning?: (warning: SubtitleDiagnosticWarning) => void
+}
+
 // =============================================================================
 // Subtitle Data Types
 // =============================================================================
@@ -113,6 +153,10 @@ export interface VideoSubtitleOptions {
   }
   /** Generic observability hook for renderer lifecycle, cache, worker and cue changes */
   onEvent?: (event: SubtitleRendererEvent) => void
+  /** Enable richer diagnostics capture for render attempts and warnings */
+  debug?: boolean
+  /** Callback for structured non-fatal diagnostics warnings */
+  onWarning?: (warning: SubtitleDiagnosticWarning) => void
   /** Time offset in seconds added to video.currentTime for subtitle lookup (e.g., for live TV sync) */
   timeOffset?: number
 }
@@ -152,12 +196,41 @@ export type SubtitleRendererBackend = 'webgpu' | 'webgl2' | 'canvas2d'
 export type SubtitleRendererEvent =
   | { type: 'loading'; format: SubtitleFormatName }
   | { type: 'loaded'; format: SubtitleFormatName; metadata: SubtitleParserMetadata }
-  | { type: 'error'; format: SubtitleFormatName; error: Error }
+  | { type: 'error'; format: SubtitleFormatName; error: SubtitleDiagnosticErrorLike }
+  | { type: 'warning'; warning: SubtitleDiagnosticWarning }
   | { type: 'renderer-change'; renderer: SubtitleRendererBackend }
   | { type: 'worker-state'; enabled: boolean; ready: boolean; sessionId: string | null; fallback?: boolean }
   | { type: 'cache-change'; cachedFrames: number; pendingRenders: number; cacheLimit: number }
   | { type: 'cue-change'; cue: SubtitleCueMetadata | null }
   | { type: 'stats'; stats: SubtitleRendererStatsSnapshot }
+
+export interface SubtitleCacheStats {
+  cacheLimit: number
+  cachedFrames: number
+  pendingRenders: number
+  totalEntries: number
+  usingWorker: boolean
+  workerReady: boolean
+  sessionId: string | null
+}
+
+export type SubtitleRenderStatus = 'rendered' | 'cleared' | 'pending' | 'empty' | 'failed'
+
+export interface SubtitleLastRenderInfo {
+  time: number
+  index: number
+  status: SubtitleRenderStatus
+  backend: SubtitleRendererBackend | null
+  usingWorker: boolean
+  cacheHit: boolean
+  renderDuration: number
+  frameWidth: number | null
+  frameHeight: number | null
+  compositionCount: number
+  cue: SubtitleCueMetadata | null
+  cache: SubtitleCacheStats
+  capturedAt: number
+}
 
 export interface SubtitleRendererStatsSnapshot {
   framesRendered: number
@@ -226,8 +299,8 @@ export type WorkerResponse =
   | { type: 'initComplete'; success: boolean; error?: string }
   | { type: 'pgsLoaded'; count: number; byteLength: number; metadata: WorkerSessionMetadata; timestamps: Float64Array }
   | { type: 'vobSubLoaded'; count: number; metadata: WorkerSessionMetadata; timestamps: Float64Array }
-  | { type: 'pgsFrame'; frame: FrameData | null }
-  | { type: 'vobSubFrame'; frame: FrameData | null }
+  | { type: 'pgsFrame'; frame: FrameData | null; renderIssue?: string }
+  | { type: 'vobSubFrame'; frame: FrameData | null; renderIssue?: string }
   | { type: 'pgsIndex'; index: number }
   | { type: 'vobSubIndex'; index: number }
   | { type: 'pgsTimestamps'; timestamps: Float64Array }
@@ -244,6 +317,7 @@ export interface WorkerRendererState {
   sessionId: string | null
   timestamps: Float64Array
   frameCache: Map<number, SubtitleData | null>
+  renderIssues: Map<number, string | null>
   pendingRenders: Map<number, Promise<SubtitleData | null>>
   cacheLimit: number
   metadata: SubtitleParserMetadata | null

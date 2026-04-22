@@ -5,7 +5,11 @@
 use super::{MAX_VOBSUB_IMAGE_PIXELS, SubtitlePacket, VobSubPalette};
 
 /// Decode VobSub RLE-encoded bitmap and render to RGBA.
-pub fn decode_vobsub_rle(packet: &SubtitlePacket, sub_data: &[u8], palette: &VobSubPalette) -> Vec<u8> {
+pub fn decode_vobsub_rle(
+    packet: &SubtitlePacket,
+    sub_data: &[u8],
+    palette: &VobSubPalette,
+) -> Vec<u8> {
     let width = packet.width as usize;
     let height = packet.height as usize;
 
@@ -49,7 +53,14 @@ pub fn decode_vobsub_rle(packet: &SubtitlePacket, sub_data: &[u8], palette: &Vob
     );
 
     // Decode odd field (lines 1, 3, 5, ...)
-    decode_field(packet.odd_field_data(sub_data), &mut rgba, width, height, 1, &colors);
+    decode_field(
+        packet.odd_field_data(sub_data),
+        &mut rgba,
+        width,
+        height,
+        1,
+        &colors,
+    );
 
     rgba
 }

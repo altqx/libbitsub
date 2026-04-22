@@ -233,7 +233,8 @@ pub fn apply_palette_rgba_bytes(indexed: &[u8], palette: &[u32], target: &mut [u
     if palette.len() >= 256 {
         for (pixel_index, &palette_index) in indexed.iter().take(len).enumerate() {
             let start = pixel_index * 4;
-            target[start..start + 4].copy_from_slice(&palette[palette_index as usize].to_le_bytes());
+            target[start..start + 4]
+                .copy_from_slice(&palette[palette_index as usize].to_le_bytes());
         }
     } else {
         let palette_len = palette.len();

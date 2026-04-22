@@ -211,6 +211,22 @@ impl SubtitleRenderer {
         }
     }
 
+    /// Get the last non-fatal render issue for diagnostics.
+    #[wasm_bindgen(getter, js_name = lastRenderIssue)]
+    pub fn last_render_issue(&self) -> String {
+        match self.format {
+            Some(SubtitleFormat::Pgs) => self
+                .pgs_parser
+                .as_ref()
+                .map_or_else(String::new, |p| p.last_render_issue()),
+            Some(SubtitleFormat::VobSub) => self
+                .vobsub_parser
+                .as_ref()
+                .map_or_else(String::new, |p| p.last_render_issue()),
+            None => String::new(),
+        }
+    }
+
     /// Get all timestamps in milliseconds.
     #[wasm_bindgen(js_name = getTimestamps)]
     pub fn get_timestamps(&self) -> js_sys::Float64Array {

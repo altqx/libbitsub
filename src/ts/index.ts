@@ -6,14 +6,22 @@
 export type {
   AutoSubtitleSource,
   SubtitleAspectMode,
+  SubtitleCacheStats,
   AutoVideoSubtitleOptions,
   SubtitleCueBounds,
   SubtitleCueMetadata,
   SubtitleData,
+  SubtitleDiagnosticDetailValue,
+  SubtitleDiagnosticErrorCode,
+  SubtitleDiagnosticErrorLike,
+  SubtitleDiagnosticsOptions,
+  SubtitleDiagnosticWarning,
+  SubtitleDiagnosticWarningCode,
   SubtitleCompositionData,
   SubtitleDisplaySettings,
   SubtitleFormatName,
   SubtitleHorizontalAlign,
+  SubtitleLastRenderInfo,
   SubtitleParserMetadata,
   SubtitleRendererBackend,
   SubtitleRendererEvent,
@@ -29,6 +37,8 @@ export type {
   SubtitleFrame,
   VobSubFrame
 } from './types'
+
+export { SubtitleDiagnosticError, createSubtitleDiagnosticError, normalizeSubtitleError } from './diagnostics'
 
 // WASM management
 export { initWasm, isWasmInitialized, getWasm, getWasmUrl } from './wasm'

@@ -26,6 +26,8 @@ pub struct VobSubParser {
     deband_config: DebandConfig,
     /// Whether the parser was loaded from IDX metadata.
     loaded_from_idx: bool,
+    /// Last non-fatal render issue for diagnostics.
+    last_render_issue: Option<String>,
 }
 
 #[wasm_bindgen]
@@ -40,6 +42,7 @@ impl VobSubParser {
             packet_cache: HashMap::new(),
             deband_config: DebandConfig::default(),
             loaded_from_idx: false,
+            last_render_issue: None,
         }
     }
 
@@ -135,6 +138,13 @@ impl VobSubParser {
         self.timestamps_ms.clear();
         self.packet_cache.clear();
         self.loaded_from_idx = false;
+        self.last_render_issue = None;
+    }
+
+    /// Get the last non-fatal render issue for diagnostics.
+    #[wasm_bindgen(getter, js_name = lastRenderIssue)]
+    pub fn last_render_issue(&self) -> String {
+        self.last_render_issue.clone().unwrap_or_default()
     }
 
     /// Get the number of subtitle entries.
@@ -334,16 +344,38 @@ impl VobSubParser {
     }
 
     fn cached_packet(&self, index: usize) -> Option<&SubtitlePacket> {
-        self.packet_cache.get(&index).and_then(|packet| packet.as_ref())
+        self.packet_cache
+            .get(&index)
+            .and_then(|packet| packet.as_ref())
     }
 
     /// Render subtitle at the given index and return RGBA data.
     #[wasm_bindgen(js_name = renderAtIndex)]
     pub fn render_at_index(&mut self, index: usize) -> Option<VobSubFrame> {
-        self.ensure_packet_cached(index)?;
-        let idx_data = self.idx_data.as_ref()?;
-        let sub_data = self.sub_data.as_ref()?;
-        let packet = self.cached_packet(index)?;
+        self.last_render_issue = None;
+
+        if index >= self.timestamps_ms.len() {
+            self.last_render_issue = Some("INDEX_OUT_OF_RANGE".to_string());
+            return None;
+        }
+
+        if self.ensure_packet_cached(index).is_none() {
+            self.last_render_issue = Some("NO_DATA".to_string());
+            return None;
+        }
+
+        let Some(idx_data) = self.idx_data.as_ref() else {
+            self.last_render_issue = Some("NO_DATA".to_string());
+            return None;
+        };
+        let Some(sub_data) = self.sub_data.as_ref() else {
+            self.last_render_issue = Some("NO_DATA".to_string());
+            return None;
+        };
+        let Some(packet) = self.cached_packet(index) else {
+            self.last_render_issue = Some("INVALID_PACKET".to_string());
+            return None;
+        };
 
         Some(self.render_packet(packet, sub_data, &idx_data.palette, &idx_data.metadata))
     }

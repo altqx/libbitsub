@@ -7,8 +7,7 @@ use wasm_bindgen::prelude::*;
 
 use super::{
     AssembledObject, DisplaySet, MAX_PGS_BITMAP_PIXELS, ObjectDefinitionSegment,
-    PaletteDefinitionSegment, WindowDefinition, apply_palette_rgba_bytes,
-    decode_rle_to_indexed,
+    PaletteDefinitionSegment, WindowDefinition, apply_palette_rgba_bytes, decode_rle_to_indexed,
 };
 use crate::utils::binary_search_timestamp;
 
@@ -27,6 +26,8 @@ pub struct PgsParser {
     cached_context: Option<RenderContext>,
     /// Highest display-set index applied to the cached context.
     cached_context_index: Option<usize>,
+    /// Last non-fatal render issue for diagnostics.
+    last_render_issue: Option<String>,
 }
 
 /// Cached decoded bitmap (indexed pixels, before palette)
@@ -48,6 +49,7 @@ impl PgsParser {
             last_boundary_index: None,
             cached_context: None,
             cached_context_index: None,
+            last_render_issue: None,
         }
     }
 
@@ -61,6 +63,7 @@ impl PgsParser {
         self.last_boundary_index = None;
         self.cached_context = None;
         self.cached_context_index = None;
+        self.last_render_issue = None;
 
         let len = data.len();
 
@@ -213,7 +216,10 @@ impl PgsParser {
     /// Returns null if index is invalid or no subtitle data.
     #[wasm_bindgen(js_name = renderAtIndex)]
     pub fn render_at_index(&mut self, index: usize) -> Option<SubtitleFrame> {
+        self.last_render_issue = None;
+
         if index >= self.display_sets.len() {
+            self.last_render_issue = Some("INDEX_OUT_OF_RANGE".to_string());
             return None;
         }
 
@@ -223,20 +229,30 @@ impl PgsParser {
 
         // Get current display set
         let ds = &self.display_sets[index];
-        let composition = ds.composition.as_ref()?;
+        let Some(composition) = ds.composition.as_ref() else {
+            self.last_render_issue = Some("MISSING_COMPOSITION".to_string());
+            return None;
+        };
 
         // Empty composition_objects means clear the screen
         if composition.composition_objects.is_empty() {
+            self.last_render_issue = Some("EMPTY_CUE".to_string());
             return None;
         }
 
         let width = composition.width;
         let height = composition.height;
 
-        let context = self.cached_context.as_ref()?;
+        let Some(context) = self.cached_context.as_ref() else {
+            self.last_render_issue = Some("RENDER_CONTEXT_UNAVAILABLE".to_string());
+            return None;
+        };
 
         // Find the palette to use
-        let palette = context.palettes.get(&composition.palette_id)?;
+        let Some(palette) = context.palettes.get(&composition.palette_id) else {
+            self.last_render_issue = Some("MISSING_PALETTE".to_string());
+            return None;
+        };
 
         // Render all composition objects
         let mut compositions = Vec::new();
@@ -286,11 +302,7 @@ impl PgsParser {
             };
 
             let mut rgba = vec![0u8; rgba_len];
-            apply_palette_rgba_bytes(
-                &decoded.indexed,
-                &palette.rgba,
-                &mut rgba,
-            );
+            apply_palette_rgba_bytes(&decoded.indexed, &palette.rgba, &mut rgba);
 
             compositions.push(SubtitleComposition {
                 x: comp_obj.x,
@@ -301,11 +313,21 @@ impl PgsParser {
             });
         }
 
+        if compositions.is_empty() {
+            self.last_render_issue = Some("EMPTY_RENDER".to_string());
+        }
+
         Some(SubtitleFrame {
             width,
             height,
             compositions,
         })
+    }
+
+    /// Get the last non-fatal render issue for diagnostics.
+    #[wasm_bindgen(getter, js_name = lastRenderIssue)]
+    pub fn last_render_issue(&self) -> String {
+        self.last_render_issue.clone().unwrap_or_default()
     }
 
     /// Clear the internal cache.
@@ -315,6 +337,7 @@ impl PgsParser {
         self.last_boundary_index = None;
         self.cached_context = None;
         self.cached_context_index = None;
+        self.last_render_issue = None;
     }
 
     fn ensure_context_for_index(&mut self, boundary_index: usize, target_index: usize) {
@@ -343,7 +366,10 @@ impl PgsParser {
             return;
         }
 
-        let mut context = self.cached_context.take().unwrap_or_else(RenderContext::new);
+        let mut context = self
+            .cached_context
+            .take()
+            .unwrap_or_else(RenderContext::new);
         self.apply_display_sets(&mut context, cached_index + 1, target_index);
         self.cached_context = Some(context);
         self.cached_context_index = Some(target_index);
@@ -361,7 +387,12 @@ impl PgsParser {
         0
     }
 
-    fn apply_display_sets(&self, context: &mut RenderContext, start_index: usize, end_index: usize) {
+    fn apply_display_sets(
+        &self,
+        context: &mut RenderContext,
+        start_index: usize,
+        end_index: usize,
+    ) {
         for i in start_index..=end_index {
             context.apply_display_set(&self.display_sets[i]);
         }
@@ -585,6 +616,7 @@ mod tests {
             last_boundary_index: None,
             cached_context: None,
             cached_context_index: None,
+            last_render_issue: None,
         };
 
         let frame = parser.render_at_index(0).expect("frame should exist");

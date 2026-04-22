@@ -277,18 +277,20 @@ self.onmessage = async function(event) {
                 const parser = pgsParsers.get(request.sessionId);
                 if (!parser) { postResponse({ type: 'pgsFrame', frame: null }, [], _id); break; }
                 const frame = parser.renderAtIndex(request.index);
-                if (!frame) { postResponse({ type: 'pgsFrame', frame: null }, [], _id); break; }
+                const renderIssue = parser.lastRenderIssue || '';
+                if (!frame) { postResponse({ type: 'pgsFrame', frame: null, renderIssue }, [], _id); break; }
                 const frameData = convertFrame(frame, false);
-                postResponse({ type: 'pgsFrame', frame: frameData }, frameData.compositions.map((c) => c.rgba.buffer), _id);
+                postResponse({ type: 'pgsFrame', frame: frameData, renderIssue }, frameData.compositions.map((c) => c.rgba.buffer), _id);
                 break;
             }
             case 'renderVobSubAtIndex': {
                 const parser = vobSubParsers.get(request.sessionId);
                 if (!parser) { postResponse({ type: 'vobSubFrame', frame: null }, [], _id); break; }
                 const frame = parser.renderAtIndex(request.index);
-                if (!frame) { postResponse({ type: 'vobSubFrame', frame: null }, [], _id); break; }
+                const renderIssue = parser.lastRenderIssue || '';
+                if (!frame) { postResponse({ type: 'vobSubFrame', frame: null, renderIssue }, [], _id); break; }
                 const frameData = convertFrame(frame, true);
-                postResponse({ type: 'vobSubFrame', frame: frameData }, frameData.compositions.map((c) => c.rgba.buffer), _id);
+                postResponse({ type: 'vobSubFrame', frame: frameData, renderIssue }, frameData.compositions.map((c) => c.rgba.buffer), _id);
                 break;
             }
             case 'findPgsIndex': {

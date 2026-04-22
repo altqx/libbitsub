@@ -5,7 +5,9 @@
 
 import type {
   AutoSubtitleSource,
+  SubtitleDiagnosticsOptions,
   SubtitleData,
+  SubtitleDiagnosticWarning,
   SubtitleCueMetadata,
   SubtitleCompositionData,
   SubtitleParserMetadata,
@@ -17,6 +19,12 @@ import type {
   WasmVobSubParser,
   WasmSubtitleRenderer
 } from './types'
+import {
+  createSubtitleDiagnosticError,
+  createSubtitleWarning,
+  normalizeSubtitleError,
+  warningFromRenderIssue
+} from './diagnostics'
 import { getWasm } from './wasm'
 import { detectSubtitleFormat, getSubtitleBounds, isMksSource, trimTransparentImageData } from './utils'
 
@@ -36,21 +44,27 @@ export class PgsParser {
   private parser: WasmPgsParser | null = null
   private timestamps: Float64Array = new Float64Array(0)
   private cueMetadataCache = new Map<number, SubtitleCueMetadata | null>()
+  private readonly onWarning?: (warning: SubtitleDiagnosticWarning) => void
 
-  constructor() {
+  constructor(options: SubtitleDiagnosticsOptions = {}) {
     const wasm = getWasm()
     this.parser = new wasm.PgsParser()
+    this.onWarning = options.onWarning
   }
 
   /**
    * Load PGS subtitle data from a Uint8Array.
    */
   load(data: Uint8Array): number {
-    if (!this.parser) throw new Error('Parser not initialized')
-    const count = this.parser.parse(data)
-    this.timestamps = this.parser.getTimestamps()
-    this.cueMetadataCache.clear()
-    return count
+    try {
+      if (!this.parser) throw new Error('Parser not initialized')
+      const count = this.parser.parse(data)
+      this.timestamps = this.parser.getTimestamps()
+      this.cueMetadataCache.clear()
+      return count
+    } catch (error) {
+      throw normalizeSubtitleError(error, { format: 'pgs' })
+    }
   }
 
   /**
@@ -82,9 +96,18 @@ export class PgsParser {
     if (!this.parser) return undefined
 
     const frame = this.parser.renderAtIndex(index)
-    if (!frame) return undefined
+    if (!frame) {
+      const warning = warningFromRenderIssue(this.getLastRenderIssue(), { format: 'pgs', cueIndex: index })
+      if (warning) this.emitWarning(warning)
+      return undefined
+    }
 
     return this.convertFrame(frame)
+  }
+
+  getLastRenderIssue(): string | null {
+    const issue = this.parser?.lastRenderIssue?.trim()
+    return issue ? issue : null
   }
 
   /** Get parser-level metadata. */
@@ -148,8 +171,16 @@ export class PgsParser {
 
       // Validate buffer size
       if (rgba.length !== expectedLength || comp.width === 0 || comp.height === 0) {
-        console.warn(
-          `Invalid composition data: expected ${expectedLength} bytes, got ${rgba.length}, size=${comp.width}x${comp.height}`
+        this.emitWarning(
+          createSubtitleWarning('INVALID_FRAME_DATA', 'Invalid PGS composition buffer dimensions during frame conversion.', {
+            format: 'pgs',
+            details: {
+              expectedLength,
+              actualLength: rgba.length,
+              width: comp.width,
+              height: comp.height
+            }
+          })
         )
         continue
       }
@@ -191,6 +222,10 @@ export class PgsParser {
     this.timestamps = new Float64Array(0)
     this.cueMetadataCache.clear()
   }
+
+  private emitWarning(warning: SubtitleDiagnosticWarning): void {
+    this.onWarning?.(warning)
+  }
 }
 
 /**
@@ -201,40 +236,60 @@ export class VobSubParserLowLevel {
   private parser: WasmVobSubParserWithMks | null = null
   private timestamps: Float64Array = new Float64Array(0)
   private cueMetadataCache = new Map<number, SubtitleCueMetadata | null>()
+  private readonly onWarning?: (warning: SubtitleDiagnosticWarning) => void
 
-  constructor() {
+  constructor(options: SubtitleDiagnosticsOptions = {}) {
     const wasm = getWasm()
     this.parser = new wasm.VobSubParser() as WasmVobSubParserWithMks
+    this.onWarning = options.onWarning
   }
 
   /**
    * Load VobSub from IDX and SUB data.
    */
   loadFromData(idxContent: string, subData: Uint8Array): void {
-    if (!this.parser) throw new Error('Parser not initialized')
-    this.parser.loadFromData(idxContent, subData)
-    this.timestamps = this.parser.getTimestamps()
-    this.cueMetadataCache.clear()
+    try {
+      if (!this.parser) throw new Error('Parser not initialized')
+      this.parser.loadFromData(idxContent, subData)
+      this.timestamps = this.parser.getTimestamps()
+      this.cueMetadataCache.clear()
+
+      if (this.timestamps.length === 0 && idxContent.trim().length > 0) {
+        throw createSubtitleDiagnosticError('BAD_IDX', 'IDX metadata did not yield any subtitle timestamps.', {
+          format: 'vobsub'
+        })
+      }
+    } catch (error) {
+      throw normalizeSubtitleError(error, { format: 'vobsub', fallbackCode: 'BAD_IDX' })
+    }
   }
 
   /**
    * Load VobSub from SUB file only.
    */
   loadFromSubOnly(subData: Uint8Array): void {
-    if (!this.parser) throw new Error('Parser not initialized')
-    this.parser.loadFromSubOnly(subData)
-    this.timestamps = this.parser.getTimestamps()
-    this.cueMetadataCache.clear()
+    try {
+      if (!this.parser) throw new Error('Parser not initialized')
+      this.parser.loadFromSubOnly(subData)
+      this.timestamps = this.parser.getTimestamps()
+      this.cueMetadataCache.clear()
+    } catch (error) {
+      throw normalizeSubtitleError(error, { format: 'vobsub' })
+    }
   }
 
   /**
    * Load VobSub from an .mks Matroska subtitle container.
    */
   loadFromMks(mksData: Uint8Array): void {
-    if (!this.parser) throw new Error('Parser not initialized')
-    this.parser.loadFromMks(mksData)
-    this.timestamps = this.parser.getTimestamps()
-    this.cueMetadataCache.clear()
+    try {
+      if (!this.parser) throw new Error('Parser not initialized')
+      this.parser.loadFromMks(mksData)
+      this.timestamps = this.parser.getTimestamps()
+      this.cueMetadataCache.clear()
+    } catch (error) {
+      throw normalizeSubtitleError(error, { format: 'vobsub' })
+    }
   }
 
   /**
@@ -266,9 +321,18 @@ export class VobSubParserLowLevel {
     if (!this.parser) return undefined
 
     const frame = this.parser.renderAtIndex(index)
-    if (!frame) return undefined
+    if (!frame) {
+      const warning = warningFromRenderIssue(this.getLastRenderIssue(), { format: 'vobsub', cueIndex: index })
+      if (warning) this.emitWarning(warning)
+      return undefined
+    }
 
     return this.convertFrame(frame)
+  }
+
+  getLastRenderIssue(): string | null {
+    const issue = this.parser?.lastRenderIssue?.trim()
+    return issue ? issue : null
   }
 
   /** Get parser-level metadata. */
@@ -330,8 +394,16 @@ export class VobSubParserLowLevel {
 
     // Validate buffer size
     if (rgba.length !== expectedLength || frame.width === 0 || frame.height === 0) {
-      console.warn(
-        `Invalid VobSub frame: expected ${expectedLength} bytes, got ${rgba.length}, size=${frame.width}x${frame.height}`
+      this.emitWarning(
+        createSubtitleWarning('INVALID_FRAME_DATA', 'Invalid VobSub frame buffer dimensions during frame conversion.', {
+          format: 'vobsub',
+          details: {
+            expectedLength,
+            actualLength: rgba.length,
+            width: frame.width,
+            height: frame.height
+          }
+        })
       )
       return {
         width: frame.screenWidth,
@@ -408,6 +480,10 @@ export class VobSubParserLowLevel {
     this.timestamps = new Float64Array(0)
     this.cueMetadataCache.clear()
   }
+
+  private emitWarning(warning: SubtitleDiagnosticWarning): void {
+    this.onWarning?.(warning)
+  }
 }
 
 /**
@@ -417,69 +493,101 @@ export class UnifiedSubtitleParser {
   private renderer: WasmSubtitleRendererWithMks | null = null
   private timestamps: Float64Array = new Float64Array(0)
   private cueMetadataCache = new Map<number, SubtitleCueMetadata | null>()
+  private readonly onWarning?: (warning: SubtitleDiagnosticWarning) => void
 
-  constructor() {
+  constructor(options: SubtitleDiagnosticsOptions = {}) {
     const wasm = getWasm()
     this.renderer = new wasm.SubtitleRenderer() as WasmSubtitleRendererWithMks
+    this.onWarning = options.onWarning
   }
 
   /**
    * Load PGS subtitle data.
    */
   loadPgs(data: Uint8Array): number {
-    if (!this.renderer) throw new Error('Renderer not initialized')
-    const count = this.renderer.loadPgs(data)
-    this.timestamps = this.renderer.getTimestamps()
-    this.cueMetadataCache.clear()
-    return count
+    try {
+      if (!this.renderer) throw new Error('Renderer not initialized')
+      const count = this.renderer.loadPgs(data)
+      this.timestamps = this.renderer.getTimestamps()
+      this.cueMetadataCache.clear()
+      return count
+    } catch (error) {
+      throw normalizeSubtitleError(error, { format: 'pgs' })
+    }
   }
 
   /**
    * Load VobSub from IDX and SUB data.
    */
   loadVobSub(idxContent: string, subData: Uint8Array): void {
-    if (!this.renderer) throw new Error('Renderer not initialized')
-    this.renderer.loadVobSub(idxContent, subData)
-    this.timestamps = this.renderer.getTimestamps()
-    this.cueMetadataCache.clear()
+    try {
+      if (!this.renderer) throw new Error('Renderer not initialized')
+      this.renderer.loadVobSub(idxContent, subData)
+      this.timestamps = this.renderer.getTimestamps()
+      this.cueMetadataCache.clear()
+
+      if (this.timestamps.length === 0 && idxContent.trim().length > 0) {
+        throw createSubtitleDiagnosticError('BAD_IDX', 'IDX metadata did not yield any subtitle timestamps.', {
+          format: 'vobsub'
+        })
+      }
+    } catch (error) {
+      throw normalizeSubtitleError(error, { format: 'vobsub', fallbackCode: 'BAD_IDX' })
+    }
   }
 
   /**
    * Load VobSub from SUB file only.
    */
   loadVobSubOnly(subData: Uint8Array): void {
-    if (!this.renderer) throw new Error('Renderer not initialized')
-    this.renderer.loadVobSubOnly(subData)
-    this.timestamps = this.renderer.getTimestamps()
-    this.cueMetadataCache.clear()
+    try {
+      if (!this.renderer) throw new Error('Renderer not initialized')
+      this.renderer.loadVobSubOnly(subData)
+      this.timestamps = this.renderer.getTimestamps()
+      this.cueMetadataCache.clear()
+    } catch (error) {
+      throw normalizeSubtitleError(error, { format: 'vobsub' })
+    }
   }
 
   /**
    * Load VobSub from an .mks Matroska subtitle container.
    */
   loadVobSubMks(mksData: Uint8Array): void {
-    if (!this.renderer) throw new Error('Renderer not initialized')
-    this.renderer.loadVobSubMks(mksData)
-    this.timestamps = this.renderer.getTimestamps()
-    this.cueMetadataCache.clear()
+    try {
+      if (!this.renderer) throw new Error('Renderer not initialized')
+      this.renderer.loadVobSubMks(mksData)
+      this.timestamps = this.renderer.getTimestamps()
+      this.cueMetadataCache.clear()
+    } catch (error) {
+      throw normalizeSubtitleError(error, { format: 'vobsub' })
+    }
   }
 
   /** Load subtitle data with automatic format detection. */
   loadAuto(source: AutoSubtitleSource): SubtitleFormatName {
     const format = detectSubtitleFormat(source)
     if (!format) {
-      throw new Error('Unable to detect subtitle format')
+      throw createSubtitleDiagnosticError('UNSUPPORTED_FORMAT', 'Unable to detect subtitle format.')
     }
 
     if (format === 'pgs') {
       const data = source.data ?? source.subData
-      if (!data) throw new Error('No binary subtitle data provided for PGS')
+      if (!data) {
+        throw createSubtitleDiagnosticError('MISSING_INPUT', 'No binary subtitle data provided for PGS.', {
+          format: 'pgs'
+        })
+      }
       this.loadPgs(data instanceof Uint8Array ? data : new Uint8Array(data))
       return 'pgs'
     }
 
     const subBinary = source.subData ?? source.data
-    if (!subBinary) throw new Error('No SUB binary data provided for VobSub')
+    if (!subBinary) {
+      throw createSubtitleDiagnosticError('MISSING_INPUT', 'No SUB binary data provided for VobSub.', {
+        format: 'vobsub'
+      })
+    }
 
     const subData = subBinary instanceof Uint8Array ? subBinary : new Uint8Array(subBinary)
 
@@ -533,9 +641,18 @@ export class UnifiedSubtitleParser {
     if (!this.renderer) return undefined
 
     const result = this.renderer.renderAtIndex(index)
-    if (!result) return undefined
+    if (!result) {
+      const warning = warningFromRenderIssue(this.getLastRenderIssue(), { format: this.format ?? undefined, cueIndex: index })
+      if (warning) this.emitWarning(warning)
+      return undefined
+    }
 
     return this.convertResult(result)
+  }
+
+  getLastRenderIssue(): string | null {
+    const issue = this.renderer?.lastRenderIssue?.trim()
+    return issue ? issue : null
   }
 
   /** Get parser-level metadata. */
@@ -617,8 +734,16 @@ export class UnifiedSubtitleParser {
           y: result.getCompositionY(i) + trimmed.offsetY
         })
       } else if (width > 0 && height > 0) {
-        console.warn(
-          `Invalid unified result: expected ${expectedLength} bytes, got ${rgba.length}, size=${width}x${height}`
+        this.emitWarning(
+          createSubtitleWarning('INVALID_FRAME_DATA', 'Invalid unified subtitle render buffer dimensions during frame conversion.', {
+            format: this.format ?? undefined,
+            details: {
+              expectedLength,
+              actualLength: rgba.length,
+              width,
+              height
+            }
+          })
         )
       }
     }
@@ -647,5 +772,9 @@ export class UnifiedSubtitleParser {
     this.renderer = null
     this.timestamps = new Float64Array(0)
     this.cueMetadataCache.clear()
+  }
+
+  private emitWarning(warning: SubtitleDiagnosticWarning): void {
+    this.onWarning?.(warning)
   }
 }

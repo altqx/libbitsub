@@ -1,8 +1,8 @@
 //! Matroska subtitle extraction for embedded VobSub tracks.
 
 use miniz_oxide::inflate::{TINFLStatus, decompress_to_vec_zlib_with_limit};
-use std::ops::Range;
 use std::fmt::Write;
+use std::ops::Range;
 
 const EBML_ID_SEGMENT: u32 = 0x1853_8067;
 const EBML_ID_SEGMENT_INFO: u32 = 0x1549_A966;
@@ -119,7 +119,9 @@ pub fn extract_vobsub_from_mks(data: &[u8]) -> Result<ExtractedVobSub, String> {
     let mut sub_data = Vec::new();
     let mut idx_content = normalize_idx_header(&data[codec_private]);
     if idx_content.trim().is_empty() {
-        return Err("Selected S_VOBSUB track has an empty or invalid CodecPrivate header".to_string());
+        return Err(
+            "Selected S_VOBSUB track has an empty or invalid CodecPrivate header".to_string(),
+        );
     }
 
     for frame in &frames {
@@ -127,7 +129,12 @@ pub fn extract_vobsub_from_mks(data: &[u8]) -> Result<ExtractedVobSub, String> {
             return Err("Extracted VobSub output exceeds supported size limit".to_string());
         }
         let file_position = sub_data.len() as u64;
-        append_ps_pes_packet(&mut sub_data, frame.timestamp_ms, 0x20, frame.payload.as_slice(data))?;
+        append_ps_pes_packet(
+            &mut sub_data,
+            frame.timestamp_ms,
+            0x20,
+            frame.payload.as_slice(data),
+        )?;
         if sub_data.len() > MAX_EXTRACTED_SUB_SIZE {
             return Err("Extracted VobSub output exceeds supported size limit".to_string());
         }
@@ -505,7 +512,10 @@ fn parse_content_compression(
             EBML_ID_CONTENT_COMP_SETTINGS => {
                 let settings_len = data_end - data_start;
                 if settings_len > MAX_CONTENT_COMP_SETTINGS_SIZE {
-                    return Err("Matroska content compression settings exceed supported size limit".to_string());
+                    return Err(
+                        "Matroska content compression settings exceed supported size limit"
+                            .to_string(),
+                    );
                 }
                 settings = Some(data_start..data_end);
             }
@@ -531,21 +541,26 @@ fn decode_track_payload(
 ) -> Result<TrackPayload, String> {
     let decoded = match compression {
         TrackCompression::None => TrackPayload::BorrowedRange(payload_range),
-        TrackCompression::Zlib => decompress_to_vec_zlib_with_limit(payload, MAX_BLOCK_PAYLOAD_SIZE)
-            .map_err(|error| match error.status {
-                TINFLStatus::HasMoreOutput => {
-                    "Inflated Matroska subtitle block exceeds supported size limit".to_string()
-                }
-                TINFLStatus::Adler32Mismatch => {
-                    "Matroska subtitle block failed checksum verification".to_string()
-                }
-                _ => "Failed to inflate zlib-compressed Matroska subtitle block".to_string(),
-            })
-            .map(TrackPayload::Owned)?,
+        TrackCompression::Zlib => {
+            decompress_to_vec_zlib_with_limit(payload, MAX_BLOCK_PAYLOAD_SIZE)
+                .map_err(|error| match error.status {
+                    TINFLStatus::HasMoreOutput => {
+                        "Inflated Matroska subtitle block exceeds supported size limit".to_string()
+                    }
+                    TINFLStatus::Adler32Mismatch => {
+                        "Matroska subtitle block failed checksum verification".to_string()
+                    }
+                    _ => "Failed to inflate zlib-compressed Matroska subtitle block".to_string(),
+                })
+                .map(TrackPayload::Owned)?
+        }
         TrackCompression::HeaderStrip(prefix) => {
             let prefix_slice = &source_data[prefix.clone()];
             if prefix_slice.len().saturating_add(payload.len()) > MAX_BLOCK_PAYLOAD_SIZE {
-                return Err("Header-stripped Matroska subtitle block exceeds supported size limit".to_string());
+                return Err(
+                    "Header-stripped Matroska subtitle block exceeds supported size limit"
+                        .to_string(),
+                );
             }
             let mut out = Vec::with_capacity(prefix_slice.len() + payload.len());
             out.extend_from_slice(prefix_slice);
@@ -660,10 +675,14 @@ fn validate_vobsub_payload(payload: &[u8]) -> Result<(), String> {
         return Err("Matroska subtitle block declares an invalid VobSub packet size".to_string());
     }
     if payload.len() != packet_size {
-        return Err("Matroska subtitle block size does not match declared VobSub packet length".to_string());
+        return Err(
+            "Matroska subtitle block size does not match declared VobSub packet length".to_string(),
+        );
     }
     if dcsq_offset < 4 || dcsq_offset > packet_size {
-        return Err("Matroska subtitle block declares an invalid VobSub control offset".to_string());
+        return Err(
+            "Matroska subtitle block declares an invalid VobSub control offset".to_string(),
+        );
     }
 
     Ok(())
@@ -889,7 +908,8 @@ mod tests {
         payload[1] = 4;
 
         let mks = build_test_mks(&idx_header, &payload, 1_000, "eng", 1);
-        let error = extract_vobsub_from_mks(&mks).expect_err("expected corrupt payload to be rejected");
+        let error =
+            extract_vobsub_from_mks(&mks).expect_err("expected corrupt payload to be rejected");
 
         assert!(error.contains("declared VobSub packet length"));
     }
@@ -908,7 +928,8 @@ mod tests {
             1,
         );
 
-        let error = extract_vobsub_from_mks(&mks).expect_err("expected oversized inflation to be rejected");
+        let error =
+            extract_vobsub_from_mks(&mks).expect_err("expected oversized inflation to be rejected");
         assert!(error.contains("supported size limit"));
     }
 
@@ -1043,7 +1064,9 @@ mod tests {
         if !matches!(compression, TrackCompression::None) {
             let compression_payload = match compression {
                 TrackCompression::Zlib => Vec::new(),
-                TrackCompression::HeaderStrip(_) => panic!("header-strip test helper is not implemented for borrowed range compression state"),
+                TrackCompression::HeaderStrip(_) => panic!(
+                    "header-strip test helper is not implemented for borrowed range compression state"
+                ),
                 TrackCompression::None => Vec::new(),
             };
 
