@@ -22,6 +22,7 @@ import type {
 import {
   createSubtitleDiagnosticError,
   createSubtitleWarning,
+  formatSubtitleWarningForConsole,
   normalizeSubtitleError,
   warningFromRenderIssue
 } from './diagnostics'
@@ -44,11 +45,13 @@ export class PgsParser {
   private parser: WasmPgsParser | null = null
   private timestamps: Float64Array = new Float64Array(0)
   private cueMetadataCache = new Map<number, SubtitleCueMetadata | null>()
+  private readonly debug: boolean
   private readonly onWarning?: (warning: SubtitleDiagnosticWarning) => void
 
   constructor(options: SubtitleDiagnosticsOptions = {}) {
     const wasm = getWasm()
     this.parser = new wasm.PgsParser()
+    this.debug = Boolean(options.debug)
     this.onWarning = options.onWarning
   }
 
@@ -225,6 +228,10 @@ export class PgsParser {
 
   private emitWarning(warning: SubtitleDiagnosticWarning): void {
     this.onWarning?.(warning)
+
+    if (this.debug && !this.onWarning) {
+      console.warn(formatSubtitleWarningForConsole(warning), warning.details ?? {})
+    }
   }
 }
 
@@ -236,11 +243,13 @@ export class VobSubParserLowLevel {
   private parser: WasmVobSubParserWithMks | null = null
   private timestamps: Float64Array = new Float64Array(0)
   private cueMetadataCache = new Map<number, SubtitleCueMetadata | null>()
+  private readonly debug: boolean
   private readonly onWarning?: (warning: SubtitleDiagnosticWarning) => void
 
   constructor(options: SubtitleDiagnosticsOptions = {}) {
     const wasm = getWasm()
     this.parser = new wasm.VobSubParser() as WasmVobSubParserWithMks
+    this.debug = Boolean(options.debug)
     this.onWarning = options.onWarning
   }
 
@@ -483,6 +492,10 @@ export class VobSubParserLowLevel {
 
   private emitWarning(warning: SubtitleDiagnosticWarning): void {
     this.onWarning?.(warning)
+
+    if (this.debug && !this.onWarning) {
+      console.warn(formatSubtitleWarningForConsole(warning), warning.details ?? {})
+    }
   }
 }
 
@@ -493,11 +506,13 @@ export class UnifiedSubtitleParser {
   private renderer: WasmSubtitleRendererWithMks | null = null
   private timestamps: Float64Array = new Float64Array(0)
   private cueMetadataCache = new Map<number, SubtitleCueMetadata | null>()
+  private readonly debug: boolean
   private readonly onWarning?: (warning: SubtitleDiagnosticWarning) => void
 
   constructor(options: SubtitleDiagnosticsOptions = {}) {
     const wasm = getWasm()
     this.renderer = new wasm.SubtitleRenderer() as WasmSubtitleRendererWithMks
+    this.debug = Boolean(options.debug)
     this.onWarning = options.onWarning
   }
 
@@ -776,5 +791,9 @@ export class UnifiedSubtitleParser {
 
   private emitWarning(warning: SubtitleDiagnosticWarning): void {
     this.onWarning?.(warning)
+
+    if (this.debug && !this.onWarning) {
+      console.warn(formatSubtitleWarningForConsole(warning), warning.details ?? {})
+    }
   }
 }

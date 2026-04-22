@@ -21,6 +21,7 @@ import type {
 import {
   createSubtitleDiagnosticError,
   createSubtitleWarning,
+  formatSubtitleWarningForConsole,
   normalizeSubtitleError,
   warningFromRenderIssue
 } from './diagnostics'
@@ -362,6 +363,10 @@ abstract class BaseVideoSubtitleRenderer {
   protected emitWarning(warning: SubtitleDiagnosticWarning): void {
     this.onWarning?.(warning)
     this.emitEvent({ type: 'warning', warning })
+
+    if (this.debug && !this.onWarning) {
+      console.warn(formatSubtitleWarningForConsole(warning), warning.details ?? {})
+    }
   }
 
   protected setParserMetadata(metadata: SubtitleParserMetadata | null): void {
