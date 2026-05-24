@@ -2,11 +2,23 @@
 name = "libbitsub"
 version = "1.10.0"
 edition = "2024"
+rust-version = "1.85"
 authors = ["altqx"]
 license = "MIT"
 description = "High-performance WASM renderer for graphical subtitles (PGS and VobSub)"
+readme = "README.md"
 repository = "https://github.com/altqx/libbitsub"
 keywords = ["pgs", "vobsub", "subtitle", "wasm", "rendering"]
+categories = ["multimedia::video", "parser-implementations", "wasm"]
+include = [
+    "/Cargo.toml",
+    "/LICENSE",
+    "/README.md",
+    "/src/lib.rs",
+]
+
+[workspace]
+members = ["crates/core"]
 
 [lib]
 crate-type = ["cdylib", "rlib"]
@@ -19,9 +31,7 @@ wasm-bindgen = "0.2.118"
 js-sys = "0.3.95"
 console_error_panic_hook = { version = "0.1.7", optional = true }
 wee_alloc = { version = "0.4.5", optional = true }
-byteorder = "1.5.0"
-memchr = "2.8.0"
-miniz_oxide = "0.9.1"
+libbitsub-core = { version = "1.10.0", path = "crates/core" }
 
 [dev-dependencies]
 wasm-bindgen-test = "0.3.68"

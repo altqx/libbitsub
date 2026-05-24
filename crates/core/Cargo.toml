@@ -1,0 +1,23 @@
+[package]
+name = "libbitsub-core"
+version = "1.10.0"
+edition = "2024"
+rust-version = "1.85"
+authors = ["altqx"]
+license = "MIT"
+description = "Pure Rust parser and renderer core for graphical subtitles (PGS and VobSub)"
+readme = "README.md"
+repository = "https://github.com/altqx/libbitsub"
+keywords = ["pgs", "vobsub", "subtitle", "rendering"]
+categories = ["multimedia::video", "parser-implementations"]
+include = [
+    "/Cargo.toml",
+    "/README.md",
+    "/src/**/*.rs",
+    "/src/testfiles/*",
+]
+
+[dependencies]
+byteorder = "1.5.0"
+memchr = "2.8.0"
+miniz_oxide = "0.9.1"

@@ -1,9 +1,7 @@
 //! PGS file parser and subtitle data management.
 
-use js_sys::{Float64Array, Uint8Array};
 use memchr::memchr;
 use std::collections::HashMap;
-use wasm_bindgen::prelude::*;
 
 use super::{
     AssembledObject, DisplaySet, MAX_PGS_BITMAP_PIXELS, ObjectDefinitionSegment,
@@ -11,8 +9,7 @@ use super::{
 };
 use crate::utils::binary_search_timestamp;
 
-/// PGS subtitle parser and renderer exposed to JavaScript.
-#[wasm_bindgen]
+/// PGS subtitle parser and renderer.
 pub struct PgsParser {
     /// All parsed display sets
     display_sets: Vec<DisplaySet>,
@@ -37,10 +34,8 @@ struct DecodedBitmap {
     pub height: u16,
 }
 
-#[wasm_bindgen]
 impl PgsParser {
     /// Create a new PGS parser.
-    #[wasm_bindgen(constructor)]
     pub fn new() -> Self {
         Self {
             display_sets: Vec::new(),
@@ -55,7 +50,6 @@ impl PgsParser {
 
     /// Parse a PGS file from binary data.
     /// Returns the number of display sets parsed.
-    #[wasm_bindgen]
     pub fn parse(&mut self, data: &[u8]) -> usize {
         self.display_sets.clear();
         self.timestamps_ms.clear();
@@ -103,13 +97,11 @@ impl PgsParser {
     }
 
     /// Get the number of display sets.
-    #[wasm_bindgen(getter)]
     pub fn count(&self) -> usize {
         self.display_sets.len()
     }
 
     /// Get the presentation width for this subtitle track.
-    #[wasm_bindgen(getter, js_name = screenWidth)]
     pub fn screen_width(&self) -> u16 {
         self.display_sets
             .iter()
@@ -118,7 +110,6 @@ impl PgsParser {
     }
 
     /// Get the presentation height for this subtitle track.
-    #[wasm_bindgen(getter, js_name = screenHeight)]
     pub fn screen_height(&self) -> u16 {
         self.display_sets
             .iter()
@@ -130,18 +121,12 @@ impl PgsParser {
             .unwrap_or(0)
     }
 
-    /// Get all timestamps in milliseconds as a Float64Array.
-    #[wasm_bindgen(js_name = getTimestamps)]
-    pub fn get_timestamps(&self) -> Float64Array {
-        let arr = Float64Array::new_with_length(self.timestamps_ms.len() as u32);
-        for (i, &ts) in self.timestamps_ms.iter().enumerate() {
-            arr.set_index(i as u32, ts as f64);
-        }
-        arr
+    /// Get all timestamps in milliseconds.
+    pub fn get_timestamps(&self) -> Vec<f64> {
+        self.timestamps_ms.iter().map(|&ts| ts as f64).collect()
     }
 
     /// Find the display set index for a given timestamp in milliseconds.
-    #[wasm_bindgen(js_name = findIndexAtTimestamp)]
     pub fn find_index_at_timestamp(&self, time_ms: f64) -> i32 {
         if self.timestamps_ms.is_empty() {
             return -1;
@@ -159,7 +144,6 @@ impl PgsParser {
     }
 
     /// Get the cue start time in milliseconds.
-    #[wasm_bindgen(js_name = getCueStartTime)]
     pub fn get_cue_start_time(&self, index: usize) -> f64 {
         self.timestamps_ms
             .get(index)
@@ -168,7 +152,6 @@ impl PgsParser {
     }
 
     /// Get the cue end time in milliseconds.
-    #[wasm_bindgen(js_name = getCueEndTime)]
     pub fn get_cue_end_time(&self, index: usize) -> f64 {
         let Some(&start_time) = self.timestamps_ms.get(index) else {
             return -1.0;
@@ -184,7 +167,6 @@ impl PgsParser {
     }
 
     /// Get the number of composition objects in a cue.
-    #[wasm_bindgen(js_name = getCueCompositionCount)]
     pub fn get_cue_composition_count(&self, index: usize) -> u32 {
         self.display_sets
             .get(index)
@@ -195,7 +177,6 @@ impl PgsParser {
     }
 
     /// Get the cue palette ID.
-    #[wasm_bindgen(js_name = getCuePaletteId)]
     pub fn get_cue_palette_id(&self, index: usize) -> i32 {
         self.display_sets
             .get(index)
@@ -204,7 +185,6 @@ impl PgsParser {
     }
 
     /// Get the cue composition state.
-    #[wasm_bindgen(js_name = getCueCompositionState)]
     pub fn get_cue_composition_state(&self, index: usize) -> i32 {
         self.display_sets
             .get(index)
@@ -214,7 +194,6 @@ impl PgsParser {
 
     /// Render subtitle at the given index and return RGBA data.
     /// Returns null if index is invalid or no subtitle data.
-    #[wasm_bindgen(js_name = renderAtIndex)]
     pub fn render_at_index(&mut self, index: usize) -> Option<SubtitleFrame> {
         self.last_render_issue = None;
 
@@ -325,13 +304,11 @@ impl PgsParser {
     }
 
     /// Get the last non-fatal render issue for diagnostics.
-    #[wasm_bindgen(getter, js_name = lastRenderIssue)]
     pub fn last_render_issue(&self) -> String {
         self.last_render_issue.clone().unwrap_or_default()
     }
 
     /// Clear the internal cache.
-    #[wasm_bindgen(js_name = clearCache)]
     pub fn clear_cache(&mut self) {
         self.indexed_cache.clear();
         self.last_boundary_index = None;
@@ -481,73 +458,56 @@ impl RenderContext {
 }
 
 /// A single subtitle composition element.
-#[wasm_bindgen]
 #[derive(Clone)]
 pub struct SubtitleComposition {
-    pub(crate) x: u16,
-    pub(crate) y: u16,
-    pub(crate) width: u16,
-    pub(crate) height: u16,
-    pub(crate) rgba: Vec<u8>,
+    pub x: u16,
+    pub y: u16,
+    pub width: u16,
+    pub height: u16,
+    pub rgba: Vec<u8>,
 }
 
-#[wasm_bindgen]
 impl SubtitleComposition {
-    #[wasm_bindgen(getter)]
     pub fn x(&self) -> u16 {
         self.x
     }
-
-    #[wasm_bindgen(getter)]
     pub fn y(&self) -> u16 {
         self.y
     }
-
-    #[wasm_bindgen(getter)]
     pub fn width(&self) -> u16 {
         self.width
     }
-
-    #[wasm_bindgen(getter)]
     pub fn height(&self) -> u16 {
         self.height
     }
 
-    /// Get RGBA pixel data as Uint8Array.
-    #[wasm_bindgen(js_name = getRgba)]
-    pub fn get_rgba(&self) -> Uint8Array {
-        Uint8Array::from(&self.rgba[..])
+    /// Get RGBA pixel data.
+    pub fn get_rgba(&self) -> &[u8] {
+        &self.rgba
     }
 }
 
 /// A complete subtitle frame with all compositions.
-#[wasm_bindgen]
 pub struct SubtitleFrame {
-    pub(crate) width: u16,
-    pub(crate) height: u16,
-    pub(crate) compositions: Vec<SubtitleComposition>,
+    pub width: u16,
+    pub height: u16,
+    pub compositions: Vec<SubtitleComposition>,
 }
 
-#[wasm_bindgen]
 impl SubtitleFrame {
-    #[wasm_bindgen(getter)]
     pub fn width(&self) -> u16 {
         self.width
     }
-
-    #[wasm_bindgen(getter)]
     pub fn height(&self) -> u16 {
         self.height
     }
 
     /// Get the number of compositions.
-    #[wasm_bindgen(getter, js_name = compositionCount)]
     pub fn composition_count(&self) -> usize {
         self.compositions.len()
     }
 
     /// Get a composition by index.
-    #[wasm_bindgen(js_name = getComposition)]
     pub fn get_composition(&self, index: usize) -> Option<SubtitleComposition> {
         self.compositions.get(index).cloned()
     }

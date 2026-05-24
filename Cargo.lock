@@ -128,14 +128,21 @@ dependencies = [
 name = "libbitsub"
 version = "1.10.0"
 dependencies = [
- "byteorder",
  "console_error_panic_hook",
  "js-sys",
- "memchr",
- "miniz_oxide",
+ "libbitsub-core",
  "wasm-bindgen",
  "wasm-bindgen-test",
  "wee_alloc",
+]
+
+[[package]]
+name = "libbitsub-core"
+version = "1.10.0"
+dependencies = [
+ "byteorder",
+ "memchr",
+ "miniz_oxide",
 ]
 
 [[package]]

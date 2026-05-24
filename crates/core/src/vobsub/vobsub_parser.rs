@@ -1,9 +1,7 @@
-//! VobSub parser exposed to JavaScript via WASM.
+//! VobSub parser.
 
-use js_sys::{Float64Array, Uint8Array};
 use memchr::memchr;
 use std::collections::HashMap;
-use wasm_bindgen::prelude::*;
 
 use super::{
     DebandConfig, ExtractedVobSub, IdxParseResult, SubtitlePacket, VobSubPalette, VobSubTimestamp,
@@ -11,8 +9,7 @@ use super::{
 };
 use crate::utils::binary_search_timestamp;
 
-/// VobSub subtitle parser and renderer exposed to JavaScript.
-#[wasm_bindgen]
+/// VobSub subtitle parser and renderer.
 pub struct VobSubParser {
     /// Parsed IDX data
     idx_data: Option<IdxParseResult>,
@@ -30,10 +27,8 @@ pub struct VobSubParser {
     last_render_issue: Option<String>,
 }
 
-#[wasm_bindgen]
 impl VobSubParser {
     /// Create a new VobSub parser.
-    #[wasm_bindgen(constructor)]
     pub fn new() -> Self {
         Self {
             idx_data: None,
@@ -47,15 +42,13 @@ impl VobSubParser {
     }
 
     /// Load VobSub from IDX content and SUB data.
-    #[wasm_bindgen(js_name = loadFromData)]
     pub fn load_from_data(&mut self, idx_content: &str, sub_data: Vec<u8>) {
         self.dispose();
         self.apply_loaded_data(parse_idx(idx_content), sub_data, true);
     }
 
     /// Load VobSub from a Matroska subtitle container with embedded S_VOBSUB tracks.
-    #[wasm_bindgen(js_name = loadFromMks)]
-    pub fn load_from_mks(&mut self, mks_data: &[u8]) -> Result<(), JsValue> {
+    pub fn load_from_mks(&mut self, mks_data: &[u8]) -> Result<(), String> {
         self.dispose();
 
         let ExtractedVobSub {
@@ -63,7 +56,7 @@ impl VobSubParser {
             sub_data,
             language,
             track_id,
-        } = extract_vobsub_from_mks(mks_data).map_err(|error| JsValue::from_str(&error))?;
+        } = extract_vobsub_from_mks(mks_data)?;
 
         let mut idx = parse_idx(&idx_content);
         if language.is_some() {
@@ -78,7 +71,6 @@ impl VobSubParser {
     }
 
     /// Load VobSub from SUB file only (scans for timestamps).
-    #[wasm_bindgen(js_name = loadFromSubOnly)]
     pub fn load_from_sub_only(&mut self, sub_data: Vec<u8>) {
         self.dispose();
 
@@ -131,7 +123,6 @@ impl VobSubParser {
     }
 
     /// Dispose of all resources.
-    #[wasm_bindgen]
     pub fn dispose(&mut self) {
         self.idx_data = None;
         self.sub_data = None;
@@ -143,19 +134,16 @@ impl VobSubParser {
     }
 
     /// Get the last non-fatal render issue for diagnostics.
-    #[wasm_bindgen(getter, js_name = lastRenderIssue)]
     pub fn last_render_issue(&self) -> String {
         self.last_render_issue.clone().unwrap_or_default()
     }
 
     /// Get the number of subtitle entries.
-    #[wasm_bindgen(getter)]
     pub fn count(&self) -> usize {
         self.timestamps_ms.len()
     }
 
     /// Get the presentation width for this subtitle track.
-    #[wasm_bindgen(getter, js_name = screenWidth)]
     pub fn screen_width(&self) -> u16 {
         self.idx_data
             .as_ref()
@@ -163,7 +151,6 @@ impl VobSubParser {
     }
 
     /// Get the presentation height for this subtitle track.
-    #[wasm_bindgen(getter, js_name = screenHeight)]
     pub fn screen_height(&self) -> u16 {
         self.idx_data
             .as_ref()
@@ -171,7 +158,6 @@ impl VobSubParser {
     }
 
     /// Get the declared language code from IDX metadata.
-    #[wasm_bindgen(getter)]
     pub fn language(&self) -> String {
         self.idx_data
             .as_ref()
@@ -180,7 +166,6 @@ impl VobSubParser {
     }
 
     /// Get the declared subtitle track ID from IDX metadata.
-    #[wasm_bindgen(getter, js_name = trackId)]
     pub fn track_id(&self) -> String {
         self.idx_data
             .as_ref()
@@ -189,24 +174,17 @@ impl VobSubParser {
     }
 
     /// Check whether IDX metadata was used to load the parser.
-    #[wasm_bindgen(getter, js_name = hasIdxMetadata)]
     pub fn has_idx_metadata(&self) -> bool {
         self.loaded_from_idx
     }
 
-    /// Get all timestamps in milliseconds as a Float64Array.
-    #[wasm_bindgen(js_name = getTimestamps)]
-    pub fn get_timestamps(&self) -> Float64Array {
-        let arr = Float64Array::new_with_length(self.timestamps_ms.len() as u32);
-        for (i, &ts) in self.timestamps_ms.iter().enumerate() {
-            arr.set_index(i as u32, ts as f64);
-        }
-        arr
+    /// Get all timestamps in milliseconds.
+    pub fn get_timestamps(&self) -> Vec<f64> {
+        self.timestamps_ms.iter().map(|&ts| ts as f64).collect()
     }
 
     /// Find the subtitle index for a given timestamp in milliseconds.
     /// Returns -1 if no subtitle should be displayed at this time.
-    #[wasm_bindgen(js_name = findIndexAtTimestamp)]
     pub fn find_index_at_timestamp(&mut self, time_ms: f64) -> i32 {
         if self.timestamps_ms.is_empty() {
             return -1;
@@ -235,7 +213,6 @@ impl VobSubParser {
     }
 
     /// Get the cue start time in milliseconds.
-    #[wasm_bindgen(js_name = getCueStartTime)]
     pub fn get_cue_start_time(&self, index: usize) -> f64 {
         self.timestamps_ms
             .get(index)
@@ -244,7 +221,6 @@ impl VobSubParser {
     }
 
     /// Get the cue end time in milliseconds.
-    #[wasm_bindgen(js_name = getCueEndTime)]
     pub fn get_cue_end_time(&mut self, index: usize) -> f64 {
         let Some(&start_time) = self.timestamps_ms.get(index) else {
             return -1.0;
@@ -254,7 +230,6 @@ impl VobSubParser {
     }
 
     /// Get the cue duration in milliseconds.
-    #[wasm_bindgen(js_name = getCueDuration)]
     pub fn get_cue_duration(&mut self, index: usize) -> f64 {
         let Some(&start_time) = self.timestamps_ms.get(index) else {
             return -1.0;
@@ -265,7 +240,6 @@ impl VobSubParser {
     }
 
     /// Get the cue file position in the SUB file.
-    #[wasm_bindgen(js_name = getCueFilePosition)]
     pub fn get_cue_file_position(&self, index: usize) -> f64 {
         self.idx_data
             .as_ref()
@@ -351,7 +325,6 @@ impl VobSubParser {
     }
 
     /// Render subtitle at the given index and return RGBA data.
-    #[wasm_bindgen(js_name = renderAtIndex)]
     pub fn render_at_index(&mut self, index: usize) -> Option<VobSubFrame> {
         self.last_render_issue = None;
 
@@ -413,31 +386,26 @@ impl VobSubParser {
     }
 
     /// Clear the internal cache.
-    #[wasm_bindgen(js_name = clearCache)]
     pub fn clear_cache(&mut self) {
         self.packet_cache.clear();
     }
 
     /// Enable or disable debanding.
-    #[wasm_bindgen(js_name = setDebandEnabled)]
     pub fn set_deband_enabled(&mut self, enabled: bool) {
         self.deband_config.enabled = enabled;
     }
 
     /// Set the deband threshold (0.0-255.0, default: 64.0).
-    #[wasm_bindgen(js_name = setDebandThreshold)]
     pub fn set_deband_threshold(&mut self, threshold: f32) {
         self.deband_config.threshold = threshold.clamp(0.0, 255.0);
     }
 
     /// Set the deband sample range in pixels (default: 15).
-    #[wasm_bindgen(js_name = setDebandRange)]
     pub fn set_deband_range(&mut self, range: u32) {
         self.deband_config.range = range.clamp(1, 64);
     }
 
     /// Check if debanding is enabled.
-    #[wasm_bindgen(getter, js_name = debandEnabled)]
     pub fn deband_enabled(&self) -> bool {
         self.deband_config.enabled
     }
@@ -464,58 +432,47 @@ mod tests {
         parser.dispose();
 
         assert!(parser.deband_enabled());
-        assert_eq!(parser.deband_config.threshold, DebandConfig::default().threshold);
+        assert_eq!(
+            parser.deband_config.threshold,
+            DebandConfig::default().threshold
+        );
         assert_eq!(parser.deband_config.range, DebandConfig::default().range);
     }
 }
 
 /// A VobSub subtitle frame.
-#[wasm_bindgen]
 pub struct VobSubFrame {
-    pub(crate) screen_width: u16,
-    pub(crate) screen_height: u16,
-    pub(crate) x: u16,
-    pub(crate) y: u16,
-    pub(crate) width: u16,
-    pub(crate) height: u16,
-    pub(crate) rgba: Vec<u8>,
+    pub screen_width: u16,
+    pub screen_height: u16,
+    pub x: u16,
+    pub y: u16,
+    pub width: u16,
+    pub height: u16,
+    pub rgba: Vec<u8>,
 }
 
-#[wasm_bindgen]
 impl VobSubFrame {
-    #[wasm_bindgen(getter, js_name = screenWidth)]
     pub fn screen_width(&self) -> u16 {
         self.screen_width
     }
-
-    #[wasm_bindgen(getter, js_name = screenHeight)]
     pub fn screen_height(&self) -> u16 {
         self.screen_height
     }
-
-    #[wasm_bindgen(getter)]
     pub fn x(&self) -> u16 {
         self.x
     }
-
-    #[wasm_bindgen(getter)]
     pub fn y(&self) -> u16 {
         self.y
     }
-
-    #[wasm_bindgen(getter)]
     pub fn width(&self) -> u16 {
         self.width
     }
-
-    #[wasm_bindgen(getter)]
     pub fn height(&self) -> u16 {
         self.height
     }
 
-    /// Get RGBA pixel data as Uint8Array.
-    #[wasm_bindgen(js_name = getRgba)]
-    pub fn get_rgba(&self) -> Uint8Array {
-        Uint8Array::from(&self.rgba[..])
+    /// Get RGBA pixel data.
+    pub fn get_rgba(&self) -> &[u8] {
+        &self.rgba
     }
 }

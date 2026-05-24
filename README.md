@@ -35,6 +35,22 @@ https://a.rafasu.com/v
 
 ## Installation
 
+For pure Rust parser/rendering logic:
+
+```toml
+[dependencies]
+libbitsub-core = "1.10.0"
+```
+
+For WASM bindings from Rust:
+
+```toml
+[dependencies]
+libbitsub = "1.10.0"
+```
+
+For JavaScript package managers:
+
 ```bash
 npm install libbitsub
 # or
