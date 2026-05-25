@@ -127,10 +127,11 @@ fn decode_field(
 
             // End of line (run_length == 0)
             if run_length == 0 {
+                let color = &colors[color_idx];
                 while x < width {
                     let pixel_offset = (y * width + x) * 4;
                     if pixel_offset + 4 <= rgba.len() {
-                        rgba[pixel_offset..pixel_offset + 4].copy_from_slice(&colors[0]);
+                        rgba[pixel_offset..pixel_offset + 4].copy_from_slice(color);
                     }
                     x += 1;
                 }
@@ -240,7 +241,7 @@ fn read_rle_code(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::vobsub::VobSubPalette;
+    use crate::vobsub::{SubtitlePacketData, VobSubPalette};
 
     #[test]
     fn test_rle_code_4bit() {
@@ -272,5 +273,30 @@ mod tests {
         };
 
         assert!(decode_vobsub_rle(&packet, &[], &VobSubPalette::default()).is_empty());
+    }
+
+    #[test]
+    fn test_decode_vobsub_rle_end_of_line_uses_code_color() {
+        let packet = SubtitlePacket {
+            timestamp_ms: 0,
+            duration_ms: 1000,
+            x: 0,
+            y: 0,
+            width: 4,
+            height: 1,
+            color_indices: [0, 1, 2, 3],
+            alpha_values: [0, 15, 15, 15],
+            packet_data: SubtitlePacketData::Owned(vec![0x00, 0x02]),
+            even_field_range: 0..2,
+            odd_field_range: 0..0,
+        };
+        let mut palette = VobSubPalette::default();
+        palette.rgba[2] = crate::utils::rgb_to_rgba(0, 0, 255, 255);
+
+        let rgba = decode_vobsub_rle(&packet, &[], &palette);
+
+        for pixel in rgba.chunks_exact(4) {
+            assert_eq!(pixel, [0, 0, 255, 255]);
+        }
     }
 }
