@@ -4,10 +4,10 @@ use js_sys::{Float64Array, Uint8Array};
 use libbitsub_core as core;
 use wasm_bindgen::prelude::*;
 
-// When the `wee_alloc` feature is enabled, use `wee_alloc` as the global allocator.
-#[cfg(feature = "wee_alloc")]
+// When the `dlmalloc` feature is enabled, use dlmalloc as the global allocator.
+#[cfg(feature = "dlmalloc")]
 #[global_allocator]
-static ALLOC: wee_alloc::WeeAlloc = wee_alloc::WeeAlloc::INIT;
+static ALLOC: dlmalloc::GlobalDlmalloc = dlmalloc::GlobalDlmalloc;
 
 /// Initialize the WASM module. Call this once before using other functions.
 #[wasm_bindgen(start)]

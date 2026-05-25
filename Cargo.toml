@@ -27,14 +27,14 @@ crate-type = ["cdylib", "rlib"]
 default = ["console_error_panic_hook"]
 
 [dependencies]
-wasm-bindgen = "0.2.118"
-js-sys = "0.3.95"
+wasm-bindgen = "0.2.122"
+js-sys = "0.3.99"
 console_error_panic_hook = { version = "0.1.7", optional = true }
-wee_alloc = { version = "0.4.5", optional = true }
+dlmalloc = { version = "0.2.14", optional = true, features = ["global"] }
 libbitsub-core = { version = "1.10.0", path = "crates/core" }
 
 [dev-dependencies]
-wasm-bindgen-test = "0.3.68"
+wasm-bindgen-test = "0.3.72"
 
 [profile.release]
 opt-level = "z"
