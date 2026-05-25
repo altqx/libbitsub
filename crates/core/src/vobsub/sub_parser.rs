@@ -308,6 +308,7 @@ fn parse_subtitle_data(
     let mut alpha_values = [0u8, 15, 15, 15];
     let mut top_field_offset: usize = 0;
     let mut bottom_field_offset: usize = 0;
+    let mut display_command_seen = false;
 
     let mut ctrl_offset = packet_start + dcsq_offset;
     let mut iterations = 0;
@@ -338,8 +339,14 @@ fn parse_subtitle_data(
             ctrl_offset += 1;
 
             match cmd {
-                0x00 => {} // Force display
-                0x01 => {} // Start display
+                0x00 => {
+                    // Force display
+                    display_command_seen = true;
+                }
+                0x01 => {
+                    // Start display
+                    display_command_seen = true;
+                }
                 0x02 => {
                     // Stop display - delay is when to stop (duration in 1024/90000 sec units)
                     duration = (delay * 1024) / 90;
@@ -348,20 +355,22 @@ fn parse_subtitle_data(
                 0x03 => {
                     // Set palette
                     if ctrl_offset + 2 <= end_offset {
-                        color_indices[3] = (data[ctrl_offset] >> 4) & 0x0F;
-                        color_indices[2] = data[ctrl_offset] & 0x0F;
-                        color_indices[1] = (data[ctrl_offset + 1] >> 4) & 0x0F;
-                        color_indices[0] = data[ctrl_offset + 1] & 0x0F;
+                        color_indices = parse_control_nibbles(
+                            data[ctrl_offset],
+                            data[ctrl_offset + 1],
+                            display_command_seen,
+                        );
                         ctrl_offset += 2;
                     }
                 }
                 0x04 => {
                     // Set alpha
                     if ctrl_offset + 2 <= end_offset {
-                        alpha_values[3] = (data[ctrl_offset] >> 4) & 0x0F;
-                        alpha_values[2] = data[ctrl_offset] & 0x0F;
-                        alpha_values[1] = (data[ctrl_offset + 1] >> 4) & 0x0F;
-                        alpha_values[0] = data[ctrl_offset + 1] & 0x0F;
+                        alpha_values = parse_control_nibbles(
+                            data[ctrl_offset],
+                            data[ctrl_offset + 1],
+                            display_command_seen,
+                        );
                         ctrl_offset += 2;
                     }
                 }
@@ -468,6 +477,24 @@ fn parse_subtitle_data(
     })
 }
 
+fn parse_control_nibbles(first: u8, second: u8, display_command_seen: bool) -> [u8; 4] {
+    if display_command_seen {
+        [
+            first & 0x0F,
+            (second >> 4) & 0x0F,
+            second & 0x0F,
+            (first >> 4) & 0x0F,
+        ]
+    } else {
+        [
+            second & 0x0F,
+            (second >> 4) & 0x0F,
+            first & 0x0F,
+            (first >> 4) & 0x0F,
+        ]
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -484,5 +511,40 @@ mod tests {
         let data = [0x00, 0x08, 0x00, 0x09, 0x11, 0x22, 0x33, 0x44];
 
         assert!(parse_subtitle_data(SubtitlePacketData::Owned(data.to_vec()), &data, 0).is_none());
+    }
+
+    #[test]
+    fn test_parse_style_commands_before_start_display() {
+        let data = [
+            0x00, 0x10, 0x00, 0x04, // packet size, control offset
+            0x00, 0x00, 0x00, 0x04, // delay, self-referencing next offset
+            0x03, 0xfd, 0x3b, // palette
+            0x04, 0xdf, 0xd0, // alpha
+            0x01, 0xff, // start display, end
+        ];
+
+        let packet =
+            parse_subtitle_data(SubtitlePacketData::Owned(data.to_vec()), &data, 0).unwrap();
+
+        assert_eq!(packet.color_indices, [11, 3, 13, 15]);
+        assert_eq!(packet.alpha_values, [0, 13, 15, 13]);
+    }
+
+    #[test]
+    fn test_parse_style_commands_after_start_display() {
+        let data = [
+            0x00, 0x10, 0x00, 0x04, // packet size, control offset
+            0x00, 0x00, 0x00, 0x04, // delay, self-referencing next offset
+            0x01, // start display
+            0x03, 0x80, 0xfb, // palette
+            0x04, 0x80, 0xde, // alpha
+            0xff, // end
+        ];
+
+        let packet =
+            parse_subtitle_data(SubtitlePacketData::Owned(data.to_vec()), &data, 0).unwrap();
+
+        assert_eq!(packet.color_indices, [0, 15, 11, 8]);
+        assert_eq!(packet.alpha_values, [0, 13, 14, 8]);
     }
 }
