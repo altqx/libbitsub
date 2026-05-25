@@ -132,38 +132,55 @@ jobs:
       - name: Publish Rust crates
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
-          VERSION: ${{ needs.check-version.outputs.version }}
         run: |
+          crate_version() {
+            cargo pkgid -p "$1" | sed -E 's/.*[@#]([^@#]+)$/\1/'
+          }
+
           crate_exists() {
-            cargo search "$1" --limit 1 | grep -q "^$1 = \"$VERSION\""
+            cargo info "$1@$2" >/dev/null 2>&1
           }
 
           publish_crate() {
-            if crate_exists "$1"; then
-              echo "$1 v$VERSION is already published"
+            local crate="$1"
+            local version
+            version=$(crate_version "$crate")
+
+            if crate_exists "$crate" "$version"; then
+              echo "$crate v$version is already published"
               return
             fi
 
-            cargo publish -p "$1"
+            cargo publish -p "$crate"
           }
 
           # crates.io needs a short window before a freshly published crate is
           # available as a dependency for the wrapper crate publish.
           wait_for_crate() {
+            local crate="$1"
+            local version
+            version=$(crate_version "$crate")
+
             for attempt in {1..12}; do
-              if crate_exists "$1"; then
+              if crate_exists "$crate" "$version"; then
                 return
               fi
               if [ "$attempt" -eq 12 ]; then
-                echo "$1 v$VERSION was not visible in the crates.io index in time"
+                echo "$crate v$version was not visible in the crates.io index in time"
                 exit 1
               fi
               sleep 10
             done
           }
 
-          publish_crate libbitsub-core
-          wait_for_crate libbitsub-core
+          core_version=$(crate_version libbitsub-core)
+          if crate_exists libbitsub-core "$core_version"; then
+            echo "libbitsub-core v$core_version is already available on crates.io; skipping publish and index wait"
+          else
+            cargo publish -p libbitsub-core
+            wait_for_crate libbitsub-core
+          fi
+
           publish_crate libbitsub
 
       - name: Setup Deno
