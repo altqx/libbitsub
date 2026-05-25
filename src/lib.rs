@@ -4,8 +4,7 @@ use js_sys::{Float64Array, Uint8Array};
 use libbitsub_core as core;
 use wasm_bindgen::prelude::*;
 
-// When the `dlmalloc` feature is enabled, use dlmalloc as the global allocator.
-#[cfg(feature = "dlmalloc")]
+// Use dlmalloc as the global allocator.
 #[global_allocator]
 static ALLOC: dlmalloc::GlobalDlmalloc = dlmalloc::GlobalDlmalloc;
 
