@@ -39,14 +39,14 @@ For pure Rust parser/rendering logic:
 
 ```toml
 [dependencies]
-libbitsub-core = "1.10.0"
+libbitsub-core = "1.10.1"
 ```
 
 For WASM bindings from Rust:
 
 ```toml
 [dependencies]
-libbitsub = "1.10.0"
+libbitsub = "1.10.1"
 ```
 
 For JavaScript package managers:
