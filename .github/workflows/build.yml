@@ -141,17 +141,36 @@ jobs:
             curl -fsS -o /dev/null "https://crates.io/api/v1/crates/$1/$2" 2>/dev/null
           }
 
+          cargo_publish_or_existing() {
+            local crate="$1"
+            local output
+            PUBLISH_ALREADY_EXISTS=false
+
+            if output=$(cargo publish -p "$crate" 2>&1); then
+              echo "$output"
+              return
+            fi
+
+            echo "$output"
+            if echo "$output" | grep -q "crate ${crate}@.* already exists on crates.io index"; then
+              PUBLISH_ALREADY_EXISTS=true
+              echo "$crate is already published; continuing"
+              return
+            fi
+
+            return 1
+          }
+
           publish_crate() {
             local crate="$1"
             local version
             version=$(crate_version "$crate")
-
             if crate_exists "$crate" "$version"; then
               echo "$crate v$version is already published"
               return
             fi
 
-            cargo publish -p "$crate"
+            cargo_publish_or_existing "$crate"
           }
 
           # crates.io needs a short window before a freshly published crate is
@@ -177,8 +196,12 @@ jobs:
           if crate_exists libbitsub-core "$core_version"; then
             echo "libbitsub-core v$core_version is already available on crates.io; skipping publish and index wait"
           else
-            cargo publish -p libbitsub-core
-            wait_for_crate libbitsub-core
+            cargo_publish_or_existing libbitsub-core
+            if [ "$PUBLISH_ALREADY_EXISTS" = true ]; then
+              echo "libbitsub-core v$core_version is already available on crates.io; skipping index wait"
+            else
+              wait_for_crate libbitsub-core
+            fi
           fi
 
           publish_crate libbitsub
