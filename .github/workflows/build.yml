@@ -138,7 +138,7 @@ jobs:
           }
 
           crate_exists() {
-            cargo info "$1@$2" >/dev/null 2>&1
+            curl -fsS -o /dev/null "https://crates.io/api/v1/crates/$1/$2" 2>/dev/null
           }
 
           publish_crate() {
@@ -189,7 +189,16 @@ jobs:
           deno-version: v2.x
 
       - name: Publish to JSR
-        run: deno publish --no-check --sloppy-imports
+        run: |
+          jsr_name=$(node -p "require('./jsr.json').name")
+          jsr_version=$(node -p "require('./jsr.json').version")
+          jsr_path=${jsr_name#@}
+
+          if curl -fsS -o /dev/null "https://jsr.io/@${jsr_path}/${jsr_version}_meta.json" 2>/dev/null; then
+            echo "${jsr_name} v${jsr_version} is already available on JSR; skipping publish"
+          else
+            deno publish --no-check --sloppy-imports
+          fi
 
       - name: Setup Node.js for npm publish
         uses: actions/setup-node@v4
