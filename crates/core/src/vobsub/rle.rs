@@ -33,13 +33,13 @@ pub fn decode_vobsub_rle(
 
     // Build 4-color lookup table with alpha
     let mut colors = [[0u8; 4]; 4];
-    for i in 0..4 {
+    for (i, color) in colors.iter_mut().enumerate() {
         let palette_color = palette.rgba[packet.color_indices[i] as usize];
         let alpha = ((packet.alpha_values[i] as u32 * 255) / 15) as u8;
 
         // Extract RGBA from packed u32 (little-endian: R, G, B, A)
         let bytes = palette_color.to_le_bytes();
-        colors[i] = [bytes[0], bytes[1], bytes[2], alpha];
+        *color = [bytes[0], bytes[1], bytes[2], alpha];
     }
 
     // Decode even field (lines 0, 2, 4, ...)

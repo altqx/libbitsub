@@ -12,8 +12,8 @@ const EBML_ID_TRACK_NUMBER: u32 = 0xD7;
 const EBML_ID_TRACK_TYPE: u32 = 0x83;
 const EBML_ID_CODEC_ID: u32 = 0x86;
 const EBML_ID_CODEC_PRIVATE: u32 = 0x63A2;
-const EBML_ID_LANGUAGE: u32 = 0x22B5_9C;
-const EBML_ID_LANGUAGE_IETF: u32 = 0x22B5_9D;
+const EBML_ID_LANGUAGE: u32 = 0x0022_B59C;
+const EBML_ID_LANGUAGE_IETF: u32 = 0x0022_B59D;
 const EBML_ID_NAME: u32 = 0x536E;
 const EBML_ID_CONTENT_ENCODINGS: u32 = 0x6D80;
 const EBML_ID_CONTENT_ENCODING: u32 = 0x6240;
@@ -671,7 +671,7 @@ fn validate_vobsub_payload(payload: &[u8]) -> Result<(), String> {
     let packet_size = u16::from_be_bytes([payload[0], payload[1]]) as usize;
     let dcsq_offset = u16::from_be_bytes([payload[2], payload[3]]) as usize;
 
-    if packet_size < 4 || packet_size > MAX_BLOCK_PAYLOAD_SIZE {
+    if !(4..=MAX_BLOCK_PAYLOAD_SIZE).contains(&packet_size) {
         return Err("Matroska subtitle block declares an invalid VobSub packet size".to_string());
     }
     if payload.len() != packet_size {

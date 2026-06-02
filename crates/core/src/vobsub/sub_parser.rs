@@ -225,7 +225,7 @@ pub fn parse_subtitle_packet(
             return None;
         }
 
-        return parse_subtitle_data(packet_source, data, pts).map(|packet| (packet, offset));
+        parse_subtitle_data(packet_source, data, pts).map(|packet| (packet, offset))
     } else {
         let final_size = if expected_size > 0 {
             expected_size.min(collected_size)
@@ -248,8 +248,8 @@ pub fn parse_subtitle_packet(
             return None;
         }
 
-        return parse_subtitle_data(SubtitlePacketData::Owned(merged), data, pts)
-            .map(|packet| (packet, offset));
+        parse_subtitle_data(SubtitlePacketData::Owned(merged), data, pts)
+            .map(|packet| (packet, offset))
     }
 }
 
@@ -345,63 +345,55 @@ fn parse_subtitle_data(
                     duration = (delay * 1024) / 90;
                     found_stop = true;
                 }
-                0x03 => {
+                0x03 if ctrl_offset + 2 <= end_offset => {
                     // Set palette
-                    if ctrl_offset + 2 <= end_offset {
-                        color_indices[3] = (data[ctrl_offset] >> 4) & 0x0F;
-                        color_indices[2] = data[ctrl_offset] & 0x0F;
-                        color_indices[1] = (data[ctrl_offset + 1] >> 4) & 0x0F;
-                        color_indices[0] = data[ctrl_offset + 1] & 0x0F;
-                        ctrl_offset += 2;
-                    }
+                    color_indices[3] = (data[ctrl_offset] >> 4) & 0x0F;
+                    color_indices[2] = data[ctrl_offset] & 0x0F;
+                    color_indices[1] = (data[ctrl_offset + 1] >> 4) & 0x0F;
+                    color_indices[0] = data[ctrl_offset + 1] & 0x0F;
+                    ctrl_offset += 2;
                 }
-                0x04 => {
+                0x04 if ctrl_offset + 2 <= end_offset => {
                     // Set alpha
-                    if ctrl_offset + 2 <= end_offset {
-                        alpha_values[3] = (data[ctrl_offset] >> 4) & 0x0F;
-                        alpha_values[2] = data[ctrl_offset] & 0x0F;
-                        alpha_values[1] = (data[ctrl_offset + 1] >> 4) & 0x0F;
-                        alpha_values[0] = data[ctrl_offset + 1] & 0x0F;
-                        ctrl_offset += 2;
-                    }
+                    alpha_values[3] = (data[ctrl_offset] >> 4) & 0x0F;
+                    alpha_values[2] = data[ctrl_offset] & 0x0F;
+                    alpha_values[1] = (data[ctrl_offset + 1] >> 4) & 0x0F;
+                    alpha_values[0] = data[ctrl_offset + 1] & 0x0F;
+                    ctrl_offset += 2;
                 }
-                0x05 => {
+                0x05 if ctrl_offset + 6 <= end_offset => {
                     // Set display area
-                    if ctrl_offset + 6 <= end_offset {
-                        let x1 = ((data[ctrl_offset] as u16) << 4)
-                            | ((data[ctrl_offset + 1] >> 4) as u16);
-                        let x2 = (((data[ctrl_offset + 1] & 0x0F) as u16) << 8)
-                            | (data[ctrl_offset + 2] as u16);
-                        let y1 = ((data[ctrl_offset + 3] as u16) << 4)
-                            | ((data[ctrl_offset + 4] >> 4) as u16);
-                        let y2 = (((data[ctrl_offset + 4] & 0x0F) as u16) << 8)
-                            | (data[ctrl_offset + 5] as u16);
-                        if x2 < x1 || y2 < y1 {
-                            return None;
-                        }
-
-                        let width_usize = (x2 - x1) as usize + 1;
-                        let height_usize = (y2 - y1) as usize + 1;
-                        if width_usize.checked_mul(height_usize)? > MAX_VOBSUB_IMAGE_PIXELS {
-                            return None;
-                        }
-
-                        x = x1;
-                        y = y1;
-                        width = width_usize as u16;
-                        height = height_usize as u16;
-                        ctrl_offset += 6;
+                    let x1 = ((data[ctrl_offset] as u16) << 4)
+                        | ((data[ctrl_offset + 1] >> 4) as u16);
+                    let x2 = (((data[ctrl_offset + 1] & 0x0F) as u16) << 8)
+                        | (data[ctrl_offset + 2] as u16);
+                    let y1 = ((data[ctrl_offset + 3] as u16) << 4)
+                        | ((data[ctrl_offset + 4] >> 4) as u16);
+                    let y2 = (((data[ctrl_offset + 4] & 0x0F) as u16) << 8)
+                        | (data[ctrl_offset + 5] as u16);
+                    if x2 < x1 || y2 < y1 {
+                        return None;
                     }
+
+                    let width_usize = (x2 - x1) as usize + 1;
+                    let height_usize = (y2 - y1) as usize + 1;
+                    if width_usize.checked_mul(height_usize)? > MAX_VOBSUB_IMAGE_PIXELS {
+                        return None;
+                    }
+
+                    x = x1;
+                    y = y1;
+                    width = width_usize as u16;
+                    height = height_usize as u16;
+                    ctrl_offset += 6;
                 }
-                0x06 => {
+                0x06 if ctrl_offset + 4 <= end_offset => {
                     // Set field offsets
-                    if ctrl_offset + 4 <= end_offset {
-                        top_field_offset =
-                            ((data[ctrl_offset] as usize) << 8) | (data[ctrl_offset + 1] as usize);
-                        bottom_field_offset = ((data[ctrl_offset + 2] as usize) << 8)
-                            | (data[ctrl_offset + 3] as usize);
-                        ctrl_offset += 4;
-                    }
+                    top_field_offset =
+                        ((data[ctrl_offset] as usize) << 8) | (data[ctrl_offset + 1] as usize);
+                    bottom_field_offset = ((data[ctrl_offset + 2] as usize) << 8)
+                        | (data[ctrl_offset + 3] as usize);
+                    ctrl_offset += 4;
                 }
                 0xFF => break, // End of control sequence
                 _ => {}
