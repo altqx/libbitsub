@@ -373,6 +373,7 @@ export function getOrCreateWorker(): Promise<Worker> {
             const blob = new Blob([createWorkerScript()], { type: 'application/javascript' })
             const workerUrl = URL.createObjectURL(blob)
             const worker = new Worker(workerUrl, { type: 'module' })
+            let initialized = false
 
             worker.onmessage = (event: MessageEvent<WorkerResponse & { _id?: number }>) => {
                 const { _id, ...response } = event.data
@@ -386,22 +387,25 @@ export function getOrCreateWorker(): Promise<Worker> {
             }
 
             worker.onerror = (error) => {
-                if (workerInitPromise) {
+                if (!initialized) {
+                    URL.revokeObjectURL(workerUrl)
+                    worker.terminate()
                     workerInitPromise = null
                     reject(error instanceof ErrorEvent ? new Error(error.message) : new Error(String(error)))
                 }
             }
 
-            sharedWorker = worker
-
-            sendToWorker({ type: 'init', wasmUrl: getWasmUrl() })
+            sendToWorkerInstance(worker, { type: 'init', wasmUrl: getWasmUrl() })
                 .then(() => {
                     URL.revokeObjectURL(workerUrl)
+                    initialized = true
+                    sharedWorker = worker
+                    workerInitPromise = null
                     resolve(worker)
                 })
                 .catch((err) => {
                     URL.revokeObjectURL(workerUrl)
-                    sharedWorker = null
+                    worker.terminate()
                     workerInitPromise = null
                     reject(err)
                 })
@@ -419,12 +423,15 @@ const WORKER_TIMEOUT = 30000
 
 /** Send a message to the worker with timeout support. */
 export function sendToWorker(request: WorkerRequest, timeout = WORKER_TIMEOUT): Promise<WorkerResponse> {
-    return new Promise((resolve, reject) => {
-        if (!sharedWorker) {
-            reject(new Error('Worker not initialized'))
-            return
-        }
+    if (!sharedWorker) {
+        return Promise.reject(new Error('Worker not initialized'))
+    }
 
+    return sendToWorkerInstance(sharedWorker, request, timeout)
+}
+
+function sendToWorkerInstance(worker: Worker, request: WorkerRequest, timeout = WORKER_TIMEOUT): Promise<WorkerResponse> {
+    return new Promise((resolve, reject) => {
         const id = ++messageId
         const timeoutId = setTimeout(() => {
             pendingCallbacks.delete(id)
@@ -446,6 +453,6 @@ export function sendToWorker(request: WorkerRequest, timeout = WORKER_TIMEOUT): 
         if ('data' in request && request.data instanceof ArrayBuffer) transfers.push(request.data)
         if ('subData' in request && request.subData instanceof ArrayBuffer) transfers.push(request.subData)
 
-        sharedWorker.postMessage({ ...request, _id: id }, transfers)
+        worker.postMessage({ ...request, _id: id }, transfers)
     })
 }
