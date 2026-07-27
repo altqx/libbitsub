@@ -11,76 +11,26 @@ let workerInitPromise: Promise<Worker> | null = null
 let messageId = 0
 
 const pendingCallbacks = new Map<
-    number,
-    {
-        resolve: (response: WorkerResponse) => void
-        reject: (error: Error) => void
-    }
+  number,
+  {
+    worker: Worker
+    requestType: WorkerRequest['type']
+    resolve: (response: WorkerResponse) => void
+    reject: (error: Error) => void
+  }
 >()
 
 /** Check if Web Workers are available. */
 export function isWorkerAvailable(): boolean {
-    return typeof Worker !== 'undefined' && typeof window !== 'undefined' && typeof Blob !== 'undefined'
+  return typeof Worker !== 'undefined' && typeof window !== 'undefined' && typeof Blob !== 'undefined'
 }
 
 /** Create inline worker script with embedded WASM loader. */
 function createWorkerScript(): string {
-    return `
+  return `
 let wasmModule = null;
-let wasm;
-let cachedUint8Memory = null;
-let WASM_VECTOR_LEN = 0;
-let cachedTextEncoder = new TextEncoder();
-let cachedTextDecoder = new TextDecoder('utf-8', { ignoreBOM: true, fatal: true });
 const pgsParsers = new Map();
 const vobSubParsers = new Map();
-
-function getUint8Memory() {
-    if (cachedUint8Memory === null || cachedUint8Memory.byteLength === 0) {
-        cachedUint8Memory = new Uint8Array(wasm.memory.buffer);
-    }
-    return cachedUint8Memory;
-}
-
-function passArray8ToWasm(arg) {
-    const ptr = wasm.__wbindgen_malloc(arg.length);
-    getUint8Memory().set(arg, ptr);
-    WASM_VECTOR_LEN = arg.length;
-    return ptr;
-}
-
-const encodeString = typeof cachedTextEncoder.encodeInto === 'function'
-    ? function(arg, view) { return cachedTextEncoder.encodeInto(arg, view); }
-    : function(arg, view) {
-            const buf = cachedTextEncoder.encode(arg);
-            view.set(buf);
-            return { read: arg.length, written: buf.length };
-        };
-
-function passStringToWasm(arg) {
-    let len = arg.length;
-    let ptr = wasm.__wbindgen_malloc(len);
-    const mem = getUint8Memory();
-    let offset = 0;
-    for (; offset < len; offset++) {
-        const code = arg.charCodeAt(offset);
-        if (code > 0x7F) break;
-        mem[ptr + offset] = code;
-    }
-    if (offset !== len) {
-        if (offset !== 0) arg = arg.slice(offset);
-        ptr = wasm.__wbindgen_realloc(ptr, len, len = offset + arg.length * 3);
-        const view = getUint8Memory().subarray(ptr + offset, ptr + len);
-        const ret = encodeString(arg, view);
-        offset += ret.written;
-    }
-    WASM_VECTOR_LEN = offset;
-    return ptr;
-}
-
-function getStringFromWasm(ptr, len) {
-    return cachedTextDecoder.decode(getUint8Memory().subarray(ptr, ptr + len));
-}
 
 function buildPgsMetadata(parser) {
     return {
@@ -117,71 +67,13 @@ function disposeSession(sessionId) {
 }
 
 async function initWasm(wasmUrl) {
-    if (wasm) return;
+    if (wasmModule) return;
 
-    const response = await fetch(wasmUrl);
-    if (!response.ok) {
-        throw new Error('Failed to fetch WASM: ' + response.status);
-    }
-
-    const wasmBytes = await response.arrayBuffer();
-    const result = await WebAssembly.instantiate(wasmBytes, {
-        __wbindgen_placeholder__: {
-            __wbindgen_throw: function(ptr, len) {
-                throw new Error(getStringFromWasm(ptr, len));
-            }
-        }
-    });
-    wasm = result.instance.exports;
-
-    wasmModule = {
-        PgsParser: class {
-            constructor() { this.ptr = wasm.pgsparser_new(); }
-            parse(data) {
-                const ptr = passArray8ToWasm(data);
-                return wasm.pgsparser_parse(this.ptr, ptr, WASM_VECTOR_LEN);
-            }
-            getTimestamps() { return wasm.pgsparser_getTimestamps(this.ptr); }
-            renderAtIndex(idx) { return wasm.pgsparser_renderAtIndex(this.ptr, idx); }
-            findIndexAtTimestamp(ts) { return wasm.pgsparser_findIndexAtTimestamp(this.ptr, ts); }
-            clearCache() { wasm.pgsparser_clearCache(this.ptr); }
-            free() { wasm.pgsparser_free(this.ptr); }
-            get count() { return wasm.pgsparser_count(this.ptr); }
-            get screenWidth() { return wasm.pgsparser_screenWidth(this.ptr); }
-            get screenHeight() { return wasm.pgsparser_screenHeight(this.ptr); }
-        },
-        VobSubParser: class {
-            constructor() { this.ptr = wasm.vobsubparser_new(); }
-            loadFromData(idx, sub) {
-                const idxPtr = passStringToWasm(idx);
-                const idxLen = WASM_VECTOR_LEN;
-                const subPtr = passArray8ToWasm(sub);
-                wasm.vobsubparser_loadFromData(this.ptr, idxPtr, idxLen, subPtr, sub.length);
-            }
-            loadFromMks(sub) {
-                const ptr = passArray8ToWasm(sub);
-                wasm.vobsubparser_loadFromMks(this.ptr, ptr, WASM_VECTOR_LEN);
-            }
-            loadFromSubOnly(sub) {
-                const ptr = passArray8ToWasm(sub);
-                wasm.vobsubparser_loadFromSubOnly(this.ptr, ptr, WASM_VECTOR_LEN);
-            }
-            getTimestamps() { return wasm.vobsubparser_getTimestamps(this.ptr); }
-            renderAtIndex(idx) { return wasm.vobsubparser_renderAtIndex(this.ptr, idx); }
-            findIndexAtTimestamp(ts) { return wasm.vobsubparser_findIndexAtTimestamp(this.ptr, ts); }
-            clearCache() { wasm.vobsubparser_clearCache(this.ptr); }
-            free() { wasm.vobsubparser_free(this.ptr); }
-            setDebandEnabled(enabled) { wasm.vobsubparser_setDebandEnabled(this.ptr, enabled); }
-            setDebandThreshold(threshold) { wasm.vobsubparser_setDebandThreshold(this.ptr, threshold); }
-            setDebandRange(range) { wasm.vobsubparser_setDebandRange(this.ptr, range); }
-            get count() { return wasm.vobsubparser_count(this.ptr); }
-            get screenWidth() { return wasm.vobsubparser_screenWidth(this.ptr); }
-            get screenHeight() { return wasm.vobsubparser_screenHeight(this.ptr); }
-            get language() { return wasm.vobsubparser_language(this.ptr); }
-            get trackId() { return wasm.vobsubparser_trackId(this.ptr); }
-            get hasIdxMetadata() { return !!wasm.vobsubparser_hasIdxMetadata(this.ptr); }
-        }
-    };
+    const jsGlueUrl = new URL(wasmUrl);
+    jsGlueUrl.pathname = jsGlueUrl.pathname.replace(/_bg\.wasm$/, '.js');
+    const mod = await import(jsGlueUrl.href);
+    await mod.default({ module_or_path: wasmUrl });
+    wasmModule = mod;
 }
 
 function convertFrame(frame, isVobSub) {
@@ -365,57 +257,63 @@ self.onmessage = async function(event) {
 
 /** Create or get the shared worker instance. */
 export function getOrCreateWorker(): Promise<Worker> {
-    if (sharedWorker) return Promise.resolve(sharedWorker)
-    if (workerInitPromise) return workerInitPromise
+  if (sharedWorker) return Promise.resolve(sharedWorker)
+  if (workerInitPromise) return workerInitPromise
 
-    workerInitPromise = new Promise((resolve, reject) => {
-        try {
-            const blob = new Blob([createWorkerScript()], { type: 'application/javascript' })
-            const workerUrl = URL.createObjectURL(blob)
-            const worker = new Worker(workerUrl, { type: 'module' })
-            let initialized = false
+  const initPromise = initializeWorker()
+  workerInitPromise = initPromise
+  initPromise.then(
+    () => {
+      if (workerInitPromise === initPromise) workerInitPromise = null
+    },
+    () => {
+      if (workerInitPromise === initPromise) workerInitPromise = null
+    }
+  )
 
-            worker.onmessage = (event: MessageEvent<WorkerResponse & { _id?: number }>) => {
-                const { _id, ...response } = event.data
-                if (_id !== undefined) {
-                    const callback = pendingCallbacks.get(_id)
-                    if (callback) {
-                        pendingCallbacks.delete(_id)
-                        callback.resolve(response as WorkerResponse)
-                    }
-                }
-            }
+  return workerInitPromise
+}
 
-            worker.onerror = (error) => {
-                if (!initialized) {
-                    URL.revokeObjectURL(workerUrl)
-                    worker.terminate()
-                    workerInitPromise = null
-                    reject(error instanceof ErrorEvent ? new Error(error.message) : new Error(String(error)))
-                }
-            }
+async function initializeWorker(): Promise<Worker> {
+  const blob = new Blob([createWorkerScript()], { type: 'application/javascript' })
+  const workerUrl = URL.createObjectURL(blob)
+  const worker = new Worker(workerUrl, { type: 'module' })
 
-            sendToWorkerInstance(worker, { type: 'init', wasmUrl: getWasmUrl() })
-                .then(() => {
-                    URL.revokeObjectURL(workerUrl)
-                    initialized = true
-                    sharedWorker = worker
-                    workerInitPromise = null
-                    resolve(worker)
-                })
-                .catch((err) => {
-                    URL.revokeObjectURL(workerUrl)
-                    worker.terminate()
-                    workerInitPromise = null
-                    reject(err)
-                })
-        } catch (error) {
-            workerInitPromise = null
-            reject(error instanceof Error ? error : new Error(String(error)))
-        }
-    })
+  worker.onmessage = (event: MessageEvent<WorkerResponse & { _id?: number }>) => {
+    const { _id, ...response } = event.data
+    if (_id === undefined) return
 
-    return workerInitPromise
+    const callback = pendingCallbacks.get(_id)
+    if (!callback) return
+
+    pendingCallbacks.delete(_id)
+    if (response.type === 'error' && callback.requestType === 'init') {
+      callback.reject(new Error(response.message))
+    } else {
+      callback.resolve(response as WorkerResponse)
+    }
+  }
+
+  worker.onerror = (event) => {
+    const error = event instanceof ErrorEvent ? new Error(event.message) : new Error(String(event))
+    rejectWorkerCallbacks(worker, error)
+    if (sharedWorker === worker) sharedWorker = null
+    worker.terminate()
+  }
+
+  try {
+    await sendToWorkerInstance(worker, { type: 'init', wasmUrl: getWasmUrl() })
+    sharedWorker = worker
+    return worker
+  } catch (error) {
+    const workerError = error instanceof Error ? error : new Error(String(error))
+    rejectWorkerCallbacks(worker, workerError)
+    if (sharedWorker === worker) sharedWorker = null
+    worker.terminate()
+    throw workerError
+  } finally {
+    URL.revokeObjectURL(workerUrl)
+  }
 }
 
 /** Default timeout for worker operations (30 seconds for large files) */
@@ -423,36 +321,56 @@ const WORKER_TIMEOUT = 30000
 
 /** Send a message to the worker with timeout support. */
 export function sendToWorker(request: WorkerRequest, timeout = WORKER_TIMEOUT): Promise<WorkerResponse> {
-    if (!sharedWorker) {
-        return Promise.reject(new Error('Worker not initialized'))
-    }
+  if (!sharedWorker) {
+    return Promise.reject(new Error('Worker not initialized'))
+  }
 
-    return sendToWorkerInstance(sharedWorker, request, timeout)
+  return sendToWorkerInstance(sharedWorker, request, timeout)
 }
 
-function sendToWorkerInstance(worker: Worker, request: WorkerRequest, timeout = WORKER_TIMEOUT): Promise<WorkerResponse> {
-    return new Promise((resolve, reject) => {
-        const id = ++messageId
-        const timeoutId = setTimeout(() => {
-            pendingCallbacks.delete(id)
-            reject(new Error(`Worker operation timed out after ${timeout}ms`))
-        }, timeout)
+function sendToWorkerInstance(
+  worker: Worker,
+  request: WorkerRequest,
+  timeout = WORKER_TIMEOUT
+): Promise<WorkerResponse> {
+  return new Promise((resolve, reject) => {
+    const id = ++messageId
+    const timeoutId = setTimeout(() => {
+      pendingCallbacks.delete(id)
+      reject(new Error(`Worker operation timed out after ${timeout}ms`))
+    }, timeout)
 
-        pendingCallbacks.set(id, {
-            resolve: (response) => {
-                clearTimeout(timeoutId)
-                resolve(response)
-            },
-            reject: (error) => {
-                clearTimeout(timeoutId)
-                reject(error)
-            }
-        })
-
-        const transfers: Transferable[] = []
-        if ('data' in request && request.data instanceof ArrayBuffer) transfers.push(request.data)
-        if ('subData' in request && request.subData instanceof ArrayBuffer) transfers.push(request.subData)
-
-        worker.postMessage({ ...request, _id: id }, transfers)
+    pendingCallbacks.set(id, {
+      worker,
+      requestType: request.type,
+      resolve: (response) => {
+        clearTimeout(timeoutId)
+        resolve(response)
+      },
+      reject: (error) => {
+        clearTimeout(timeoutId)
+        reject(error)
+      }
     })
+
+    const transfers: Transferable[] = []
+    if ('data' in request && request.data instanceof ArrayBuffer) transfers.push(request.data)
+    if ('subData' in request && request.subData instanceof ArrayBuffer) transfers.push(request.subData)
+
+    try {
+      worker.postMessage({ ...request, _id: id }, transfers)
+    } catch (error) {
+      pendingCallbacks.delete(id)
+      clearTimeout(timeoutId)
+      reject(error instanceof Error ? error : new Error(String(error)))
+    }
+  })
+}
+
+function rejectWorkerCallbacks(worker: Worker, error: Error): void {
+  for (const [id, callback] of pendingCallbacks) {
+    if (callback.worker !== worker) continue
+    pendingCallbacks.delete(id)
+    callback.reject(error)
+  }
 }
