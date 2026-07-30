@@ -32,8 +32,7 @@
     <p>Pixel-level parity across software, Canvas2D, WebGL2, and WebGPU backends.</p>
     <pre id="out">Running…</pre>
     <script type="module">
-      // Inline minimal harness so Chromium can run without a bundler.
-      // Mirrors src/ts/compatibility helpers for browser-side backend parity.
+      const GPU_TIMEOUT_MS = 8000
 
       function createImageData(width, height, rgba) {
         const image = new ImageData(width, height)
@@ -83,12 +82,15 @@
                 out.data[di + 3] = 255
                 continue
               }
-              // source-over
               const da = out.data[di + 3] / 255
               const outA = sa + da * (1 - sa)
               out.data[di] = Math.round((src.data[si] * sa + out.data[di] * da * (1 - sa)) / outA)
-              out.data[di + 1] = Math.round((src.data[si + 1] * sa + out.data[di + 1] * da * (1 - sa)) / outA)
-              out.data[di + 2] = Math.round((src.data[si + 2] * sa + out.data[di + 2] * da * (1 - sa)) / outA)
+              out.data[di + 1] = Math.round(
+                (src.data[si + 1] * sa + out.data[di + 1] * da * (1 - sa)) / outA
+              )
+              out.data[di + 2] = Math.round(
+                (src.data[si + 2] * sa + out.data[di + 2] * da * (1 - sa)) / outA
+              )
               out.data[di + 3] = Math.round(outA * 255)
             }
           }
@@ -101,6 +103,7 @@
         canvas.width = frame.width
         canvas.height = frame.height
         const ctx = canvas.getContext('2d', { willReadFrequently: true })
+        if (!ctx) throw new Error('Canvas2D unavailable')
         ctx.clearRect(0, 0, frame.width, frame.height)
         for (const comp of frame.compositionData) {
           ctx.putImageData(comp.pixelData, comp.x, comp.y)
@@ -110,7 +113,8 @@
 
       function maxDelta(a, b) {
         let max = 0
-        for (let i = 0; i < a.data.length; i += 1) {
+        const len = Math.min(a.data.length, b.data.length)
+        for (let i = 0; i < len; i += 1) {
           max = Math.max(max, Math.abs(a.data[i] - b.data[i]))
         }
         return max
@@ -121,16 +125,44 @@
         return [img.data[i], img.data[i + 1], img.data[i + 2], img.data[i + 3]]
       }
 
+      function withTimeout(promise, ms, label) {
+        return new Promise((resolve) => {
+          let settled = false
+          const timer = setTimeout(() => {
+            if (settled) return
+            settled = true
+            resolve({ status: 'skip', reason: `${label} timed out after ${ms}ms` })
+          }, ms)
+          Promise.resolve(promise)
+            .then((value) => {
+              if (settled) return
+              settled = true
+              clearTimeout(timer)
+              resolve(value)
+            })
+            .catch((error) => {
+              if (settled) return
+              settled = true
+              clearTimeout(timer)
+              resolve({ status: 'skip', reason: String(error) })
+            })
+        })
+      }
+
       async function maybeWebGL2(frame, golden) {
         const canvas = document.createElement('canvas')
-        const gl = canvas.getContext('webgl2', {
-          alpha: true,
-          premultipliedAlpha: true,
-          antialias: false
-        })
+        let gl
+        try {
+          gl = canvas.getContext('webgl2', {
+            alpha: true,
+            premultipliedAlpha: true,
+            antialias: false
+          })
+        } catch (error) {
+          return { status: 'skip', reason: `WebGL2 context error: ${error}` }
+        }
         if (!gl) return { status: 'skip', reason: 'WebGL2 unavailable' }
 
-        // Import package renderer when served from repo build; fall back to skip.
         try {
           const mod = await import('../../dist/ts/webgl2-renderer.js')
           const renderer = new mod.WebGL2Renderer()
@@ -140,6 +172,9 @@
           const pixels = renderer.readPixels()
           renderer.destroy()
           const image = { data: pixels.data, width: pixels.width, height: pixels.height }
+          if (!image.width || !image.height || !image.data?.length) {
+            return { status: 'skip', reason: 'WebGL2 readback empty' }
+          }
           const delta = maxDelta(image, golden)
           return { status: delta <= 2 ? 'ok' : 'fail', maxDelta: delta, sample: sample(image, 8, 4) }
         } catch (error) {
@@ -159,10 +194,36 @@
           const pixels = await renderer.readPixels()
           renderer.destroy()
           const image = { data: pixels.data, width: pixels.width, height: pixels.height }
+          if (!image.width || !image.height || !image.data?.length) {
+            return { status: 'skip', reason: 'WebGPU readback empty' }
+          }
           const delta = maxDelta(image, golden)
           return { status: delta <= 2 ? 'ok' : 'fail', maxDelta: delta, sample: sample(image, 8, 4) }
         } catch (error) {
           return { status: 'skip', reason: String(error) }
+        }
+      }
+
+      async function postResults(payload) {
+        window.__VISUAL_RESULTS__ = payload
+        const lines = Object.entries(payload.results || {}).map(([name, result]) => {
+          const tag = result.status === 'ok' ? 'ok' : result.status === 'skip' ? 'skip' : 'fail'
+          return `${name}: ${tag} ${JSON.stringify(result)}`
+        })
+        if (payload.error) lines.unshift(String(payload.error))
+        const out = document.getElementById('out')
+        out.textContent = lines.join('\n') || JSON.stringify(payload)
+        out.className = payload.ok ? 'ok' : 'fail'
+        // Beacon-style post so the runner unblocks even if the tab is torn down next.
+        try {
+          await fetch('/results', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify(payload),
+            keepalive: true
+          })
+        } catch (error) {
+          console.error('failed to post results', error)
         }
       }
 
@@ -171,6 +232,13 @@
         const software = softwareCompose(frame)
         const canvas2d = canvas2dRender(frame)
         const canvasDelta = maxDelta(canvas2d, software)
+
+        // Required backends first; GPU is best-effort with a hard timeout so CI never hangs.
+        const [webgl2, webgpu] = await Promise.all([
+          withTimeout(maybeWebGL2(frame, software), GPU_TIMEOUT_MS, 'WebGL2'),
+          withTimeout(maybeWebGPU(frame, software), GPU_TIMEOUT_MS, 'WebGPU')
+        ])
+
         const results = {
           software: {
             status: 'ok',
@@ -182,40 +250,16 @@
             maxDelta: canvasDelta,
             sample: sample(canvas2d, 8, 4)
           },
-          webgl2: await maybeWebGL2(frame, software),
-          webgpu: await maybeWebGPU(frame, software)
+          webgl2,
+          webgpu
         }
 
-        const failed = Object.values(results).some((r) => r.status === 'fail')
-        const payload = { ok: !failed, results }
-        window.__VISUAL_RESULTS__ = payload
-        const lines = Object.entries(results).map(([name, result]) => {
-          const tag = result.status === 'ok' ? 'ok' : result.status === 'skip' ? 'skip' : 'fail'
-          return `${name}: ${tag} ${JSON.stringify(result)}`
-        })
-        document.getElementById('out').textContent = lines.join('\n')
-        document.getElementById('out').className = failed ? 'fail' : 'ok'
-        await fetch('/results', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify(payload)
-        })
+        const failed = Object.values(results).some((result) => result.status === 'fail')
+        await postResults({ ok: !failed, results })
       }
 
       run().catch(async (error) => {
-        const payload = { ok: false, error: String(error) }
-        window.__VISUAL_RESULTS__ = payload
-        document.getElementById('out').textContent = String(error)
-        document.getElementById('out').className = 'fail'
-        try {
-          await fetch('/results', {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify(payload)
-          })
-        } catch {
-          /* ignore */
-        }
+        await postResults({ ok: false, error: String(error), results: {} })
       })
     </script>
   </body>

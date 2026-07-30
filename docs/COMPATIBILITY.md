@@ -114,7 +114,7 @@ High-level renderers select the first available backend and emit
 | --- | --- |
 | `bun run test` (cargo) | Yes |
 | `bun run test:ts` | Yes |
-| `bun run test:visual` | Best-effort (skipped soft-fail only if Chromium missing; fails on pixel mismatch when Chromium runs) |
+| `bun run test:visual` | Required in CI (Chrome installed via `browser-actions/setup-chrome`). Locally requires Chrome/Chromium or `CHROME_PATH`. Set `VISUAL_OPTIONAL=1` to skip when no browser is available. |
 
 ## Extending the suite
 

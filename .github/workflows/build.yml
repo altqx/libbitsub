@@ -100,9 +100,15 @@ jobs:
       - name: Run TypeScript compatibility tests
         run: bun run test:ts
 
-      - name: Run visual regression (Chromium)
+      - name: Install Chrome for visual regression
+        uses: browser-actions/setup-chrome@v1
+        id: setup-chrome
+
+      - name: Run visual regression (Chrome)
+        env:
+          CHROME_PATH: ${{ steps.setup-chrome.outputs.chrome-path }}
+          VISUAL_TIMEOUT_MS: '20000'
         run: bun run test:visual
-        continue-on-error: false
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
