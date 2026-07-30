@@ -7,6 +7,7 @@ class MockWorker {
   static requestResponse: { type: 'error'; message: string } | null = null
   static failWithNativeError = false
   static instances: MockWorker[] = []
+  static initMessages: { type: string; wasmUrl?: string; glueUrl?: string }[] = []
   terminated = false
 
   onmessage: ((event: MessageEvent) => void) | null = null
@@ -16,7 +17,14 @@ class MockWorker {
     MockWorker.instances.push(this)
   }
 
-  postMessage(message: { _id: number; type: string }): void {
+  postMessage(message: { _id: number; type: string; wasmUrl?: string; glueUrl?: string }): void {
+    if (message.type === 'init') {
+      MockWorker.initMessages.push({
+        type: message.type,
+        wasmUrl: message.wasmUrl,
+        glueUrl: message.glueUrl
+      })
+    }
     setTimeout(() => {
       if (MockWorker.failWithNativeError) {
         this.onerror?.(new ErrorEvent('error', { message: 'Worker crashed' }))
@@ -70,6 +78,21 @@ test('returns ordinary worker errors to renderer callers', async () => {
   })
 
   MockWorker.requestResponse = null
+})
+
+test('sends the wasm and glue URLs to the worker during initialization', async () => {
+  MockWorker.response = { type: 'initComplete', success: true }
+
+  // Force a fresh worker so a new init message is sent.
+  MockWorker.instances.at(-1)?.onerror?.(new ErrorEvent('error', { message: 'reset' }))
+  await getOrCreateWorker()
+
+  const initMessage = MockWorker.initMessages.at(-1)
+  expect(initMessage?.type).toBe('init')
+  expect(initMessage?.wasmUrl).toContain('libbitsub_bg.wasm')
+  expect(typeof initMessage?.glueUrl).toBe('string')
+  expect(initMessage?.glueUrl).toContain('libbitsub')
+  expect(initMessage?.glueUrl?.endsWith('.js')).toBe(true)
 })
 
 test('rejects pending work and recovers after a native worker error', async () => {

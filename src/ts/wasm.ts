@@ -48,6 +48,19 @@ export function getWasmUrl(): string {
   }
 }
 
+/** Get the WASM glue script URL (always returns absolute URL).*/
+export function getWasmGlueUrl(): string {
+  try {
+    return new URL('../../pkg/libbitsub.js', import.meta.url).href
+  } catch {
+    if (typeof window !== 'undefined') {
+      return new URL('/libbitsub/libbitsub.js', window.location.origin).href
+    }
+
+    return '/libbitsub/libbitsub.js'
+  }
+}
+
 // Pre-initialize WASM module on first import (non-blocking)
 if (typeof window !== 'undefined') {
   setTimeout(() => {

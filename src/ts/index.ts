@@ -47,7 +47,7 @@ export type {
 export { SubtitleDiagnosticError, createSubtitleDiagnosticError, normalizeSubtitleError } from './diagnostics'
 
 // WASM management
-export { initWasm, isWasmInitialized, getWasm, getWasmUrl } from './wasm'
+export { initWasm, isWasmInitialized, getWasm, getWasmUrl, getWasmGlueUrl } from './wasm'
 
 // Worker management
 export { isWorkerAvailable, getOrCreateWorker, sendToWorker } from './worker'

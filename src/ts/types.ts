@@ -340,7 +340,7 @@ export interface WorkerSessionMetadata {
 }
 
 export type WorkerRequest =
-  | { type: 'init'; wasmUrl: string }
+  | { type: 'init'; wasmUrl: string; glueUrl?: string }
   | { type: 'loadPgs'; sessionId: string; data: ArrayBuffer }
   | { type: 'loadVobSub'; sessionId: string; idxContent: string; subData: ArrayBuffer }
   | { type: 'loadVobSubMks'; sessionId: string; subData: ArrayBuffer }

@@ -4,7 +4,7 @@
  */
 
 import type { WorkerRequest, WorkerResponse } from './types'
-import { getWasmUrl } from './wasm'
+import { getWasmGlueUrl, getWasmUrl } from './wasm'
 
 let sharedWorker: Worker | null = null
 let workerInitPromise: Promise<Worker> | null = null
@@ -66,12 +66,16 @@ function disposeSession(sessionId) {
     }
 }
 
-async function initWasm(wasmUrl) {
+async function initWasm(wasmUrl, glueUrl) {
     if (wasmModule) return;
 
-    const jsGlueUrl = new URL(wasmUrl);
-    jsGlueUrl.pathname = jsGlueUrl.pathname.replace(/_bg\.wasm$/, '.js');
-    const mod = await import(jsGlueUrl.href);
+    let jsGlueUrl = glueUrl;
+    if (!jsGlueUrl) {
+        const derivedUrl = new URL(wasmUrl);
+        derivedUrl.pathname = derivedUrl.pathname.replace(/_bg\.wasm$/, '.js');
+        jsGlueUrl = derivedUrl.href;
+    }
+    const mod = await import(jsGlueUrl);
     await mod.default({ module_or_path: wasmUrl });
     wasmModule = mod;
 }
@@ -109,7 +113,7 @@ self.onmessage = async function(event) {
     try {
         switch (request.type) {
             case 'init': {
-                await initWasm(request.wasmUrl);
+                await initWasm(request.wasmUrl, request.glueUrl);
                 postResponse({ type: 'initComplete', success: true }, [], _id);
                 break;
             }
@@ -302,7 +306,7 @@ async function initializeWorker(): Promise<Worker> {
   }
 
   try {
-    await sendToWorkerInstance(worker, { type: 'init', wasmUrl: getWasmUrl() })
+    await sendToWorkerInstance(worker, { type: 'init', wasmUrl: getWasmUrl(), glueUrl: getWasmGlueUrl() })
     sharedWorker = worker
     return worker
   } catch (error) {

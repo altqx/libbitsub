@@ -67,11 +67,11 @@ deno add jsr:@altq/libbitsub
 
 In most bundler-based projects, no manual worker setup is required. `libbitsub` now resolves the WASM asset relative to the package module URL, so bundlers such as Vite, webpack, and Rollup can emit the asset automatically.
 
-If your app serves package files in a way that does not expose that emitted WASM asset to the browser, you can still provide the legacy public fallback by copying the WASM file to `/libbitsub/libbitsub_bg.wasm`:
+If your app serves package files in a way that does not expose that emitted WASM asset to the browser, you can still provide the legacy public fallback by copying the WASM file and its JS glue to `/libbitsub/`:
 
 ```bash
 mkdir -p public/libbitsub
-cp node_modules/libbitsub/pkg/libbitsub_bg.wasm public/libbitsub/
+cp node_modules/libbitsub/pkg/libbitsub_bg.wasm node_modules/libbitsub/pkg/libbitsub.js public/libbitsub/
 ```
 
 The worker is still created inline. `workerUrl` remains in the option type only for compatibility and does not change runtime behavior.
