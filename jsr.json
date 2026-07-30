@@ -1,6 +1,6 @@
 {
   "name": "@altq/libbitsub",
-  "version": "1.10.2",
+  "version": "1.11.0",
   "license": "MIT",
   "exports": {
     ".": "./src/index.ts",
