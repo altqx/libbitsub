@@ -134,12 +134,12 @@ export class WebGPURenderer {
 
   private async assertShaderModuleValid(module: GPUShaderModule, label: string): Promise<void> {
     const info = await module.getCompilationInfo()
-    const errors = info.messages.filter(message => message.type === 'error')
+    const errors = info.messages.filter((message) => message.type === 'error')
 
     if (errors.length === 0) return
 
     const formatted = errors
-      .map(message => {
+      .map((message) => {
         const line = message.lineNum > 0 ? `:${message.lineNum}:${message.linePos}` : ''
         return `${label}${line} ${message.message}`
       })

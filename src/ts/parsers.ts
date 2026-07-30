@@ -209,17 +209,23 @@ export class PgsParser {
   /**
    * Render flattened frame pixels at the given index.
    */
-  renderFrameDataAtIndex(index: number, options: SubtitleFrameRenderOptions = {}): SubtitleRenderedFrameData | undefined {
+  renderFrameDataAtIndex(
+    index: number,
+    options: SubtitleFrameRenderOptions = {}
+  ): SubtitleRenderedFrameData | undefined {
     const frame = this.renderAtIndex(index)
-    return frame ? renderFrameData(frame, options) ?? undefined : undefined
+    return frame ? (renderFrameData(frame, options) ?? undefined) : undefined
   }
 
   /**
    * Render flattened frame pixels at the given timestamp in seconds.
    */
-  renderFrameDataAtTimestamp(timeSeconds: number, options: SubtitleFrameRenderOptions = {}): SubtitleRenderedFrameData | undefined {
+  renderFrameDataAtTimestamp(
+    timeSeconds: number,
+    options: SubtitleFrameRenderOptions = {}
+  ): SubtitleRenderedFrameData | undefined {
     const frame = this.renderAtTimestamp(timeSeconds)
-    return frame ? renderFrameData(frame, options) ?? undefined : undefined
+    return frame ? (renderFrameData(frame, options) ?? undefined) : undefined
   }
 
   /**
@@ -238,15 +244,19 @@ export class PgsParser {
       // Validate buffer size
       if (rgba.length !== expectedLength || comp.width === 0 || comp.height === 0) {
         this.emitWarning(
-          createSubtitleWarning('INVALID_FRAME_DATA', 'Invalid PGS composition buffer dimensions during frame conversion.', {
-            format: 'pgs',
-            details: {
-              expectedLength,
-              actualLength: rgba.length,
-              width: comp.width,
-              height: comp.height
+          createSubtitleWarning(
+            'INVALID_FRAME_DATA',
+            'Invalid PGS composition buffer dimensions during frame conversion.',
+            {
+              format: 'pgs',
+              details: {
+                expectedLength,
+                actualLength: rgba.length,
+                width: comp.width,
+                height: comp.height
+              }
             }
-          })
+          )
         )
         continue
       }
@@ -488,17 +498,23 @@ export class VobSubParserLowLevel {
   /**
    * Render flattened frame pixels at the given index.
    */
-  renderFrameDataAtIndex(index: number, options: SubtitleFrameRenderOptions = {}): SubtitleRenderedFrameData | undefined {
+  renderFrameDataAtIndex(
+    index: number,
+    options: SubtitleFrameRenderOptions = {}
+  ): SubtitleRenderedFrameData | undefined {
     const frame = this.renderAtIndex(index)
-    return frame ? renderFrameData(frame, options) ?? undefined : undefined
+    return frame ? (renderFrameData(frame, options) ?? undefined) : undefined
   }
 
   /**
    * Render flattened frame pixels at the given timestamp in seconds.
    */
-  renderFrameDataAtTimestamp(timeSeconds: number, options: SubtitleFrameRenderOptions = {}): SubtitleRenderedFrameData | undefined {
+  renderFrameDataAtTimestamp(
+    timeSeconds: number,
+    options: SubtitleFrameRenderOptions = {}
+  ): SubtitleRenderedFrameData | undefined {
     const frame = this.renderAtTimestamp(timeSeconds)
-    return frame ? renderFrameData(frame, options) ?? undefined : undefined
+    return frame ? (renderFrameData(frame, options) ?? undefined) : undefined
   }
 
   /**
@@ -764,7 +780,10 @@ export class UnifiedSubtitleParser {
 
     const result = this.renderer.renderAtIndex(index)
     if (!result) {
-      const warning = warningFromRenderIssue(this.getLastRenderIssue(), { format: this.format ?? undefined, cueIndex: index })
+      const warning = warningFromRenderIssue(this.getLastRenderIssue(), {
+        format: this.format ?? undefined,
+        cueIndex: index
+      })
       if (warning) this.emitWarning(warning)
       return undefined
     }
@@ -834,17 +853,23 @@ export class UnifiedSubtitleParser {
   /**
    * Render flattened frame pixels at the given index.
    */
-  renderFrameDataAtIndex(index: number, options: SubtitleFrameRenderOptions = {}): SubtitleRenderedFrameData | undefined {
+  renderFrameDataAtIndex(
+    index: number,
+    options: SubtitleFrameRenderOptions = {}
+  ): SubtitleRenderedFrameData | undefined {
     const frame = this.renderAtIndex(index)
-    return frame ? renderFrameData(frame, options) ?? undefined : undefined
+    return frame ? (renderFrameData(frame, options) ?? undefined) : undefined
   }
 
   /**
    * Render flattened frame pixels at the given timestamp in seconds.
    */
-  renderFrameDataAtTimestamp(timeSeconds: number, options: SubtitleFrameRenderOptions = {}): SubtitleRenderedFrameData | undefined {
+  renderFrameDataAtTimestamp(
+    timeSeconds: number,
+    options: SubtitleFrameRenderOptions = {}
+  ): SubtitleRenderedFrameData | undefined {
     const frame = this.renderAtTimestamp(timeSeconds)
-    return frame ? renderFrameData(frame, options) ?? undefined : undefined
+    return frame ? (renderFrameData(frame, options) ?? undefined) : undefined
   }
 
   /**
@@ -873,15 +898,19 @@ export class UnifiedSubtitleParser {
         })
       } else if (width > 0 && height > 0) {
         this.emitWarning(
-          createSubtitleWarning('INVALID_FRAME_DATA', 'Invalid unified subtitle render buffer dimensions during frame conversion.', {
-            format: this.format ?? undefined,
-            details: {
-              expectedLength,
-              actualLength: rgba.length,
-              width,
-              height
+          createSubtitleWarning(
+            'INVALID_FRAME_DATA',
+            'Invalid unified subtitle render buffer dimensions during frame conversion.',
+            {
+              format: this.format ?? undefined,
+              details: {
+                expectedLength,
+                actualLength: rgba.length,
+                width,
+                height
+              }
             }
-          })
+          )
         )
       }
     }

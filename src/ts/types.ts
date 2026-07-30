@@ -34,12 +34,7 @@ export type SubtitleDiagnosticErrorCode =
   | 'UNKNOWN'
 
 export type SubtitleDiagnosticWarningCode =
-  | 'BAD_IDX'
-  | 'INVALID_FRAME_DATA'
-  | 'INVALID_SUBTITLE_DATA'
-  | 'MISSING_PALETTE'
-  | 'RANGE_FALLBACK'
-  | 'WORKER_FALLBACK'
+  'BAD_IDX' | 'INVALID_FRAME_DATA' | 'INVALID_SUBTITLE_DATA' | 'MISSING_PALETTE' | 'RANGE_FALLBACK' | 'WORKER_FALLBACK'
 
 export type AssetFetchStrategy = 'memory' | 'stream' | 'range-chunks' | 'basic'
 
@@ -104,10 +99,7 @@ export interface SubtitleRenderedFrameData {
 }
 
 export type SubtitleFrameCanvasTarget =
-  | HTMLCanvasElement
-  | OffscreenCanvas
-  | CanvasRenderingContext2D
-  | OffscreenCanvasRenderingContext2D
+  HTMLCanvasElement | OffscreenCanvas | CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D
 
 export interface SubtitleFrameCanvasOptions extends SubtitleFrameRenderOptions {
   /** Resize the target canvas to the rendered frame size before drawing. */
@@ -174,7 +166,10 @@ export interface OpenedSubtitles {
   /** Render flattened frame pixels for a cue index. */
   renderFrameDataAtIndex(index: number, options?: SubtitleFrameRenderOptions): SubtitleRenderedFrameData | undefined
   /** Render flattened frame pixels at a timestamp in seconds. */
-  renderFrameDataAtTimestamp(timeSeconds: number, options?: SubtitleFrameRenderOptions): SubtitleRenderedFrameData | undefined
+  renderFrameDataAtTimestamp(
+    timeSeconds: number,
+    options?: SubtitleFrameRenderOptions
+  ): SubtitleRenderedFrameData | undefined
   /** Get cue metadata for a specific cue index. */
   getCueMetadata(index: number): SubtitleCueMetadata | null
   /** Get the latest non-fatal render issue. */

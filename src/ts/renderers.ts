@@ -193,11 +193,7 @@ abstract class BaseVideoSubtitleRenderer {
     this.rangeRequests = options.rangeRequests !== false
   }
 
-  protected emitLoadProgress(
-    format: 'pgs' | 'vobsub',
-    progress: AssetFetchProgress,
-    indexedCues: number
-  ): void {
+  protected emitLoadProgress(format: 'pgs' | 'vobsub', progress: AssetFetchProgress, indexedCues: number): void {
     this.emitEvent({
       type: 'load-progress',
       format,
@@ -341,7 +337,11 @@ abstract class BaseVideoSubtitleRenderer {
   /** Start initialization. */
   protected startInit(): void {
     this.init().catch((error) => {
-      this.emitEvent({ type: 'error', format: this.format, error: normalizeSubtitleError(error, { format: this.format }) })
+      this.emitEvent({
+        type: 'error',
+        format: this.format,
+        error: normalizeSubtitleError(error, { format: this.format })
+      })
     })
   }
 
@@ -650,7 +650,8 @@ abstract class BaseVideoSubtitleRenderer {
           })
           this.emitEvent({ type: 'stats', stats: this.getStats() })
           if (currentIndex >= 0 && (this.prefetchBefore > 0 || this.prefetchAfter > 0)) {
-            const prefetch = (this as unknown as { prefetchAroundTime?: (time: number) => Promise<void> }).prefetchAroundTime
+            const prefetch = (this as unknown as { prefetchAroundTime?: (time: number) => Promise<void> })
+              .prefetchAroundTime
             prefetch?.call(this, currentTime).catch(() => {})
           }
         }
@@ -683,7 +684,7 @@ abstract class BaseVideoSubtitleRenderer {
       }
     }
 
-    const renderIssue = index >= 0 ? this.getWorkerRendererState().renderIssues.get(index) ?? null : null
+    const renderIssue = index >= 0 ? (this.getWorkerRendererState().renderIssues.get(index) ?? null) : null
     const warning = warningFromRenderIssue(renderIssue, { format: this.format, cueIndex: index })
 
     // Use best available renderer
@@ -737,9 +738,7 @@ abstract class BaseVideoSubtitleRenderer {
 
     if (aspectMode !== 'stretch') {
       const uniformScale =
-        aspectMode === 'cover'
-          ? Math.max(stretchScaleX, stretchScaleY)
-          : Math.min(stretchScaleX, stretchScaleY)
+        aspectMode === 'cover' ? Math.max(stretchScaleX, stretchScaleY) : Math.min(stretchScaleX, stretchScaleY)
 
       baseScaleX = uniformScale
       baseScaleY = uniformScale
@@ -1038,10 +1037,14 @@ export class PgsRenderer extends BaseVideoSubtitleRenderer {
         this.state.useWorker = false
         this.emitWorkerState(false, false, this.state.sessionId, true)
         this.emitWarning(
-          createSubtitleWarning('WORKER_FALLBACK', 'PGS worker initialization failed, falling back to main-thread rendering.', {
-            format: 'pgs',
-            details: { reason: workerError instanceof Error ? workerError.message : String(workerError) }
-          })
+          createSubtitleWarning(
+            'WORKER_FALLBACK',
+            'PGS worker initialization failed, falling back to main-thread rendering.',
+            {
+              format: 'pgs',
+              details: { reason: workerError instanceof Error ? workerError.message : String(workerError) }
+            }
+          )
         )
       }
     }
@@ -1066,10 +1069,14 @@ export class PgsRenderer extends BaseVideoSubtitleRenderer {
         usedWorker = false
         this.emitWorkerState(false, false, this.state.sessionId, true)
         this.emitWarning(
-          createSubtitleWarning('WORKER_FALLBACK', 'PGS worker initialization failed, falling back to main-thread rendering.', {
-            format: 'pgs',
-            details: { reason: workerError instanceof Error ? workerError.message : String(workerError) }
-          })
+          createSubtitleWarning(
+            'WORKER_FALLBACK',
+            'PGS worker initialization failed, falling back to main-thread rendering.',
+            {
+              format: 'pgs',
+              details: { reason: workerError instanceof Error ? workerError.message : String(workerError) }
+            }
+          )
         )
       }
     }
@@ -1393,9 +1400,9 @@ export class VobSubRenderer extends BaseVideoSubtitleRenderer {
 
   constructor(options: VideoVobSubOptions) {
     super(options, 'vobsub')
-    this.idxUrl = options.idxUrl || (options.subUrl && /\.sub$/i.test(options.subUrl)
-      ? options.subUrl.replace(/\.sub$/i, '.idx')
-      : undefined)
+    this.idxUrl =
+      options.idxUrl ||
+      (options.subUrl && /\.sub$/i.test(options.subUrl) ? options.subUrl.replace(/\.sub$/i, '.idx') : undefined)
     this.idxContent = options.idxContent
     this.fileName = options.fileName
     this.onLoading = options.onLoading
@@ -1473,10 +1480,14 @@ export class VobSubRenderer extends BaseVideoSubtitleRenderer {
       this.state.useWorker = false
       this.emitWorkerState(false, false, this.state.sessionId, true)
       this.emitWarning(
-        createSubtitleWarning('WORKER_FALLBACK', 'VobSub worker initialization failed, falling back to main-thread rendering.', {
-          format: 'vobsub',
-          details: { reason: workerError instanceof Error ? workerError.message : String(workerError) }
-        })
+        createSubtitleWarning(
+          'WORKER_FALLBACK',
+          'VobSub worker initialization failed, falling back to main-thread rendering.',
+          {
+            format: 'vobsub',
+            details: { reason: workerError instanceof Error ? workerError.message : String(workerError) }
+          }
+        )
       )
       return false
     }
@@ -1530,10 +1541,14 @@ export class VobSubRenderer extends BaseVideoSubtitleRenderer {
         this.state.useWorker = false
         this.emitWorkerState(false, false, this.state.sessionId, true)
         this.emitWarning(
-          createSubtitleWarning('WORKER_FALLBACK', 'VobSub worker load failed, falling back to main-thread rendering.', {
-            format: 'vobsub',
-            details: { reason: workerError instanceof Error ? workerError.message : String(workerError) }
-          })
+          createSubtitleWarning(
+            'WORKER_FALLBACK',
+            'VobSub worker load failed, falling back to main-thread rendering.',
+            {
+              format: 'vobsub',
+              details: { reason: workerError instanceof Error ? workerError.message : String(workerError) }
+            }
+          )
         )
       }
     }
@@ -1607,17 +1622,24 @@ export class VobSubRenderer extends BaseVideoSubtitleRenderer {
         this.state.useWorker = false
         this.emitWorkerState(false, false, this.state.sessionId, true)
         this.emitWarning(
-          createSubtitleWarning('WORKER_FALLBACK', 'VobSub worker IDX load failed, falling back to main-thread rendering.', {
-            format: 'vobsub',
-            details: { reason: error instanceof Error ? error.message : String(error) }
-          })
+          createSubtitleWarning(
+            'WORKER_FALLBACK',
+            'VobSub worker IDX load failed, falling back to main-thread rendering.',
+            {
+              format: 'vobsub',
+              details: { reason: error instanceof Error ? error.message : String(error) }
+            }
+          )
         )
       }
     }
 
     if (!usedWorker) {
       await this.yieldToMain()
-      this.vobsubParser = new VobSubParserLowLevel({ debug: this.debug, onWarning: (warning) => this.emitWarning(warning) })
+      this.vobsubParser = new VobSubParserLowLevel({
+        debug: this.debug,
+        onWarning: (warning) => this.emitWarning(warning)
+      })
       this.vobsubParser.loadFromIdx(idxData)
       this.applyVobSubIndexState(this.vobsubParser.getMetadata(), this.vobsubParser.getTimestamps(), true, false, false)
     }
@@ -1667,7 +1689,10 @@ export class VobSubRenderer extends BaseVideoSubtitleRenderer {
     }
 
     if (!this.vobsubParser) {
-      this.vobsubParser = new VobSubParserLowLevel({ debug: this.debug, onWarning: (warning) => this.emitWarning(warning) })
+      this.vobsubParser = new VobSubParserLowLevel({
+        debug: this.debug,
+        onWarning: (warning) => this.emitWarning(warning)
+      })
       this.vobsubParser.loadFromIdx(idxData)
     }
     this.vobsubParser.attachSubData(subData)
@@ -1682,7 +1707,10 @@ export class VobSubRenderer extends BaseVideoSubtitleRenderer {
   private async loadOnMainThread(subData: Uint8Array, idxData?: string, useMksSource: boolean = false): Promise<void> {
     await this.yieldToMain()
 
-    this.vobsubParser = new VobSubParserLowLevel({ debug: this.debug, onWarning: (warning) => this.emitWarning(warning) })
+    this.vobsubParser = new VobSubParserLowLevel({
+      debug: this.debug,
+      onWarning: (warning) => this.emitWarning(warning)
+    })
 
     await new Promise<void>((resolve) => {
       const scheduleTask =

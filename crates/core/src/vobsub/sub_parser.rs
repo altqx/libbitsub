@@ -363,8 +363,8 @@ fn parse_subtitle_data(
                 }
                 0x05 if ctrl_offset + 6 <= end_offset => {
                     // Set display area
-                    let x1 = ((data[ctrl_offset] as u16) << 4)
-                        | ((data[ctrl_offset + 1] >> 4) as u16);
+                    let x1 =
+                        ((data[ctrl_offset] as u16) << 4) | ((data[ctrl_offset + 1] >> 4) as u16);
                     let x2 = (((data[ctrl_offset + 1] & 0x0F) as u16) << 8)
                         | (data[ctrl_offset + 2] as u16);
                     let y1 = ((data[ctrl_offset + 3] as u16) << 4)
@@ -391,8 +391,8 @@ fn parse_subtitle_data(
                     // Set field offsets
                     top_field_offset =
                         ((data[ctrl_offset] as usize) << 8) | (data[ctrl_offset + 1] as usize);
-                    bottom_field_offset = ((data[ctrl_offset + 2] as usize) << 8)
-                        | (data[ctrl_offset + 3] as usize);
+                    bottom_field_offset =
+                        ((data[ctrl_offset + 2] as usize) << 8) | (data[ctrl_offset + 3] as usize);
                     ctrl_offset += 4;
                 }
                 0xFF => break, // End of control sequence

@@ -84,7 +84,11 @@ function readEbmlVint(binary: Uint8Array, offset: number, keepMarker: boolean): 
   return { value, length, isUnknownSize }
 }
 
-function readEbmlElementBounds(binary: Uint8Array, offset: number, limit: number): { id: number; dataStart: number; dataEnd: number } | null {
+function readEbmlElementBounds(
+  binary: Uint8Array,
+  offset: number,
+  limit: number
+): { id: number; dataStart: number; dataEnd: number } | null {
   const id = readEbmlVint(binary, offset, true)
   if (!id) return null
 

@@ -47,7 +47,9 @@ impl DisplaySet {
     /// Returns the display set and the number of bytes consumed.
     pub fn parse(data: &[u8], include_header: bool) -> Option<(Self, usize)> {
         match Self::try_parse(data, include_header) {
-            DisplaySetParseAttempt::Complete(display_set, consumed) => Some((display_set, consumed)),
+            DisplaySetParseAttempt::Complete(display_set, consumed) => {
+                Some((display_set, consumed))
+            }
             DisplaySetParseAttempt::Incomplete | DisplaySetParseAttempt::Invalid => None,
         }
     }

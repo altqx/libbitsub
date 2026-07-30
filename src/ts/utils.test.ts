@@ -58,20 +58,11 @@ function element(idBytes: number[], payload: Uint8Array): Uint8Array {
 }
 
 function makeTrackEntry(trackType: number, codecId: string): Uint8Array {
-  return element(
-    [0xae],
-    concatBytes(
-      element([0x83], encodeUnsigned(trackType)),
-      element([0x86], ascii(codecId))
-    )
-  )
+  return element([0xae], concatBytes(element([0x83], encodeUnsigned(trackType)), element([0x86], ascii(codecId))))
 }
 
 function makeMatroskaBinary(docType: string, trackEntries: Uint8Array[], extraPayload?: Uint8Array): Uint8Array {
-  const header = element(
-    [0x1a, 0x45, 0xdf, 0xa3],
-    element([0x42, 0x82], ascii(docType))
-  )
+  const header = element([0x1a, 0x45, 0xdf, 0xa3], element([0x42, 0x82], ascii(docType)))
 
   const tracks = element([0x16, 0x54, 0xae, 0x6b], concatBytes(...trackEntries))
   const segment = element([0x18, 0x53, 0x80, 0x67], extraPayload ? concatBytes(extraPayload, tracks) : tracks)

@@ -54,7 +54,10 @@ function blendSourceOver(dst: Uint8ClampedArray, dstIndex: number, src: Uint8Cla
   dst[dstIndex + 3] = Math.round(outAlphaNorm * 255)
 }
 
-function resolveCropMode(frame: SubtitleData | SubtitleRenderedFrameData, options?: SubtitleFrameRenderOptions): SubtitleFrameCropMode {
+function resolveCropMode(
+  frame: SubtitleData | SubtitleRenderedFrameData,
+  options?: SubtitleFrameRenderOptions
+): SubtitleFrameCropMode {
   if ('imageData' in frame) {
     return options?.crop ?? frame.crop
   }
@@ -62,7 +65,10 @@ function resolveCropMode(frame: SubtitleData | SubtitleRenderedFrameData, option
   return options?.crop ?? 'bounds'
 }
 
-function getEmptyFrameSize(frame: SubtitleData | SubtitleRenderedFrameData, crop: SubtitleFrameCropMode): { width: number; height: number } {
+function getEmptyFrameSize(
+  frame: SubtitleData | SubtitleRenderedFrameData,
+  crop: SubtitleFrameCropMode
+): { width: number; height: number } {
   if ('imageData' in frame) {
     return {
       width: Math.max(1, frame.imageData.width),
@@ -80,7 +86,9 @@ function getEmptyFrameSize(frame: SubtitleData | SubtitleRenderedFrameData, crop
   return { width: 1, height: 1 }
 }
 
-function isCanvasContext(target: SubtitleFrameCanvasTarget): target is CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D {
+function isCanvasContext(
+  target: SubtitleFrameCanvasTarget
+): target is CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D {
   return 'putImageData' in target && 'canvas' in target
 }
 
@@ -104,7 +112,9 @@ function createCanvas(width: number, height: number): HTMLCanvasElement | Offscr
   throw new Error('Canvas export requires OffscreenCanvas or document.createElement("canvas").')
 }
 
-function getCanvasContext(canvas: HTMLCanvasElement | OffscreenCanvas): CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D {
+function getCanvasContext(
+  canvas: HTMLCanvasElement | OffscreenCanvas
+): CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D {
   const context = canvas.getContext('2d')
   if (!context) {
     throw new Error('Could not acquire a 2D canvas context for subtitle frame export.')
@@ -145,7 +155,10 @@ function normalizeRenderedFrame(
   return renderFrameData(frame, options)
 }
 
-export function renderFrameData(frame: SubtitleData, options: SubtitleFrameRenderOptions = {}): SubtitleRenderedFrameData | null {
+export function renderFrameData(
+  frame: SubtitleData,
+  options: SubtitleFrameRenderOptions = {}
+): SubtitleRenderedFrameData | null {
   const crop = options.crop ?? 'bounds'
   const bounds = getSubtitleBounds(frame)
 
@@ -153,10 +166,10 @@ export function renderFrameData(frame: SubtitleData, options: SubtitleFrameRende
     return null
   }
 
-  const offsetX = crop === 'screen' ? 0 : bounds?.x ?? 0
-  const offsetY = crop === 'screen' ? 0 : bounds?.y ?? 0
-  const targetWidth = Math.max(1, crop === 'screen' ? frame.width : bounds?.width ?? 1)
-  const targetHeight = Math.max(1, crop === 'screen' ? frame.height : bounds?.height ?? 1)
+  const offsetX = crop === 'screen' ? 0 : (bounds?.x ?? 0)
+  const offsetY = crop === 'screen' ? 0 : (bounds?.y ?? 0)
+  const targetWidth = Math.max(1, crop === 'screen' ? frame.width : (bounds?.width ?? 1))
+  const targetHeight = Math.max(1, crop === 'screen' ? frame.height : (bounds?.height ?? 1))
   const output = new Uint8ClampedArray(targetWidth * targetHeight * 4)
 
   for (const composition of frame.compositionData) {
@@ -293,13 +306,17 @@ export async function toBlob(
   }
 
   return new Promise<Blob>((resolve, reject) => {
-    canvas.toBlob((blob: Blob | null) => {
-      if (blob) {
-        resolve(blob)
-        return
-      }
+    canvas.toBlob(
+      (blob: Blob | null) => {
+        if (blob) {
+          resolve(blob)
+          return
+        }
 
-      reject(new Error('Failed to encode subtitle frame blob.'))
-    }, type, quality)
+        reject(new Error('Failed to encode subtitle frame blob.'))
+      },
+      type,
+      quality
+    )
   })
 }

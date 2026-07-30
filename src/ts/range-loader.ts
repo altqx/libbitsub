@@ -80,7 +80,8 @@ export async function probeRangeSupport(url: string, options: AssetFetchOptions 
 
     if (response.status === 206) {
       const size =
-        parseContentRangeTotal(response.headers.get('content-range')) ?? parseContentLength(response.headers.get('content-length'))
+        parseContentRangeTotal(response.headers.get('content-range')) ??
+        parseContentLength(response.headers.get('content-length'))
       try {
         await response.body?.cancel()
       } catch {

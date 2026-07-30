@@ -97,20 +97,32 @@ export function warningFromRenderIssue(
 
   switch (normalizedIssue) {
     case 'MISSING_PALETTE':
-      return createSubtitleWarning('MISSING_PALETTE', 'PGS cue references a palette that was not available at render time.', {
-        format: options.format,
-        cueIndex: options.cueIndex
-      })
+      return createSubtitleWarning(
+        'MISSING_PALETTE',
+        'PGS cue references a palette that was not available at render time.',
+        {
+          format: options.format,
+          cueIndex: options.cueIndex
+        }
+      )
     case 'INVALID_PACKET':
-      return createSubtitleWarning('INVALID_SUBTITLE_DATA', 'Subtitle packet could not be decoded for the requested cue.', {
-        format: options.format,
-        cueIndex: options.cueIndex
-      })
+      return createSubtitleWarning(
+        'INVALID_SUBTITLE_DATA',
+        'Subtitle packet could not be decoded for the requested cue.',
+        {
+          format: options.format,
+          cueIndex: options.cueIndex
+        }
+      )
     case 'RENDER_CONTEXT_UNAVAILABLE':
-      return createSubtitleWarning('INVALID_SUBTITLE_DATA', 'Subtitle render context could not be assembled for the requested cue.', {
-        format: options.format,
-        cueIndex: options.cueIndex
-      })
+      return createSubtitleWarning(
+        'INVALID_SUBTITLE_DATA',
+        'Subtitle render context could not be assembled for the requested cue.',
+        {
+          format: options.format,
+          cueIndex: options.cueIndex
+        }
+      )
     case 'EMPTY_RENDER':
       return createSubtitleWarning('INVALID_SUBTITLE_DATA', 'Subtitle cue rendered without any visible bitmap data.', {
         format: options.format,
