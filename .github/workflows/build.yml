@@ -240,6 +240,9 @@ jobs:
         with:
           deno-version: v2.x
 
+      - name: Install JS dependencies
+        run: bun install --frozen-lockfile
+
       - name: Publish to JSR
         run: |
           jsr_name=$(node -p "require('./jsr.json').name")
@@ -249,6 +252,8 @@ jobs:
           if curl -fsS -A "libbitsub-ci" -o /dev/null "https://jsr.io/@${jsr_path}/${jsr_version}_meta.json" 2>/dev/null; then
             echo "${jsr_name} v${jsr_version} is already available on JSR; skipping publish"
           else
+            # react is a peer dep used by the optional ./react export; deno publish
+            # resolves it from node_modules during packaging.
             deno publish --no-check --sloppy-imports
           fi
 
@@ -256,12 +261,19 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
 
       - name: Install npm
         run: npm install -g npm@latest
 
       - name: Publish to npm
-        run: npm publish --access public
+        run: |
+          npm_version=$(node -p "require('./package.json').version")
+          if npm view "libbitsub@${npm_version}" version >/dev/null 2>&1; then
+            echo "libbitsub@${npm_version} is already on npm; skipping publish"
+          else
+            npm publish --access public
+          fi
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
