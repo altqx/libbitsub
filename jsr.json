@@ -2,7 +2,14 @@
   "name": "@altq/libbitsub",
   "version": "1.10.2",
   "license": "MIT",
-  "exports": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./videojs": "./src/integrations/videojs.ts",
+    "./shaka": "./src/integrations/shaka.ts",
+    "./hlsjs": "./src/integrations/hlsjs.ts",
+    "./react": "./src/integrations/react.tsx",
+    "./integrations": "./src/integrations/index.ts"
+  },
   "publish": {
     "exclude": [
       "!./pkg",

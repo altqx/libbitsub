@@ -1,6 +1,6 @@
 ---
 name: libbitsub
-description: Integration guide for libbitsub — a WASM-based high-performance bitmap subtitle renderer (PGS, VobSub, and MKS-embedded VobSub) for the browser. Use when adding graphical subtitle support to a video player, integrating PGS (.sup), VobSub (.sub/.idx), or `.mks` files carrying embedded `S_VOBSUB`, configuring layout controls (scale, aspect mode, offset, opacity), or using the low-level parser APIs.
+description: Integration guide for libbitsub — a WASM-based high-performance bitmap subtitle renderer (PGS, VobSub, and MKS-embedded VobSub) for the browser. Use when adding graphical subtitle support to a video player (including Video.js, Shaka Player, hls.js, or React), integrating PGS (.sup), VobSub (.sub/.idx), or `.mks` files carrying embedded `S_VOBSUB`, configuring layout controls (scale, aspect mode, offset, opacity), or using the low-level parser APIs.
 ---
 
 # libbitsub Integration
@@ -25,6 +25,28 @@ cp node_modules/libbitsub/pkg/libbitsub_bg.wasm public/libbitsub/
 
 The worker is still created inline. `workerUrl` remains in the option type only for compatibility and does not change runtime behavior.
 
+## Player integrations (optional)
+
+Core `libbitsub` stays dependency-free. Optional adapters are subpath exports with optional peer dependencies:
+
+| Import                   | Use when                                                                             |
+| ------------------------ | ------------------------------------------------------------------------------------ |
+| `libbitsub/videojs`      | Video.js plugin via `registerBitSubPlugin(videojs)` then `player.bitsub({ subUrl })` |
+| `libbitsub/shaka`        | `attachBitSubToShaka(player, { subUrl })`                                            |
+| `libbitsub/hlsjs`        | `attachBitSubToHls(hls, { subUrl })` after/before `attachMedia`                      |
+| `libbitsub/react`        | `useBitSub(videoRef, { subUrl })` or `<BitSubOverlay videoRef={...} subUrl={...} />` |
+| `libbitsub/integrations` | Shared `attachBitSub(video, options)` controller                                     |
+
+```ts
+import { registerBitSubPlugin } from 'libbitsub/videojs'
+import { attachBitSubToShaka } from 'libbitsub/shaka'
+import { attachBitSubToHls } from 'libbitsub/hlsjs'
+import { useBitSub } from 'libbitsub/react'
+import { attachBitSub } from 'libbitsub/integrations'
+```
+
+All adapters ultimately bind a high-level renderer to an `HTMLVideoElement` and expose `load` / `clear` / `dispose` / display settings. Bitmap tracks are canvas overlays, not native text tracks. Recipes: `examples/`.
+
 ## WASM initialization
 
 The WASM module initializes automatically — high-level renderers (`PgsRenderer`, `VobSubRenderer`) call `initWasm()` internally, and the module also triggers a non-blocking pre-init on first import in browser environments. No explicit initialization is needed for renderer usage.
@@ -46,8 +68,8 @@ For TV/player apps, prewarm the shared parsing worker so the first subtitle trac
 ```ts
 import { warmup, ready } from 'libbitsub'
 
-void warmup()       // app boot
-await ready()       // before first track switch / renderer creation
+void warmup() // app boot
+await ready() // before first track switch / renderer creation
 ```
 
 `warmup()` and `ready()` share one init promise with concurrent renderer creation. The shared worker is published only after in-worker WASM init succeeds.
@@ -139,14 +161,14 @@ Apply at construction via `displaySettings` or at runtime:
 
 ```ts
 renderer.setDisplaySettings({
-  scale: 1.2,            // 0.1–3.0
-  aspectMode: 'cover',   // 'stretch' | 'contain' | 'cover'
-  verticalOffset: -8,    // -50 to 50, % of video height (negative = up)
-  horizontalOffset: 2,   // -50 to 50, % of video width
+  scale: 1.2, // 0.1–3.0
+  aspectMode: 'cover', // 'stretch' | 'contain' | 'cover'
+  verticalOffset: -8, // -50 to 50, % of video height (negative = up)
+  horizontalOffset: 2, // -50 to 50, % of video width
   horizontalAlign: 'center', // 'left' | 'center' | 'right'
-  bottomPadding: 6,      // 0–50, % of video height
-  safeArea: 5,           // 0–25, % of video dimension
-  opacity: 0.92          // 0.0–1.0
+  bottomPadding: 6, // 0–50, % of video height
+  safeArea: 5, // 0–25, % of video dimension
+  opacity: 0.92 // 0.0–1.0
 })
 
 renderer.getDisplaySettings()
@@ -164,14 +186,7 @@ renderer.resetDisplaySettings()
 Use the low-level parser surface when you need exportable subtitle bitmaps for previews, image snapshots, editor thumbnails, or visual diff fixtures.
 
 ```ts
-import {
-  PgsParser,
-  initWasm,
-  renderFrameData,
-  toBlob,
-  toCanvas,
-  toImageBitmap
-} from 'libbitsub'
+import { PgsParser, initWasm, renderFrameData, toBlob, toCanvas, toImageBitmap } from 'libbitsub'
 
 await initWasm()
 
@@ -249,15 +264,15 @@ new PgsRenderer({
   subUrl,
   onEvent: (event) => {
     switch (event.type) {
-      case 'loading':        // format starting to load
-      case 'loaded':         // { format, metadata } ready
-      case 'error':          // { format, error }
-      case 'warning':        // { warning }
-      case 'renderer-change':// { renderer: 'webgpu' | 'webgl2' | 'canvas2d' }
-      case 'worker-state':   // { enabled, ready, sessionId, fallback? }
-      case 'cache-change':   // { cachedFrames, pendingRenders, cacheLimit }
-      case 'cue-change':     // { cue: SubtitleCueMetadata | null }
-      case 'stats':          // periodic performance snapshot
+      case 'loading': // format starting to load
+      case 'loaded': // { format, metadata } ready
+      case 'error': // { format, error }
+      case 'warning': // { warning }
+      case 'renderer-change': // { renderer: 'webgpu' | 'webgl2' | 'canvas2d' }
+      case 'worker-state': // { enabled, ready, sessionId, fallback? }
+      case 'cache-change': // { cachedFrames, pendingRenders, cacheLimit }
+      case 'cue-change': // { cue: SubtitleCueMetadata | null }
+      case 'stats': // periodic performance snapshot
     }
   }
 })
@@ -301,12 +316,12 @@ Structured error codes include `UNSUPPORTED_FORMAT`, `BAD_IDX`, `MISSING_PALETTE
 ## Metadata inspection
 
 ```ts
-renderer.getMetadata()           // track-level: format, cueCount, screenWidth, screenHeight
+renderer.getMetadata() // track-level: format, cueCount, screenWidth, screenHeight
 renderer.getCurrentCueMetadata() // currently displayed cue
-renderer.getCueMetadata(42)      // specific cue by index
-renderer.getStats()              // framesRendered, avgRenderTime, usingWorker, etc.
-renderer.getCacheStats()         // cache occupancy + worker/session state
-renderer.getLastRenderInfo()     // last render attempt in debug mode
+renderer.getCueMetadata(42) // specific cue by index
+renderer.getStats() // framesRendered, avgRenderTime, usingWorker, etc.
+renderer.getCacheStats() // cache occupancy + worker/session state
+renderer.getLastRenderInfo() // last render attempt in debug mode
 ```
 
 ## Low-level parsers

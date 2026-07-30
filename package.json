@@ -17,26 +17,59 @@
     "rust",
     "rendering",
     "video",
-    "player"
+    "player",
+    "videojs",
+    "shaka",
+    "hls.js",
+    "react"
   ],
   "main": "dist/index.js",
   "module": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {
     ".": {
+      "types": "./dist/index.d.ts",
       "import": "./dist/index.js",
       "require": "./dist/index.js",
-      "types": "./dist/index.d.ts"
+      "default": "./dist/index.js"
     },
     "./pkg": {
+      "types": "./pkg/libbitsub.d.ts",
       "import": "./pkg/libbitsub.js",
-      "types": "./pkg/libbitsub.d.ts"
+      "default": "./pkg/libbitsub.js"
+    },
+    "./videojs": {
+      "types": "./dist/integrations/videojs.d.ts",
+      "import": "./dist/integrations/videojs.js",
+      "default": "./dist/integrations/videojs.js"
+    },
+    "./shaka": {
+      "types": "./dist/integrations/shaka.d.ts",
+      "import": "./dist/integrations/shaka.js",
+      "default": "./dist/integrations/shaka.js"
+    },
+    "./hlsjs": {
+      "types": "./dist/integrations/hlsjs.d.ts",
+      "import": "./dist/integrations/hlsjs.js",
+      "default": "./dist/integrations/hlsjs.js"
+    },
+    "./react": {
+      "types": "./dist/integrations/react.d.ts",
+      "import": "./dist/integrations/react.js",
+      "default": "./dist/integrations/react.js"
+    },
+    "./integrations": {
+      "types": "./dist/integrations/index.d.ts",
+      "import": "./dist/integrations/index.js",
+      "default": "./dist/integrations/index.js"
     }
   },
   "files": [
     "dist",
     "pkg",
-    "src/wrapper.ts"
+    "src/wrapper.ts",
+    "src/integrations",
+    "examples"
   ],
   "scripts": {
     "build:wasm": "wasm-pack build --target web --out-dir pkg",
@@ -50,10 +83,31 @@
     "format": "cargo fmt && prettier . --write"
   },
   "devDependencies": {
+    "@types/react": "^19.2.17",
     "prettier": "^3.9.6",
+    "react": "^19.2.8",
     "typescript": "^7.0.2"
   },
-  "peerDependencies": {},
+  "peerDependencies": {
+    "hls.js": ">=1.0.0",
+    "react": ">=18.0.0",
+    "shaka-player": ">=4.0.0",
+    "video.js": ">=7.0.0"
+  },
+  "peerDependenciesMeta": {
+    "hls.js": {
+      "optional": true
+    },
+    "react": {
+      "optional": true
+    },
+    "shaka-player": {
+      "optional": true
+    },
+    "video.js": {
+      "optional": true
+    }
+  },
   "engines": {
     "node": ">=18"
   },

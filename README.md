@@ -19,6 +19,7 @@ Started as a fork of Arcus92's [libpgs-js](https://github.com/Arcus92/libpgs-js)
 - Automatic format detection and unified loading helpers
 - First-class diagnostics with structured error codes, warning hooks, and render/cache snapshots
 - TypeScript support with exported event and metadata types
+- Optional player integrations for Video.js, Shaka Player, hls.js, and React (core stays dependency-free)
 
 ## Showcase
 
@@ -167,6 +168,73 @@ new PgsRenderer({ video, subUrl, streamingLoad: false, rangeRequests: false })
 
 Low-level helpers are also exported: `probeRangeSupport()`, `fetchSubtitleAsset()`, and `fetchSubtitleText()`.
 
+## Player integrations
+
+Optional adapters ship as **subpath exports**. They wrap the high-level renderers for common players while keeping the core package free of player/React dependencies (peer deps are optional and only needed when you import that adapter).
+
+| Import                   | Adapter                                  | Optional peer       |
+| ------------------------ | ---------------------------------------- | ------------------- |
+| `libbitsub/videojs`      | Video.js plugin (`registerBitSubPlugin`) | `video.js` >= 7     |
+| `libbitsub/shaka`        | `attachBitSubToShaka(player, options)`   | `shaka-player` >= 4 |
+| `libbitsub/hlsjs`        | `attachBitSubToHls(hls, options)`        | `hls.js` >= 1       |
+| `libbitsub/react`        | `useBitSub` / `BitSubOverlay`            | `react` >= 18       |
+| `libbitsub/integrations` | Shared `attachBitSub` controller         | —                   |
+
+Copy-paste recipes live under [`examples/`](./examples).
+
+### Video.js
+
+```ts
+import videojs from 'video.js'
+import { registerBitSubPlugin } from 'libbitsub/videojs'
+
+registerBitSubPlugin(videojs)
+const player = videojs('my-video')
+const bitsub = player.bitsub({ subUrl: '/subs/movie.sup' })
+bitsub.load({ subUrl: '/subs/other.sup' })
+```
+
+### Shaka Player
+
+```ts
+import { attachBitSubToShaka } from 'libbitsub/shaka'
+
+const bitsub = attachBitSubToShaka(player, { subUrl: '/subs/movie.sup' })
+// later
+bitsub.dispose()
+```
+
+### hls.js
+
+```ts
+import Hls from 'hls.js'
+import { attachBitSubToHls } from 'libbitsub/hlsjs'
+
+const hls = new Hls()
+hls.loadSource(url)
+hls.attachMedia(video)
+const bitsub = attachBitSubToHls(hls, { subUrl: '/subs/movie.sup' })
+```
+
+### React
+
+```tsx
+import { useRef } from 'react'
+import { useBitSub } from 'libbitsub/react'
+
+function Player({ src, subUrl }: { src: string; subUrl: string }) {
+  const videoRef = useRef<HTMLVideoElement>(null)
+  useBitSub(videoRef, { subUrl })
+  return (
+    <div style={{ position: 'relative' }}>
+      <video ref={videoRef} src={src} controls playsInline />
+    </div>
+  )
+}
+```
+
+Bitmap PGS/VobSub/MKS tracks are external canvas overlays, not native HTML/TextTrack entries. Prefer deep imports so unused adapters stay out of your bundle.
+
 ## High-level video renderers
 
 The high-level API manages subtitle loading, canvas overlay creation, playback sync, resize handling, worker usage, and renderer fallback.
@@ -264,16 +332,16 @@ renderer.resetDisplaySettings()
 
 `SubtitleDisplaySettings`:
 
-| Field | Type | Range / values | Meaning |
-| --- | --- | --- | --- |
-| `scale` | number | `0.1` to `3.0` | Overall subtitle scale |
-| `aspectMode` | `'stretch' \| 'contain' \| 'cover'` | fixed set | How subtitle screen coordinates map into the visible video box |
-| `verticalOffset` | number | `-50` to `50` | Vertical movement as percent of video height |
-| `horizontalOffset` | number | `-50` to `50` | Horizontal movement as percent of video width |
-| `horizontalAlign` | `'left' \| 'center' \| 'right'` | fixed set | Anchor used when scaling subtitle groups |
-| `bottomPadding` | number | `0` to `50` | Extra padding from the bottom edge |
-| `safeArea` | number | `0` to `25` | Clamp subtitles inside a video-safe area |
-| `opacity` | number | `0.0` to `1.0` | Global subtitle opacity |
+| Field              | Type                                | Range / values | Meaning                                                        |
+| ------------------ | ----------------------------------- | -------------- | -------------------------------------------------------------- |
+| `scale`            | number                              | `0.1` to `3.0` | Overall subtitle scale                                         |
+| `aspectMode`       | `'stretch' \| 'contain' \| 'cover'` | fixed set      | How subtitle screen coordinates map into the visible video box |
+| `verticalOffset`   | number                              | `-50` to `50`  | Vertical movement as percent of video height                   |
+| `horizontalOffset` | number                              | `-50` to `50`  | Horizontal movement as percent of video width                  |
+| `horizontalAlign`  | `'left' \| 'center' \| 'right'`     | fixed set      | Anchor used when scaling subtitle groups                       |
+| `bottomPadding`    | number                              | `0` to `50`    | Extra padding from the bottom edge                             |
+| `safeArea`         | number                              | `0` to `25`    | Clamp subtitles inside a video-safe area                       |
+| `opacity`          | number                              | `0.0` to `1.0` | Global subtitle opacity                                        |
 
 ## Metadata and introspection
 
@@ -348,14 +416,7 @@ Like `UnifiedSubtitleParser.loadAuto()`, this is a low-level in-memory API: pass
 Low-level parser output can be flattened into a single exportable frame for previews, editors, snapshots, fixture generation, or visual diffing.
 
 ```ts
-import {
-  PgsParser,
-  initWasm,
-  renderFrameData,
-  toBlob,
-  toCanvas,
-  toImageBitmap
-} from 'libbitsub'
+import { PgsParser, initWasm, renderFrameData, toBlob, toCanvas, toImageBitmap } from 'libbitsub'
 
 await initWasm()
 
@@ -541,17 +602,17 @@ renderer.dispose()
 
 Emitted events:
 
-| Event | Payload |
-| --- | --- |
-| `loading` | subtitle format |
-| `loaded` | subtitle format and parser metadata |
-| `error` | subtitle format and `SubtitleDiagnosticErrorLike` |
-| `warning` | `SubtitleDiagnosticWarning` |
-| `renderer-change` | active backend: `webgpu`, `webgl2`, or `canvas2d` |
-| `worker-state` | whether worker mode is enabled, ready, fallback status, and the active session ID |
-| `cache-change` | cached frame count, pending renders, and configured cache limit |
-| `cue-change` | current cue metadata or `null` when nothing is displayed |
-| `stats` | periodic renderer stats snapshot |
+| Event             | Payload                                                                           |
+| ----------------- | --------------------------------------------------------------------------------- |
+| `loading`         | subtitle format                                                                   |
+| `loaded`          | subtitle format and parser metadata                                               |
+| `error`           | subtitle format and `SubtitleDiagnosticErrorLike`                                 |
+| `warning`         | `SubtitleDiagnosticWarning`                                                       |
+| `renderer-change` | active backend: `webgpu`, `webgl2`, or `canvas2d`                                 |
+| `worker-state`    | whether worker mode is enabled, ready, fallback status, and the active session ID |
+| `cache-change`    | cached frame count, pending renders, and configured cache limit                   |
+| `cue-change`      | current cue metadata or `null` when nothing is displayed                          |
+| `stats`           | periodic renderer stats snapshot                                                  |
 
 ## Performance stats
 
@@ -667,6 +728,7 @@ WebGL2 and Canvas2D fallback remain automatic. Use `onWebGPUFallback`, `onWebGL2
 - `SubtitleDiagnosticError` is the structured error class libbitsub uses for coded diagnostics.
 - `createSubtitleDiagnosticError(...)` and `normalizeSubtitleError(...)` are exported for integrations that want to preserve libbitsub-style error codes.
 - Legacy aliases remain exported: `PGSRenderer`, `VobsubRenderer`, `UnifiedSubtitleRenderer`.
+- Optional integration entry points: `libbitsub/videojs`, `libbitsub/shaka`, `libbitsub/hlsjs`, `libbitsub/react`, `libbitsub/integrations` (see [examples/](./examples) and [references/api.md](./references/api.md)).
 
 ### High-level renderers
 

@@ -2,30 +2,105 @@
 
 ## Top-level exports
 
-| Export | Signature | Notes |
-|--------|-----------|-------|
-| `initWasm` | `() => Promise<void>` | Must be called before any parser or renderer. Safe to call multiple times. |
-| `isWasmInitialized` | `() => boolean` | |
-| `warmup` | `() => Promise<void>` | Pre-initialize the shared subtitle worker (and its WASM). Safe to call multiple times; concurrent callers share one init promise. No-ops when Workers are unavailable. |
-| `ready` | `() => Promise<void>` | Resolves when the shared worker is ready for parse/render requests. Starts init if needed (same as `warmup`). |
-| `isWorkerAvailable` | `() => boolean` | |
-| `isWorkerReady` | `() => boolean` | `true` only after worker WASM initialization succeeds. |
-| `isWebGPUSupported` | `() => boolean` | |
-| `detectSubtitleFormat` | `(source: AutoSubtitleSource) => 'pgs' \| 'vobsub' \| null` | Uses file hints and binary magic bytes, including `.mks` sources carrying embedded `S_VOBSUB` |
-| `createAutoSubtitleRenderer` | `(options: AutoVideoSubtitleOptions) => PgsRenderer \| VobSubRenderer` | Throws if format cannot be determined |
-| `openSubtitles` | `(source: AutoSubtitleSource, options?: SubtitleDiagnosticsOptions) => Promise<OpenedSubtitles>` | Initializes WASM, auto-detects the format, and returns a normalized low-level handle |
-| `probeRangeSupport` | `(url: string, options?: AssetFetchOptions) => Promise<RangeProbeResult>` | Probe HTTP Range support and content length |
-| `fetchSubtitleAsset` | `(url: string, options?: AssetFetchOptions, onChunk?) => Promise<{ data, strategy, rangeSupported, total }>` | Range/stream-aware binary download with progressive chunk callbacks |
-| `fetchSubtitleText` | `(url: string, options?: AssetFetchOptions) => Promise<string>` | Text download helper for small assets such as `.idx` |
-| `renderFrameData` | `(frame: SubtitleData, options?: SubtitleFrameRenderOptions) => SubtitleRenderedFrameData \| null` | Composes subtitle compositions into a single `ImageData` export |
-| `toCanvas` | `(frame: SubtitleData \| SubtitleRenderedFrameData, target?: SubtitleFrameCanvasTarget, options?: SubtitleFrameCanvasOptions) => HTMLCanvasElement \| OffscreenCanvas` | Draws a frame export to a new or existing canvas or 2D context |
-| `toImageBitmap` | `(frame: SubtitleData \| SubtitleRenderedFrameData, options?: SubtitleFrameRenderOptions) => Promise<ImageBitmap>` | Creates an `ImageBitmap` from a composed subtitle frame |
-| `toBlob` | `(frame: SubtitleData \| SubtitleRenderedFrameData, type?: string, quality?: number, options?: SubtitleFrameRenderOptions) => Promise<Blob>` | Encodes a composed subtitle frame, defaulting to PNG |
-| `SubtitleDiagnosticError` | `class extends Error` | Structured diagnostic error with `code`, `format`, and `details` |
-| `createSubtitleDiagnosticError` | `(code, message, options?) => SubtitleDiagnosticError` | Create a typed diagnostics error manually |
-| `normalizeSubtitleError` | `(error, context?) => SubtitleDiagnosticError` | Map generic errors into stable libbitsub diagnostic codes |
+| Export                          | Signature                                                                                                                                                              | Notes                                                                                                                                                                  |
+| ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `initWasm`                      | `() => Promise<void>`                                                                                                                                                  | Must be called before any parser or renderer. Safe to call multiple times.                                                                                             |
+| `isWasmInitialized`             | `() => boolean`                                                                                                                                                        |                                                                                                                                                                        |
+| `warmup`                        | `() => Promise<void>`                                                                                                                                                  | Pre-initialize the shared subtitle worker (and its WASM). Safe to call multiple times; concurrent callers share one init promise. No-ops when Workers are unavailable. |
+| `ready`                         | `() => Promise<void>`                                                                                                                                                  | Resolves when the shared worker is ready for parse/render requests. Starts init if needed (same as `warmup`).                                                          |
+| `isWorkerAvailable`             | `() => boolean`                                                                                                                                                        |                                                                                                                                                                        |
+| `isWorkerReady`                 | `() => boolean`                                                                                                                                                        | `true` only after worker WASM initialization succeeds.                                                                                                                 |
+| `isWebGPUSupported`             | `() => boolean`                                                                                                                                                        |                                                                                                                                                                        |
+| `detectSubtitleFormat`          | `(source: AutoSubtitleSource) => 'pgs' \| 'vobsub' \| null`                                                                                                            | Uses file hints and binary magic bytes, including `.mks` sources carrying embedded `S_VOBSUB`                                                                          |
+| `createAutoSubtitleRenderer`    | `(options: AutoVideoSubtitleOptions) => PgsRenderer \| VobSubRenderer`                                                                                                 | Throws if format cannot be determined                                                                                                                                  |
+| `openSubtitles`                 | `(source: AutoSubtitleSource, options?: SubtitleDiagnosticsOptions) => Promise<OpenedSubtitles>`                                                                       | Initializes WASM, auto-detects the format, and returns a normalized low-level handle                                                                                   |
+| `probeRangeSupport`             | `(url: string, options?: AssetFetchOptions) => Promise<RangeProbeResult>`                                                                                              | Probe HTTP Range support and content length                                                                                                                            |
+| `fetchSubtitleAsset`            | `(url: string, options?: AssetFetchOptions, onChunk?) => Promise<{ data, strategy, rangeSupported, total }>`                                                           | Range/stream-aware binary download with progressive chunk callbacks                                                                                                    |
+| `fetchSubtitleText`             | `(url: string, options?: AssetFetchOptions) => Promise<string>`                                                                                                        | Text download helper for small assets such as `.idx`                                                                                                                   |
+| `renderFrameData`               | `(frame: SubtitleData, options?: SubtitleFrameRenderOptions) => SubtitleRenderedFrameData \| null`                                                                     | Composes subtitle compositions into a single `ImageData` export                                                                                                        |
+| `toCanvas`                      | `(frame: SubtitleData \| SubtitleRenderedFrameData, target?: SubtitleFrameCanvasTarget, options?: SubtitleFrameCanvasOptions) => HTMLCanvasElement \| OffscreenCanvas` | Draws a frame export to a new or existing canvas or 2D context                                                                                                         |
+| `toImageBitmap`                 | `(frame: SubtitleData \| SubtitleRenderedFrameData, options?: SubtitleFrameRenderOptions) => Promise<ImageBitmap>`                                                     | Creates an `ImageBitmap` from a composed subtitle frame                                                                                                                |
+| `toBlob`                        | `(frame: SubtitleData \| SubtitleRenderedFrameData, type?: string, quality?: number, options?: SubtitleFrameRenderOptions) => Promise<Blob>`                           | Encodes a composed subtitle frame, defaulting to PNG                                                                                                                   |
+| `SubtitleDiagnosticError`       | `class extends Error`                                                                                                                                                  | Structured diagnostic error with `code`, `format`, and `details`                                                                                                       |
+| `createSubtitleDiagnosticError` | `(code, message, options?) => SubtitleDiagnosticError`                                                                                                                 | Create a typed diagnostics error manually                                                                                                                              |
+| `normalizeSubtitleError`        | `(error, context?) => SubtitleDiagnosticError`                                                                                                                         | Map generic errors into stable libbitsub diagnostic codes                                                                                                              |
 
 Legacy aliases: `PGSRenderer`, `VobsubRenderer`, `UnifiedSubtitleRenderer`.
+
+---
+
+## Optional player integrations
+
+Subpath exports keep player/React packages out of the core dependency graph. Peers are optional and only required when importing that entry.
+
+| Subpath                  | Main export                                                | Peer dependency                |
+| ------------------------ | ---------------------------------------------------------- | ------------------------------ |
+| `libbitsub/integrations` | `attachBitSub`, `createBitSubRenderer`, `BitSubController` | —                              |
+| `libbitsub/videojs`      | `registerBitSubPlugin(videojs, pluginName?)`               | `video.js` >= 7 (optional)     |
+| `libbitsub/shaka`        | `attachBitSubToShaka(player, options?)`                    | `shaka-player` >= 4 (optional) |
+| `libbitsub/hlsjs`        | `attachBitSubToHls(hls, options?)`                         | `hls.js` >= 1 (optional)       |
+| `libbitsub/react`        | `useBitSub`, `BitSubOverlay`                               | `react` >= 18 (optional)       |
+
+### `attachBitSub(video, options?) => BitSubController`
+
+Shared controller used by the player adapters:
+
+```ts
+interface BitSubController {
+  readonly renderer: PgsRenderer | VobSubRenderer | null
+  readonly video: HTMLVideoElement | null
+  readonly disposed: boolean
+  load(source: BitSubSourceOptions): PgsRenderer | VobSubRenderer
+  clear(): void
+  dispose(): void
+  getDisplaySettings(): SubtitleDisplaySettings | null
+  setDisplaySettings(settings: Partial<SubtitleDisplaySettings>): void
+  resetDisplaySettings(): void
+  getStats(): SubtitleRendererStats | null
+  setVideo(video: HTMLVideoElement | null): void
+}
+
+type BitSubSourceOptions = Omit<AutoVideoSubtitleOptions, 'video'>
+
+interface AttachBitSubOptions extends BitSubSourceOptions {
+  autoLoad?: boolean // default true
+}
+```
+
+### Video.js
+
+```ts
+import { registerBitSubPlugin } from 'libbitsub/videojs'
+registerBitSubPlugin(videojs)
+const api = player.bitsub({ subUrl: '/movie.sup' })
+api.load({ subUrl: '/other.sup' })
+api.clear()
+api.controller() // BitSubController | null
+```
+
+### Shaka Player / hls.js
+
+```ts
+import { attachBitSubToShaka } from 'libbitsub/shaka'
+import { attachBitSubToHls } from 'libbitsub/hlsjs'
+
+const shakaBitsub = attachBitSubToShaka(player, { subUrl: '/movie.sup' })
+const hlsBitsub = attachBitSubToHls(hls, { subUrl: '/movie.sup' })
+```
+
+Both handles extend `BitSubController` and add `player` / `hls` references. Call `dispose()` when tearing down.
+
+### React
+
+```ts
+import { useBitSub, BitSubOverlay } from 'libbitsub/react'
+
+const { controller, error } = useBitSub(videoRef, { subUrl, enabled: true })
+// or
+<BitSubOverlay videoRef={videoRef} subUrl={subUrl} displaySettings={{ scale: 1.1 }} />
+```
+
+Use either the hook or the overlay component for a given video element, not both. See `examples/` for full recipes.
 
 ---
 
@@ -36,18 +111,18 @@ Accepted by `PgsRenderer` constructor:
 ```ts
 interface VideoSubtitleOptions {
   video: HTMLVideoElement
-  subUrl?: string                   // URL to subtitle file
-  subContent?: ArrayBuffer          // in-memory subtitle data (alternative to subUrl)
+  subUrl?: string // URL to subtitle file
+  subContent?: ArrayBuffer // in-memory subtitle data (alternative to subUrl)
   onLoading?: () => void
   onLoaded?: () => void
-  onError?: (error: Error) => void  // libbitsub emits SubtitleDiagnosticError instances here
+  onError?: (error: Error) => void // libbitsub emits SubtitleDiagnosticError instances here
   onWebGPUFallback?: () => void
   onWebGL2Fallback?: () => void
   displaySettings?: Partial<SubtitleDisplaySettings>
-  cacheLimit?: number               // default 24
+  cacheLimit?: number // default 24
   prefetchWindow?: { before?: number; after?: number }
-  streamingLoad?: boolean           // default true — progressive URL loads
-  rangeRequests?: boolean           // default true — HTTP Range when supported
+  streamingLoad?: boolean // default true — progressive URL loads
+  rangeRequests?: boolean // default true — HTTP Range when supported
   onEvent?: (event: SubtitleRendererEvent) => void
   debug?: boolean
   onWarning?: (warning: SubtitleDiagnosticWarning) => void
@@ -65,11 +140,13 @@ interface SubtitleDiagnosticsOptions {
 ```
 
 `VideoVobSubOptions` extends `VideoSubtitleOptions` with:
+
 - `idxUrl?: string` — URL to the .idx file (defaults to `subUrl` with `.idx` extension)
 - `idxContent?: string` — in-memory .idx content
 - `fileName?: string` — file name hint used to classify `.mks` inputs as embedded VobSub sources
 
 `AutoVideoSubtitleOptions` extends `VideoVobSubOptions` with:
+
 - `fileName?: string` — file name hint for format detection
 
 ---
@@ -78,14 +155,14 @@ interface SubtitleDiagnosticsOptions {
 
 ```ts
 interface SubtitleDisplaySettings {
-  scale: number            // 0.1–3.0, default 1.0
+  scale: number // 0.1–3.0, default 1.0
   aspectMode: 'stretch' | 'contain' | 'cover' // default 'stretch'
-  verticalOffset: number   // -50 to 50, % of video height; negative = up
+  verticalOffset: number // -50 to 50, % of video height; negative = up
   horizontalOffset: number // -50 to 50, % of video width
-  horizontalAlign: 'left' | 'center' | 'right'  // default 'center'
-  bottomPadding: number    // 0–50, % of video height
-  safeArea: number         // 0–25, % of video dimension
-  opacity: number          // 0.0–1.0, default 1.0
+  horizontalAlign: 'left' | 'center' | 'right' // default 'center'
+  bottomPadding: number // 0–50, % of video height
+  safeArea: number // 0–25, % of video dimension
+  opacity: number // 0.0–1.0, default 1.0
 }
 ```
 
@@ -118,10 +195,7 @@ interface SubtitleRenderedFrameData {
 }
 
 type SubtitleFrameCanvasTarget =
-  | HTMLCanvasElement
-  | OffscreenCanvas
-  | CanvasRenderingContext2D
-  | OffscreenCanvasRenderingContext2D
+  HTMLCanvasElement | OffscreenCanvas | CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D
 
 interface SubtitleFrameCanvasOptions extends SubtitleFrameRenderOptions {
   resizeCanvas?: boolean
@@ -154,7 +228,10 @@ interface OpenedSubtitles {
   renderAtIndex(index: number): SubtitleData | undefined
   renderAtTimestamp(timeSeconds: number): SubtitleData | undefined
   renderFrameDataAtIndex(index: number, options?: SubtitleFrameRenderOptions): SubtitleRenderedFrameData | undefined
-  renderFrameDataAtTimestamp(timeSeconds: number, options?: SubtitleFrameRenderOptions): SubtitleRenderedFrameData | undefined
+  renderFrameDataAtTimestamp(
+    timeSeconds: number,
+    options?: SubtitleFrameRenderOptions
+  ): SubtitleRenderedFrameData | undefined
   getCueMetadata(index: number): SubtitleCueMetadata | null
   getLastRenderIssue(): string | null
   clearCache(): void
@@ -175,46 +252,46 @@ Both extend `BaseVideoSubtitleRenderer` and expose the same API surface.
 
 ### Lifecycle
 
-| Method | Description |
-|--------|-------------|
+| Method            | Description                               |
+| ----------------- | ----------------------------------------- |
 | `dispose(): void` | Release DOM, worker, and parser resources |
 
 ### Layout
 
-| Method | Description |
-|--------|-------------|
+| Method                                                                 | Description                                |
+| ---------------------------------------------------------------------- | ------------------------------------------ |
 | `setDisplaySettings(settings: Partial<SubtitleDisplaySettings>): void` | Merge and apply settings; forces re-render |
-| `getDisplaySettings(): SubtitleDisplaySettings` | Returns current settings copy |
-| `resetDisplaySettings(): void` | Resets to defaults; forces re-render |
+| `getDisplaySettings(): SubtitleDisplaySettings`                        | Returns current settings copy              |
+| `resetDisplaySettings(): void`                                         | Resets to defaults; forces re-render       |
 
 ### Cache and prefetch
 
-| Method | Description |
-|--------|-------------|
-| `setCacheLimit(limit: number): void` | Set max cached decoded frames |
-| `getCacheLimit(): number` | |
-| `clearFrameCache(): void` | Clears renderer and parser-side frame cache |
-| `prefetchRange(startIndex: number, endIndex: number): Promise<void>` | Decode and cache cues by index range |
+| Method                                                                             | Description                                  |
+| ---------------------------------------------------------------------------------- | -------------------------------------------- |
+| `setCacheLimit(limit: number): void`                                               | Set max cached decoded frames                |
+| `getCacheLimit(): number`                                                          |                                              |
+| `clearFrameCache(): void`                                                          | Clears renderer and parser-side frame cache  |
+| `prefetchRange(startIndex: number, endIndex: number): Promise<void>`               | Decode and cache cues by index range         |
 | `prefetchAroundTime(time: number, before?: number, after?: number): Promise<void>` | Decode cues around a playback time (seconds) |
 
 ### Metadata and stats
 
-| Method | Description |
-|--------|-------------|
-| `getMetadata(): SubtitleParserMetadata \| null` | Track-level: format, cueCount, screenWidth/Height |
-| `getCurrentCueMetadata(): SubtitleCueMetadata \| null` | Most recently displayed cue |
-| `getCueMetadata(index: number): SubtitleCueMetadata \| null` | Cue by index |
-| `getStats(): SubtitleRendererStats` | Performance statistics |
-| `getCacheStats(): SubtitleCacheStats` | Cache occupancy, worker readiness, and session diagnostics |
-| `getLastRenderInfo(): SubtitleLastRenderInfo \| null` | Last render attempt snapshot, populated when `debug` is enabled |
+| Method                                                       | Description                                                     |
+| ------------------------------------------------------------ | --------------------------------------------------------------- |
+| `getMetadata(): SubtitleParserMetadata \| null`              | Track-level: format, cueCount, screenWidth/Height               |
+| `getCurrentCueMetadata(): SubtitleCueMetadata \| null`       | Most recently displayed cue                                     |
+| `getCueMetadata(index: number): SubtitleCueMetadata \| null` | Cue by index                                                    |
+| `getStats(): SubtitleRendererStats`                          | Performance statistics                                          |
+| `getCacheStats(): SubtitleCacheStats`                        | Cache occupancy, worker readiness, and session diagnostics      |
+| `getLastRenderInfo(): SubtitleLastRenderInfo \| null`        | Last render attempt snapshot, populated when `debug` is enabled |
 
 ### VobSubRenderer extras
 
-| Method | Description |
-|--------|-------------|
+| Method                                     | Description              |
+| ------------------------------------------ | ------------------------ |
 | `setDebandEnabled(enabled: boolean): void` | Enable/disable debanding |
-| `setDebandThreshold(value: number): void` | Debanding threshold |
-| `setDebandRange(value: number): void` | Debanding range |
+| `setDebandThreshold(value: number): void`  | Debanding threshold      |
+| `setDebandRange(value: number): void`      | Debanding range          |
 
 `VobSubRenderer` also accepts `.mks` input through `subUrl` or `subContent` when `fileName` or binary inspection identifies an embedded `S_VOBSUB` track. In that case `idxUrl` and `idxContent` are ignored because track metadata is synthesized from the Matroska container.
 
@@ -329,12 +406,7 @@ type SubtitleDiagnosticErrorCode =
   | 'UNKNOWN'
 
 type SubtitleDiagnosticWarningCode =
-  | 'BAD_IDX'
-  | 'INVALID_FRAME_DATA'
-  | 'INVALID_SUBTITLE_DATA'
-  | 'MISSING_PALETTE'
-  | 'RANGE_FALLBACK'
-  | 'WORKER_FALLBACK'
+  'BAD_IDX' | 'INVALID_FRAME_DATA' | 'INVALID_SUBTITLE_DATA' | 'MISSING_PALETTE' | 'RANGE_FALLBACK' | 'WORKER_FALLBACK'
 ```
 
 `SubtitleDiagnosticErrorLike` extends `Error` with `code`, `format?`, `details?`, and `cause?`.
@@ -389,18 +461,18 @@ interface SubtitleLastRenderInfo {
 interface SubtitleCueMetadata {
   index: number
   format: 'pgs' | 'vobsub'
-  startTime: number       // ms
-  endTime: number         // ms
-  duration: number        // ms
+  startTime: number // ms
+  endTime: number // ms
+  duration: number // ms
   screenWidth: number
   screenHeight: number
   bounds: { x: number; y: number; width: number; height: number } | null
   compositionCount: number
-  paletteId?: number         // PGS only
-  compositionState?: number  // PGS only
-  language?: string | null   // VobSub only
-  trackId?: string | null    // VobSub only
-  filePosition?: number      // VobSub only
+  paletteId?: number // PGS only
+  compositionState?: number // PGS only
+  language?: string | null // VobSub only
+  trackId?: string | null // VobSub only
+  filePosition?: number // VobSub only
 }
 ```
 
@@ -412,10 +484,10 @@ interface SubtitleCueMetadata {
 interface SubtitleRendererStats {
   framesRendered: number
   framesDropped: number
-  avgRenderTime: number   // ms
-  maxRenderTime: number   // ms
-  minRenderTime: number   // ms
-  lastRenderTime: number  // ms
+  avgRenderTime: number // ms
+  maxRenderTime: number // ms
+  minRenderTime: number // ms
+  lastRenderTime: number // ms
   renderFps: number
   usingWorker: boolean
   cachedFrames: number

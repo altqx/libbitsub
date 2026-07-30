@@ -4,6 +4,7 @@
     "module": "ESNext",
     "moduleResolution": "bundler",
     "lib": ["ES2022", "DOM"],
+    "jsx": "react-jsx",
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
@@ -14,6 +15,6 @@
     "outDir": "./dist",
     "rootDir": "./src"
   },
-  "include": ["src/wrapper.ts", "src/index.ts"],
-  "exclude": ["node_modules", "pkg", "target"]
+  "include": ["src/wrapper.ts", "src/index.ts", "src/integrations/**/*.ts", "src/integrations/**/*.tsx"],
+  "exclude": ["node_modules", "pkg", "target", "src/**/*.test.ts"]
 }
