@@ -78,7 +78,10 @@
     "build:ts": "tsc",
     "build": "bun run build:wasm:release && bun run build:ts",
     "clean": "rm -rf pkg pkg-bundler dist target",
-    "test": "cargo test",
+    "test": "cargo test --workspace",
+    "test:ts": "bun test src/ts",
+    "test:visual": "bun tests/visual/run.mjs",
+    "test:all": "bun run test && bun run test:ts && bun run test:visual",
     "test:wasm": "wasm-pack test --headless --chrome",
     "format": "cargo fmt && prettier . --write"
   },

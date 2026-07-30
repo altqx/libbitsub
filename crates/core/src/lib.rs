@@ -4,5 +4,8 @@ pub mod pgs;
 pub mod utils;
 pub mod vobsub;
 
+#[cfg(test)]
+mod compatibility;
+
 pub use pgs::*;
 pub use vobsub::*;

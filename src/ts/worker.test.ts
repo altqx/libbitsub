@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 
-import { getOrCreateWorker, isWorkerReady, ready, sendToWorker, warmup } from './worker'
+import { getOrCreateWorker, isWorkerReady, ready, resetWorkerForTests, sendToWorker, warmup } from './worker'
 
 class MockWorker {
   static response: { type: 'initComplete'; success: true } | { type: 'error'; message: string }
@@ -47,6 +47,10 @@ const hadWindow = typeof globalThis.window !== 'undefined'
 if (!hadWindow) {
   ;(globalThis as typeof globalThis & { window: typeof globalThis }).window = globalThis
 }
+
+resetWorkerForTests()
+MockWorker.instances = []
+MockWorker.initMessages = []
 
 test('rejects an initialization error from the worker', async () => {
   MockWorker.response = { type: 'error', message: 'WASM glue failed to load' }
@@ -142,6 +146,7 @@ test('rejects pending work and recovers after a native worker error', async () =
   expect(worker.terminated).toBe(true)
 
   await expect(getOrCreateWorker()).resolves.toBeInstanceOf(MockWorker)
+  resetWorkerForTests()
   globalThis.Worker = originalWorker
   if (!hadWindow) {
     Reflect.deleteProperty(globalThis, 'window')

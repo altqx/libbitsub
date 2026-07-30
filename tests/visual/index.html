@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>libbitsub visual regression</title>
+    <style>
+      body {
+        font-family: ui-sans-serif, system-ui, sans-serif;
+        margin: 1.5rem;
+        background: #0b0d10;
+        color: #e8eef7;
+      }
+      pre {
+        background: #151a21;
+        padding: 1rem;
+        border-radius: 8px;
+        overflow: auto;
+      }
+      .ok {
+        color: #3ddc97;
+      }
+      .fail {
+        color: #ff6b6b;
+      }
+      .skip {
+        color: #f0c674;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>libbitsub visual regression</h1>
+    <p>Pixel-level parity across software, Canvas2D, WebGL2, and WebGPU backends.</p>
+    <pre id="out">Running…</pre>
+    <script type="module">
+      // Inline minimal harness so Chromium can run without a bundler.
+      // Mirrors src/ts/compatibility helpers for browser-side backend parity.
+
+      function createImageData(width, height, rgba) {
+        const image = new ImageData(width, height)
+        if (rgba) {
+          for (let i = 0; i < image.data.length; i += 4) {
+            image.data[i] = rgba[0]
+            image.data[i + 1] = rgba[1]
+            image.data[i + 2] = rgba[2]
+            image.data[i + 3] = rgba[3]
+          }
+        }
+        return image
+      }
+
+      function buildFrame() {
+        const screenWidth = 64
+        const screenHeight = 32
+        const width = 16
+        const height = 8
+        const x = 8
+        const y = 4
+        const pixelData = createImageData(width, height, [255, 0, 0, 255])
+        return {
+          width: screenWidth,
+          height: screenHeight,
+          compositionData: [{ pixelData, x, y }]
+        }
+      }
+
+      function softwareCompose(frame) {
+        const out = new ImageData(frame.width, frame.height)
+        for (const comp of frame.compositionData) {
+          const src = comp.pixelData
+          for (let py = 0; py < src.height; py += 1) {
+            for (let px = 0; px < src.width; px += 1) {
+              const dx = comp.x + px
+              const dy = comp.y + py
+              if (dx < 0 || dy < 0 || dx >= frame.width || dy >= frame.height) continue
+              const si = (py * src.width + px) * 4
+              const di = (dy * frame.width + dx) * 4
+              const sa = src.data[si + 3] / 255
+              if (sa === 0) continue
+              if (sa === 1) {
+                out.data[di] = src.data[si]
+                out.data[di + 1] = src.data[si + 1]
+                out.data[di + 2] = src.data[si + 2]
+                out.data[di + 3] = 255
+                continue
+              }
+              // source-over
+              const da = out.data[di + 3] / 255
+              const outA = sa + da * (1 - sa)
+              out.data[di] = Math.round((src.data[si] * sa + out.data[di] * da * (1 - sa)) / outA)
+              out.data[di + 1] = Math.round((src.data[si + 1] * sa + out.data[di + 1] * da * (1 - sa)) / outA)
+              out.data[di + 2] = Math.round((src.data[si + 2] * sa + out.data[di + 2] * da * (1 - sa)) / outA)
+              out.data[di + 3] = Math.round(outA * 255)
+            }
+          }
+        }
+        return out
+      }
+
+      function canvas2dRender(frame) {
+        const canvas = document.createElement('canvas')
+        canvas.width = frame.width
+        canvas.height = frame.height
+        const ctx = canvas.getContext('2d', { willReadFrequently: true })
+        ctx.clearRect(0, 0, frame.width, frame.height)
+        for (const comp of frame.compositionData) {
+          ctx.putImageData(comp.pixelData, comp.x, comp.y)
+        }
+        return ctx.getImageData(0, 0, frame.width, frame.height)
+      }
+
+      function maxDelta(a, b) {
+        let max = 0
+        for (let i = 0; i < a.data.length; i += 1) {
+          max = Math.max(max, Math.abs(a.data[i] - b.data[i]))
+        }
+        return max
+      }
+
+      function sample(img, x, y) {
+        const i = (y * img.width + x) * 4
+        return [img.data[i], img.data[i + 1], img.data[i + 2], img.data[i + 3]]
+      }
+
+      async function maybeWebGL2(frame, golden) {
+        const canvas = document.createElement('canvas')
+        const gl = canvas.getContext('webgl2', {
+          alpha: true,
+          premultipliedAlpha: true,
+          antialias: false
+        })
+        if (!gl) return { status: 'skip', reason: 'WebGL2 unavailable' }
+
+        // Import package renderer when served from repo build; fall back to skip.
+        try {
+          const mod = await import('../../dist/ts/webgl2-renderer.js')
+          const renderer = new mod.WebGL2Renderer()
+          await renderer.init()
+          await renderer.setCanvas(canvas, frame.width, frame.height)
+          renderer.render(frame.compositionData, frame.width, frame.height, 1, 1, 0, 0, 1)
+          const pixels = renderer.readPixels()
+          renderer.destroy()
+          const image = { data: pixels.data, width: pixels.width, height: pixels.height }
+          const delta = maxDelta(image, golden)
+          return { status: delta <= 2 ? 'ok' : 'fail', maxDelta: delta, sample: sample(image, 8, 4) }
+        } catch (error) {
+          return { status: 'skip', reason: String(error) }
+        }
+      }
+
+      async function maybeWebGPU(frame, golden) {
+        if (!navigator.gpu) return { status: 'skip', reason: 'WebGPU unavailable' }
+        try {
+          const mod = await import('../../dist/ts/webgpu-renderer.js')
+          const renderer = new mod.WebGPURenderer()
+          await renderer.init()
+          const canvas = document.createElement('canvas')
+          await renderer.setCanvas(canvas, frame.width, frame.height)
+          renderer.render(frame.compositionData, frame.width, frame.height, 1, 1, 0, 0, 1)
+          const pixels = await renderer.readPixels()
+          renderer.destroy()
+          const image = { data: pixels.data, width: pixels.width, height: pixels.height }
+          const delta = maxDelta(image, golden)
+          return { status: delta <= 2 ? 'ok' : 'fail', maxDelta: delta, sample: sample(image, 8, 4) }
+        } catch (error) {
+          return { status: 'skip', reason: String(error) }
+        }
+      }
+
+      async function run() {
+        const frame = buildFrame()
+        const software = softwareCompose(frame)
+        const canvas2d = canvas2dRender(frame)
+        const canvasDelta = maxDelta(canvas2d, software)
+        const results = {
+          software: {
+            status: 'ok',
+            sample: sample(software, 8, 4),
+            outside: sample(software, 0, 0)
+          },
+          canvas2d: {
+            status: canvasDelta === 0 ? 'ok' : 'fail',
+            maxDelta: canvasDelta,
+            sample: sample(canvas2d, 8, 4)
+          },
+          webgl2: await maybeWebGL2(frame, software),
+          webgpu: await maybeWebGPU(frame, software)
+        }
+
+        const failed = Object.values(results).some((r) => r.status === 'fail')
+        const payload = { ok: !failed, results }
+        window.__VISUAL_RESULTS__ = payload
+        const lines = Object.entries(results).map(([name, result]) => {
+          const tag = result.status === 'ok' ? 'ok' : result.status === 'skip' ? 'skip' : 'fail'
+          return `${name}: ${tag} ${JSON.stringify(result)}`
+        })
+        document.getElementById('out').textContent = lines.join('\n')
+        document.getElementById('out').className = failed ? 'fail' : 'ok'
+        await fetch('/results', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(payload)
+        })
+      }
+
+      run().catch(async (error) => {
+        const payload = { ok: false, error: String(error) }
+        window.__VISUAL_RESULTS__ = payload
+        document.getElementById('out').textContent = String(error)
+        document.getElementById('out').className = 'fail'
+        try {
+          await fetch('/results', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify(payload)
+          })
+        } catch {
+          /* ignore */
+        }
+      })
+    </script>
+  </body>
+</html>

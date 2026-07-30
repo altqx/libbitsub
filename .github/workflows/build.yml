@@ -94,8 +94,15 @@ jobs:
       - name: Build WASM and TypeScript
         run: bun run build
 
-      - name: Run tests
+      - name: Run Rust tests
         run: bun run test
+
+      - name: Run TypeScript compatibility tests
+        run: bun run test:ts
+
+      - name: Run visual regression (Chromium)
+        run: bun run test:visual
+        continue-on-error: false
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4

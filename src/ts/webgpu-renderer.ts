@@ -529,6 +529,83 @@ export class WebGPURenderer {
   }
 
   /**
+   * Read back the current swap-chain texture as straight (non-premultiplied) RGBA.
+   * Intended for visual-regression / golden-image tests.
+   */
+  async readPixels(): Promise<{ data: Uint8ClampedArray; width: number; height: number }> {
+    if (!this.device || !this.context || !this._canvas) {
+      return { data: new Uint8ClampedArray(0), width: 0, height: 0 }
+    }
+
+    const width = this._canvas.width
+    const height = this._canvas.height
+    if (width <= 0 || height <= 0) {
+      return { data: new Uint8ClampedArray(0), width: 0, height: 0 }
+    }
+
+    const bytesPerRow = Math.ceil((width * 4) / 256) * 256
+    const bufferSize = bytesPerRow * height
+    const readBuffer = this.device.createBuffer({
+      size: bufferSize,
+      usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ
+    })
+
+    try {
+      // Must copy in the same turn as the draw; awaiting first would present the swapchain.
+      const sourceTexture = this.context.getCurrentTexture()
+      const encoder = this.device.createCommandEncoder()
+      encoder.copyTextureToBuffer(
+        { texture: sourceTexture },
+        { buffer: readBuffer, bytesPerRow },
+        { width, height }
+      )
+      this.device.queue.submit([encoder.finish()])
+      // mapAsync is safe after the copy has been encoded/submitted.
+      await readBuffer.mapAsync(GPUMapMode.READ)
+
+      const packed = new Uint8Array(readBuffer.getMappedRange())
+      const data = new Uint8ClampedArray(width * height * 4)
+      const isBgra = this.format === 'bgra8unorm'
+
+      for (let y = 0; y < height; y += 1) {
+        const srcRow = y * bytesPerRow
+        for (let x = 0; x < width; x += 1) {
+          const src = srcRow + x * 4
+          const dst = (y * width + x) * 4
+          let r = packed[src]!
+          let g = packed[src + 1]!
+          let b = packed[src + 2]!
+          const a = packed[src + 3]!
+          if (isBgra) {
+            const tmp = r
+            r = b
+            b = tmp
+          }
+          if (a > 0 && a < 255) {
+            const inv = 255 / a
+            r = Math.min(255, Math.round(r * inv))
+            g = Math.min(255, Math.round(g * inv))
+            b = Math.min(255, Math.round(b * inv))
+          }
+          data[dst] = r
+          data[dst + 1] = g
+          data[dst + 2] = b
+          data[dst + 3] = a
+        }
+      }
+
+      return { data, width, height }
+    } finally {
+      try {
+        readBuffer.unmap()
+      } catch {
+        // already unmapped / never mapped
+      }
+      readBuffer.destroy()
+    }
+  }
+
+  /**
    * Check if renderer is initialized.
    */
   get initialized(): boolean {

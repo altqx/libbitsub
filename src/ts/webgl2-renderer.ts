@@ -318,6 +318,45 @@ export class WebGL2Renderer {
   }
 
   /**
+   * Read back the current framebuffer as straight (non-premultiplied) RGBA.
+   * Intended for visual-regression / golden-image tests.
+   */
+  readPixels(): { data: Uint8ClampedArray; width: number; height: number } {
+    if (!this.gl || !this._canvas) {
+      return { data: new Uint8ClampedArray(0), width: 0, height: 0 }
+    }
+
+    const width = this._canvas.width
+    const height = this._canvas.height
+    const gl = this.gl
+    const raw = new Uint8Array(width * height * 4)
+    gl.pixelStorei(gl.PACK_ALIGNMENT, 1)
+    gl.readPixels(0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, raw)
+
+    // WebGL origin is bottom-left; flip to top-left ImageData orientation.
+    const data = new Uint8ClampedArray(raw.length)
+    const rowBytes = width * 4
+    for (let y = 0; y < height; y += 1) {
+      const srcOffset = (height - 1 - y) * rowBytes
+      const dstOffset = y * rowBytes
+      data.set(raw.subarray(srcOffset, srcOffset + rowBytes), dstOffset)
+    }
+
+    // Convert premultiplied framebuffer samples back to straight alpha.
+    for (let i = 0; i < data.length; i += 4) {
+      const a = data[i + 3]
+      if (a > 0 && a < 255) {
+        const inv = 255 / a
+        data[i] = Math.min(255, Math.round(data[i] * inv))
+        data[i + 1] = Math.min(255, Math.round(data[i + 1] * inv))
+        data[i + 2] = Math.min(255, Math.round(data[i + 2] * inv))
+      }
+    }
+
+    return { data, width, height }
+  }
+
+  /**
    * Check if renderer is initialized.
    */
   get initialized(): boolean {

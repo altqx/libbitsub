@@ -505,3 +505,23 @@ function rejectWorkerCallbacks(worker: Worker, error: Error): void {
     callback.reject(error)
   }
 }
+
+/**
+ * Test-only helper: tear down shared worker state between Bun test files.
+ * Not part of the public runtime API.
+ */
+export function resetWorkerForTests(): void {
+  if (sharedWorker) {
+    try {
+      sharedWorker.terminate()
+    } catch {
+      /* ignore */
+    }
+  }
+  sharedWorker = null
+  workerInitPromise = null
+  for (const [, callback] of pendingCallbacks) {
+    callback.reject(new Error('Worker reset for tests'))
+  }
+  pendingCallbacks.clear()
+}

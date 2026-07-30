@@ -701,6 +701,25 @@ console.log({
 
 WebGL2 and Canvas2D fallback remain automatic. Use `onWebGPUFallback`, `onWebGL2Fallback`, `onEvent`, or `onWarning` if you need to observe backend changes.
 
+## Compatibility & visual regression
+
+A formal suite locks decoder edge cases and backend pixel parity:
+
+- Malformed PGS / VobSub / MKS fixtures
+- Palette edge cases and zero-length RLE runs
+- Alternate display sizes (SD → 4K)
+- Slow worker startup / shared init
+- Pixel-level goldens across software, Canvas2D, WebGL2, and WebGPU
+
+```bash
+bun run test        # Rust core (includes compatibility fixtures)
+bun run test:ts     # TypeScript fixtures, goldens, worker startup
+bun run test:visual # Headless Chromium backend parity
+bun run test:all    # All of the above
+```
+
+Browser/device support matrix (including webOS TV): [docs/COMPATIBILITY.md](./docs/COMPATIBILITY.md).
+
 ## Notes
 
 - Worker mode is shared, but subtitle parser state is isolated per renderer session.
