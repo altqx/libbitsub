@@ -146,12 +146,28 @@ jobs:
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
         run: |
+          # Keep the lockfile in sync before publish so cargo does not dirty
+          # Cargo.lock mid-job (publish rejects uncommitted changes by default).
+          cargo metadata --format-version 1 --locked >/dev/null
+
           crate_version() {
-            cargo pkgid -p "$1" | sed -E 's/.*[@#]([^@#]+)$/\1/'
+            cargo metadata --format-version 1 --no-deps --locked \
+              | node -e '
+                  const name = process.argv[1];
+                  const data = JSON.parse(require("fs").readFileSync(0, "utf8"));
+                  const pkg = data.packages.find((p) => p.name === name);
+                  if (!pkg) {
+                    console.error("package not found: " + name);
+                    process.exit(1);
+                  }
+                  process.stdout.write(pkg.version);
+                ' "$1"
           }
 
           crate_exists() {
-            curl -fsS -o /dev/null "https://crates.io/api/v1/crates/$1/$2" 2>/dev/null
+            # crates.io requires a User-Agent; bare curl can 403 and look "missing".
+            curl -fsS -A "libbitsub-ci" -o /dev/null \
+              "https://crates.io/api/v1/crates/$1/$2" 2>/dev/null
           }
 
           cargo_publish_or_existing() {
@@ -159,7 +175,7 @@ jobs:
             local output
             PUBLISH_ALREADY_EXISTS=false
 
-            if output=$(cargo publish -p "$crate" 2>&1); then
+            if output=$(cargo publish -p "$crate" --locked 2>&1); then
               echo "$output"
               return
             fi
@@ -230,7 +246,7 @@ jobs:
           jsr_version=$(node -p "require('./jsr.json').version")
           jsr_path=${jsr_name#@}
 
-          if curl -fsS -o /dev/null "https://jsr.io/@${jsr_path}/${jsr_version}_meta.json" 2>/dev/null; then
+          if curl -fsS -A "libbitsub-ci" -o /dev/null "https://jsr.io/@${jsr_path}/${jsr_version}_meta.json" 2>/dev/null; then
             echo "${jsr_name} v${jsr_version} is already available on JSR; skipping publish"
           else
             deno publish --no-check --sloppy-imports
