@@ -110,6 +110,24 @@ const parser = new PgsParser()
 
 Calling `initWasm()` multiple times is safe (it deduplicates).
 
+### Worker prewarm (TV / players)
+
+On devices where the first subtitle track switch should not pay worker + WASM startup cost (for example TV apps), prewarm the shared parsing worker during app startup:
+
+```ts
+import { warmup, ready, PgsRenderer } from 'libbitsub'
+
+// Fire-and-forget at app boot (safe to call multiple times).
+void warmup()
+
+// Before the user changes tracks, ensure the worker is ready.
+await ready()
+
+const renderer = new PgsRenderer({ video: videoElement, subContent: trackBytes })
+```
+
+`warmup()` and `ready()` share a single worker-init promise with renderer creation. The shared worker is only published after in-worker WASM initialization succeeds. When Web Workers are unavailable, both resolve immediately and renderers use the main thread.
+
 ## High-level video renderers
 
 The high-level API manages subtitle loading, canvas overlay creation, playback sync, resize handling, worker usage, and renderer fallback.
@@ -594,6 +612,8 @@ WebGL2 and Canvas2D fallback remain automatic. Use `onWebGPUFallback`, `onWebGL2
 
 - `initWasm(): Promise<void>` initializes the WASM module. Called automatically by high-level renderers and on first import in browser environments. Safe to call multiple times. Only needed explicitly for low-level parser usage.
 - `isWasmInitialized(): boolean` reports whether initialization has completed.
+- `warmup(): Promise<void>` / `ready(): Promise<void>` pre-initialize the shared subtitle worker (including in-worker WASM). Safe to call multiple times; concurrent callers share one init promise. Prefer these in TV/player apps before the first track switch.
+- `isWorkerAvailable(): boolean` / `isWorkerReady(): boolean` report worker support and whether the shared worker has finished initializing.
 - `isWebGPUSupported(): boolean` checks WebGPU support.
 - `detectSubtitleFormat(source: AutoSubtitleSource): 'pgs' | 'vobsub' | null` detects the bitmap subtitle format from file hints or binary data.
 - `createAutoSubtitleRenderer(options: AutoVideoSubtitleOptions): PgsRenderer | VobSubRenderer` creates a high-level renderer after format detection.

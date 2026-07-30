@@ -39,6 +39,19 @@ const parser = new PgsParser()
 
 Calling `initWasm()` multiple times is safe (it deduplicates).
 
+### Worker prewarm
+
+For TV/player apps, prewarm the shared parsing worker so the first subtitle track switch does not pay worker + WASM startup:
+
+```ts
+import { warmup, ready } from 'libbitsub'
+
+void warmup()       // app boot
+await ready()       // before first track switch / renderer creation
+```
+
+`warmup()` and `ready()` share one init promise with concurrent renderer creation. The shared worker is published only after in-worker WASM init succeeds.
+
 ## High-level video renderers
 
 These attach a canvas overlay to the video's parent, handle playback sync, resize, and use a shared Web Worker + GPU rendering automatically.

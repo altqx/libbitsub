@@ -45,6 +45,8 @@ export { SubtitleDiagnosticError, createSubtitleDiagnosticError, normalizeSubtit
 // Re-export WASM management
 export { initWasm, isWasmInitialized } from './ts/wasm'
 
+export { warmup, ready, isWorkerAvailable, isWorkerReady } from './ts/worker'
+
 // Re-export WebGPU utilities
 export { isWebGPUSupported } from './ts/webgpu-renderer'
 

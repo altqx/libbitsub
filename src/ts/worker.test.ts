@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 
-import { getOrCreateWorker, sendToWorker } from './worker'
+import { getOrCreateWorker, isWorkerReady, ready, sendToWorker, warmup } from './worker'
 
 class MockWorker {
   static response: { type: 'initComplete'; success: true } | { type: 'error'; message: string }
@@ -43,6 +43,11 @@ class MockWorker {
 const originalWorker = globalThis.Worker
 globalThis.Worker = MockWorker as unknown as typeof Worker
 
+const hadWindow = typeof globalThis.window !== 'undefined'
+if (!hadWindow) {
+  ;(globalThis as typeof globalThis & { window: typeof globalThis }).window = globalThis
+}
+
 test('rejects an initialization error from the worker', async () => {
   MockWorker.response = { type: 'error', message: 'WASM glue failed to load' }
 
@@ -67,6 +72,38 @@ test('waits for an in-flight worker WASM initialization', async () => {
 
   expect(second).toBe(first)
   expect(await second).toBe(await first)
+  expect(isWorkerReady()).toBe(true)
+})
+
+test('warmup and ready share a single worker-init promise', async () => {
+  MockWorker.response = { type: 'initComplete', success: true }
+
+  MockWorker.instances.at(-1)?.onerror?.(new ErrorEvent('error', { message: 'reset' }))
+  expect(isWorkerReady()).toBe(false)
+
+  const warm = warmup()
+  const wait = ready()
+  const viaGet = getOrCreateWorker()
+
+  await Promise.all([warm, wait, viaGet])
+  expect(isWorkerReady()).toBe(true)
+  await expect(ready()).resolves.toBeUndefined()
+  expect(MockWorker.initMessages.filter((message) => message.type === 'init').length).toBeGreaterThanOrEqual(1)
+})
+
+test('does not publish the shared worker when WASM init fails', async () => {
+  MockWorker.response = { type: 'error', message: 'import failed' }
+
+  MockWorker.instances.at(-1)?.onerror?.(new ErrorEvent('error', { message: 'reset' }))
+  expect(isWorkerReady()).toBe(false)
+
+  await expect(warmup()).rejects.toThrow('import failed')
+  expect(isWorkerReady()).toBe(false)
+  expect(MockWorker.instances.at(-1)?.terminated).toBe(true)
+
+  MockWorker.response = { type: 'initComplete', success: true }
+  await warmup()
+  expect(isWorkerReady()).toBe(true)
 })
 
 test('returns ordinary worker errors to renderer callers', async () => {
@@ -106,4 +143,7 @@ test('rejects pending work and recovers after a native worker error', async () =
 
   await expect(getOrCreateWorker()).resolves.toBeInstanceOf(MockWorker)
   globalThis.Worker = originalWorker
+  if (!hadWindow) {
+    Reflect.deleteProperty(globalThis, 'window')
+  }
 })

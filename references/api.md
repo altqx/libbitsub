@@ -6,6 +6,10 @@
 |--------|-----------|-------|
 | `initWasm` | `() => Promise<void>` | Must be called before any parser or renderer. Safe to call multiple times. |
 | `isWasmInitialized` | `() => boolean` | |
+| `warmup` | `() => Promise<void>` | Pre-initialize the shared subtitle worker (and its WASM). Safe to call multiple times; concurrent callers share one init promise. No-ops when Workers are unavailable. |
+| `ready` | `() => Promise<void>` | Resolves when the shared worker is ready for parse/render requests. Starts init if needed (same as `warmup`). |
+| `isWorkerAvailable` | `() => boolean` | |
+| `isWorkerReady` | `() => boolean` | `true` only after worker WASM initialization succeeds. |
 | `isWebGPUSupported` | `() => boolean` | |
 | `detectSubtitleFormat` | `(source: AutoSubtitleSource) => 'pgs' \| 'vobsub' \| null` | Uses file hints and binary magic bytes, including `.mks` sources carrying embedded `S_VOBSUB` |
 | `createAutoSubtitleRenderer` | `(options: AutoVideoSubtitleOptions) => PgsRenderer \| VobSubRenderer` | Throws if format cannot be determined |

@@ -50,7 +50,7 @@ export { SubtitleDiagnosticError, createSubtitleDiagnosticError, normalizeSubtit
 export { initWasm, isWasmInitialized, getWasm, getWasmUrl, getWasmGlueUrl } from './wasm'
 
 // Worker management
-export { isWorkerAvailable, getOrCreateWorker, sendToWorker } from './worker'
+export { isWorkerAvailable, isWorkerReady, getOrCreateWorker, sendToWorker, warmup, ready } from './worker'
 
 // Utilities
 export {

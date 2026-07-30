@@ -259,6 +259,11 @@ self.onmessage = async function(event) {
 };`
 }
 
+/** Whether the shared worker has finished WASM initialization. */
+export function isWorkerReady(): boolean {
+  return sharedWorker !== null
+}
+
 /** Create or get the shared worker instance. */
 export function getOrCreateWorker(): Promise<Worker> {
   if (sharedWorker) return Promise.resolve(sharedWorker)
@@ -266,7 +271,7 @@ export function getOrCreateWorker(): Promise<Worker> {
 
   const initPromise = initializeWorker()
   workerInitPromise = initPromise
-  initPromise.then(
+  void initPromise.then(
     () => {
       if (workerInitPromise === initPromise) workerInitPromise = null
     },
@@ -275,13 +280,31 @@ export function getOrCreateWorker(): Promise<Worker> {
     }
   )
 
-  return workerInitPromise
+  return initPromise
+}
+
+/** Pre-initialize the shared subtitle worker. */
+export function warmup(): Promise<void> {
+  return ready()
+}
+
+/** Wait until the shared worker is ready for parse/render requests. */
+export async function ready(): Promise<void> {
+  if (!isWorkerAvailable()) return
+  if (sharedWorker) return
+  await getOrCreateWorker()
 }
 
 async function initializeWorker(): Promise<Worker> {
   const blob = new Blob([createWorkerScript()], { type: 'application/javascript' })
   const workerUrl = URL.createObjectURL(blob)
-  const worker = new Worker(workerUrl, { type: 'module' })
+  let worker: Worker
+  try {
+    worker = new Worker(workerUrl, { type: 'module' })
+  } catch (error) {
+    URL.revokeObjectURL(workerUrl)
+    throw error instanceof Error ? error : new Error(String(error))
+  }
 
   worker.onmessage = (event: MessageEvent<WorkerResponse & { _id?: number }>) => {
     const { _id, ...response } = event.data
@@ -302,18 +325,36 @@ async function initializeWorker(): Promise<Worker> {
     const error = event instanceof ErrorEvent ? new Error(event.message) : new Error(String(event))
     rejectWorkerCallbacks(worker, error)
     if (sharedWorker === worker) sharedWorker = null
-    worker.terminate()
+    try {
+      worker.terminate()
+    } catch {
+      /* ignore */
+    }
   }
 
   try {
-    await sendToWorkerInstance(worker, { type: 'init', wasmUrl: getWasmUrl(), glueUrl: getWasmGlueUrl() })
+    const initResponse = await sendToWorkerInstance(worker, {
+      type: 'init',
+      wasmUrl: getWasmUrl(),
+      glueUrl: getWasmGlueUrl()
+    })
+    if (initResponse.type === 'error') {
+      throw new Error(initResponse.message)
+    }
+    if (initResponse.type !== 'initComplete' || !initResponse.success) {
+      throw new Error('Worker WASM initialization failed')
+    }
     sharedWorker = worker
     return worker
   } catch (error) {
     const workerError = error instanceof Error ? error : new Error(String(error))
     rejectWorkerCallbacks(worker, workerError)
     if (sharedWorker === worker) sharedWorker = null
-    worker.terminate()
+    try {
+      worker.terminate()
+    } catch {
+      /* ignore */
+    }
     throw workerError
   } finally {
     URL.revokeObjectURL(workerUrl)
