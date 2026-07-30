@@ -14,6 +14,9 @@
 | `detectSubtitleFormat` | `(source: AutoSubtitleSource) => 'pgs' \| 'vobsub' \| null` | Uses file hints and binary magic bytes, including `.mks` sources carrying embedded `S_VOBSUB` |
 | `createAutoSubtitleRenderer` | `(options: AutoVideoSubtitleOptions) => PgsRenderer \| VobSubRenderer` | Throws if format cannot be determined |
 | `openSubtitles` | `(source: AutoSubtitleSource, options?: SubtitleDiagnosticsOptions) => Promise<OpenedSubtitles>` | Initializes WASM, auto-detects the format, and returns a normalized low-level handle |
+| `probeRangeSupport` | `(url: string, options?: AssetFetchOptions) => Promise<RangeProbeResult>` | Probe HTTP Range support and content length |
+| `fetchSubtitleAsset` | `(url: string, options?: AssetFetchOptions, onChunk?) => Promise<{ data, strategy, rangeSupported, total }>` | Range/stream-aware binary download with progressive chunk callbacks |
+| `fetchSubtitleText` | `(url: string, options?: AssetFetchOptions) => Promise<string>` | Text download helper for small assets such as `.idx` |
 | `renderFrameData` | `(frame: SubtitleData, options?: SubtitleFrameRenderOptions) => SubtitleRenderedFrameData \| null` | Composes subtitle compositions into a single `ImageData` export |
 | `toCanvas` | `(frame: SubtitleData \| SubtitleRenderedFrameData, target?: SubtitleFrameCanvasTarget, options?: SubtitleFrameCanvasOptions) => HTMLCanvasElement \| OffscreenCanvas` | Draws a frame export to a new or existing canvas or 2D context |
 | `toImageBitmap` | `(frame: SubtitleData \| SubtitleRenderedFrameData, options?: SubtitleFrameRenderOptions) => Promise<ImageBitmap>` | Creates an `ImageBitmap` from a composed subtitle frame |
@@ -43,6 +46,8 @@ interface VideoSubtitleOptions {
   displaySettings?: Partial<SubtitleDisplaySettings>
   cacheLimit?: number               // default 24
   prefetchWindow?: { before?: number; after?: number }
+  streamingLoad?: boolean           // default true — progressive URL loads
+  rangeRequests?: boolean           // default true — HTTP Range when supported
   onEvent?: (event: SubtitleRendererEvent) => void
   debug?: boolean
   onWarning?: (warning: SubtitleDiagnosticWarning) => void
@@ -219,7 +224,11 @@ Both extend `BaseVideoSubtitleRenderer` and expose the same API surface.
 
 ```ts
 const parser = new PgsParser({ debug: true, onWarning: (warning) => console.warn(warning.code) })
-parser.load(data: Uint8Array): number          // returns cue count
+parser.load(data: Uint8Array): number          // full-buffer path; returns cue count
+parser.reset(): void
+parser.feed(chunk: Uint8Array): number         // progressive indexing; returns newly added cues
+parser.finishFeed(): number
+parser.pendingLen: number
 parser.getTimestamps(): Float64Array           // timestamps in ms
 parser.get count: number                       // display set count
 parser.findIndexAtTimestamp(seconds: number): number
@@ -237,7 +246,10 @@ parser.getLastRenderIssue(): string | null
 
 ```ts
 const parser = new VobSubParserLowLevel({ debug: true, onWarning: (warning) => console.warn(warning.code) })
-parser.loadFromData(idxContent: string, subData: Uint8Array): void
+parser.loadFromData(idxContent: string, subData: Uint8Array): void  // full-buffer path
+parser.loadFromIdx(idxContent: string): void                        // index timestamps before .sub arrives
+parser.attachSubData(subData: Uint8Array): void
+parser.hasSubData: boolean
 parser.loadFromMks(mksData: Uint8Array): void
 parser.setDebandEnabled(enabled: boolean): void
 parser.setDebandThreshold(value: number): void
@@ -277,8 +289,21 @@ Malformed `.mks` payloads are rejected before decode. The extractor validates Ma
 ## Event types (`SubtitleRendererEvent`)
 
 ```ts
+type AssetFetchStrategy = 'memory' | 'stream' | 'range-chunks' | 'basic'
+
 type SubtitleRendererEvent =
   | { type: 'loading'; format: SubtitleFormatName }
+  | {
+      type: 'load-progress'
+      format: SubtitleFormatName
+      loadedBytes: number
+      totalBytes: number | null
+      ratio: number | null
+      strategy: AssetFetchStrategy
+      rangeSupported: boolean
+      indexedCues: number
+    }
+  | { type: 'indexed'; format: SubtitleFormatName; metadata: SubtitleParserMetadata; partial: boolean }
   | { type: 'loaded'; format: SubtitleFormatName; metadata: SubtitleParserMetadata }
   | { type: 'error'; format: SubtitleFormatName; error: SubtitleDiagnosticErrorLike }
   | { type: 'warning'; warning: SubtitleDiagnosticWarning }
@@ -308,6 +333,7 @@ type SubtitleDiagnosticWarningCode =
   | 'INVALID_FRAME_DATA'
   | 'INVALID_SUBTITLE_DATA'
   | 'MISSING_PALETTE'
+  | 'RANGE_FALLBACK'
   | 'WORKER_FALLBACK'
 ```
 

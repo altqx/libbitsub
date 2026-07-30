@@ -5,6 +5,7 @@
 
 // Re-export all types
 export type {
+  AssetFetchStrategy,
   AutoSubtitleSource,
   AutoVideoSubtitleOptions,
   OpenedSubtitles,
@@ -61,6 +62,15 @@ export { PgsRenderer, VobSubRenderer, createAutoSubtitleRenderer, type SubtitleR
 
 // Re-export format detection utilities
 export { detectSubtitleFormat } from './ts/utils'
+
+export {
+  fetchSubtitleAsset,
+  fetchSubtitleText,
+  probeRangeSupport,
+  type AssetFetchOptions,
+  type AssetFetchProgress,
+  type RangeProbeResult
+} from './ts/range-loader'
 
 // =============================================================================
 // Legacy Aliases (for backward compatibility)

@@ -4,8 +4,9 @@ use memchr::memchr;
 use std::collections::HashMap;
 
 use super::{
-    AssembledObject, DisplaySet, MAX_PGS_BITMAP_PIXELS, ObjectDefinitionSegment,
-    PaletteDefinitionSegment, WindowDefinition, apply_palette_rgba_bytes, decode_rle_to_indexed,
+    AssembledObject, DisplaySet, DisplaySetParseAttempt, MAX_PGS_BITMAP_PIXELS,
+    ObjectDefinitionSegment, PaletteDefinitionSegment, WindowDefinition, apply_palette_rgba_bytes,
+    decode_rle_to_indexed,
 };
 use crate::utils::binary_search_timestamp;
 
@@ -25,6 +26,7 @@ pub struct PgsParser {
     cached_context_index: Option<usize>,
     /// Last non-fatal render issue for diagnostics.
     last_render_issue: Option<String>,
+    pending: Vec<u8>,
 }
 
 /// Cached decoded bitmap (indexed pixels, before palette)
@@ -45,12 +47,11 @@ impl PgsParser {
             cached_context: None,
             cached_context_index: None,
             last_render_issue: None,
+            pending: Vec::new(),
         }
     }
 
-    /// Parse a PGS file from binary data.
-    /// Returns the number of display sets parsed.
-    pub fn parse(&mut self, data: &[u8]) -> usize {
+    pub fn reset(&mut self) {
         self.display_sets.clear();
         self.timestamps_ms.clear();
         self.indexed_cache.clear();
@@ -58,6 +59,13 @@ impl PgsParser {
         self.cached_context = None;
         self.cached_context_index = None;
         self.last_render_issue = None;
+        self.pending.clear();
+    }
+
+    /// Parse a PGS file from binary data.
+    /// Returns the number of display sets parsed.
+    pub fn parse(&mut self, data: &[u8]) -> usize {
+        self.reset();
 
         let len = data.len();
 
@@ -94,6 +102,60 @@ impl PgsParser {
         }
 
         self.display_sets.len()
+    }
+
+    pub fn feed(&mut self, chunk: &[u8]) -> usize {
+        if chunk.is_empty() && self.pending.is_empty() {
+            return 0;
+        }
+
+        self.pending.extend_from_slice(chunk);
+
+        let before = self.display_sets.len();
+        let mut offset = 0usize;
+        let len = self.pending.len();
+
+        while offset < len {
+            match DisplaySet::try_parse(&self.pending[offset..], true) {
+                DisplaySetParseAttempt::Complete(display_set, consumed) => {
+                    self.timestamps_ms.push(display_set.pts_ms());
+                    self.display_sets.push(display_set);
+                    offset += consumed;
+                }
+                DisplaySetParseAttempt::Incomplete => {
+                    break;
+                }
+                DisplaySetParseAttempt::Invalid => {
+                    offset += 1;
+                    if let Some(pos) = memchr(0x50, &self.pending[offset..]) {
+                        let candidate = offset + pos;
+                        if candidate + 1 < len && self.pending[candidate + 1] == 0x47 {
+                            offset = candidate;
+                        } else {
+                            offset = candidate + 1;
+                        }
+                    } else {
+                        offset = len;
+                        break;
+                    }
+                }
+            }
+        }
+
+        if offset > 0 {
+            self.pending.drain(..offset);
+        }
+
+        self.display_sets.len() - before
+    }
+
+    pub fn finish_feed(&mut self) -> usize {
+        self.pending.clear();
+        self.display_sets.len()
+    }
+
+    pub fn pending_len(&self) -> usize {
+        self.pending.len()
     }
 
     /// Get the number of display sets.
@@ -577,10 +639,39 @@ mod tests {
             cached_context: None,
             cached_context_index: None,
             last_render_issue: None,
+            pending: Vec::new(),
         };
 
         let frame = parser.render_at_index(0).expect("frame should exist");
 
         assert_eq!(frame.composition_count(), 0);
+    }
+
+    fn build_end_only_display_set(pts: u32) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&0x5047u16.to_be_bytes()); // magic
+        bytes.extend_from_slice(&pts.to_be_bytes());
+        bytes.extend_from_slice(&0u32.to_be_bytes()); // dts
+        bytes.push(0x80); // END segment
+        bytes.extend_from_slice(&0u16.to_be_bytes()); // size
+        bytes
+    }
+
+    #[test]
+    fn feed_indexes_complete_display_sets_across_chunk_boundaries() {
+        let first = build_end_only_display_set(90_000);
+        let second = build_end_only_display_set(180_000);
+        let combined = [first.as_slice(), second.as_slice()].concat();
+
+        let mut parser = PgsParser::new();
+        let split = 7;
+        assert_eq!(parser.feed(&combined[..split]), 0);
+        assert!(parser.pending_len() > 0);
+        assert_eq!(parser.feed(&combined[split..split + 10]), 1);
+        assert_eq!(parser.count(), 1);
+        assert_eq!(parser.feed(&combined[split + 10..]), 1);
+        assert_eq!(parser.finish_feed(), 2);
+        assert_eq!(parser.get_timestamps(), vec![1000.0, 2000.0]);
+        assert_eq!(parser.pending_len(), 0);
     }
 }

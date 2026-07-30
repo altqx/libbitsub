@@ -42,6 +42,24 @@ impl PgsParser {
         self.inner.parse(data)
     }
 
+    pub fn reset(&mut self) {
+        self.inner.reset()
+    }
+
+    pub fn feed(&mut self, data: &[u8]) -> usize {
+        self.inner.feed(data)
+    }
+
+    #[wasm_bindgen(js_name = finishFeed)]
+    pub fn finish_feed(&mut self) -> usize {
+        self.inner.finish_feed()
+    }
+
+    #[wasm_bindgen(getter, js_name = pendingLen)]
+    pub fn pending_len(&self) -> usize {
+        self.inner.pending_len()
+    }
+
     #[wasm_bindgen(getter)]
     pub fn count(&self) -> usize {
         self.inner.count()
@@ -200,6 +218,21 @@ impl VobSubParser {
     #[wasm_bindgen(js_name = loadFromData)]
     pub fn load_from_data(&mut self, idx_content: &str, sub_data: Vec<u8>) {
         self.inner.load_from_data(idx_content, sub_data);
+    }
+
+    #[wasm_bindgen(js_name = loadFromIdx)]
+    pub fn load_from_idx(&mut self, idx_content: &str) {
+        self.inner.load_from_idx(idx_content);
+    }
+
+    #[wasm_bindgen(js_name = attachSubData)]
+    pub fn attach_sub_data(&mut self, sub_data: Vec<u8>) {
+        self.inner.attach_sub_data(sub_data);
+    }
+
+    #[wasm_bindgen(getter, js_name = hasSubData)]
+    pub fn has_sub_data(&self) -> bool {
+        self.inner.has_sub_data()
     }
 
     #[wasm_bindgen(js_name = loadFromMks)]

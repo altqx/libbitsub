@@ -11,6 +11,7 @@ Started as a fork of Arcus92's [libpgs-js](https://github.com/Arcus92/libpgs-js)
 - Matroska `.mks` extraction for embedded `S_VOBSUB` tracks
 - WebGPU, WebGL2, and Canvas2D rendering with automatic fallback
 - Worker-backed parsing/rendering for large subtitle files
+- HTTP Range / streaming loads for large `.sup`, `.sub`, `.idx`, and `.mks` assets (progressive indexing where feasible)
 - Rich layout controls: scale, aspect mode, horizontal/vertical offsets, alignment, bottom padding, safe area, opacity
 - Cue metadata and parser introspection APIs
 - Rendered-frame export helpers for ImageData, ImageBitmap, Blob, and custom canvas targets
@@ -127,6 +128,44 @@ const renderer = new PgsRenderer({ video: videoElement, subContent: trackBytes }
 ```
 
 `warmup()` and `ready()` share a single worker-init promise with renderer creation. The shared worker is only published after in-worker WASM initialization succeeds. When Web Workers are unavailable, both resolve immediately and renderers use the main thread.
+
+### Range / streaming loads (TV / slow networks)
+
+URL-based loads (`subUrl` / `idxUrl`) use progressive fetch by default:
+
+- Probe HTTP Range support and, for large assets, download with Range chunks when the origin allows it
+- Stream the response body otherwise and report `load-progress` events
+- **PGS (`.sup`)**: feed chunks into the parser as they arrive so cues can be indexed before the full file finishes
+- **VobSub (`.idx` + `.sub`)**: parse the small `.idx` first for timestamps, then stream/Range-download the `.sub` body and attach packets
+- **MKS**: stream/Range-download the container first (Matroska extraction still needs the assembled payload), then parse
+- **In-memory** `subContent` / `idxContent` remains the simple full-buffer path
+
+```ts
+import { PgsRenderer } from 'libbitsub'
+
+const renderer = new PgsRenderer({
+  video: videoElement,
+  subUrl: '/subtitles/movie.sup',
+  // streamingLoad: true,  // default
+  // rangeRequests: true,  // default
+  onEvent: (event) => {
+    if (event.type === 'load-progress') {
+      console.log(event.strategy, event.loadedBytes, event.totalBytes, event.indexedCues)
+    }
+    if (event.type === 'indexed') {
+      console.log('cues ready', event.metadata.cueCount, event.partial ? '(partial)' : '(final)')
+    }
+  }
+})
+```
+
+Disable progressive behavior when you want a single blocking GET:
+
+```ts
+new PgsRenderer({ video, subUrl, streamingLoad: false, rangeRequests: false })
+```
+
+Low-level helpers are also exported: `probeRangeSupport()`, `fetchSubtitleAsset()`, and `fetchSubtitleText()`.
 
 ## High-level video renderers
 
@@ -403,7 +442,7 @@ Structured diagnostic error codes currently include:
 - `WORKER_FALLBACK`
 - `UNKNOWN`
 
-Warnings use a smaller code set focused on non-fatal conditions such as malformed bitmap buffers, worker fallback, and missing PGS palettes during render.
+Warnings use a smaller code set focused on non-fatal conditions such as malformed bitmap buffers, worker fallback, progressive/Range fallback (`RANGE_FALLBACK`), and missing PGS palettes during render.
 
 ## MKS security and corruption checks
 
@@ -433,6 +472,8 @@ const renderer = new PgsRenderer({
   onEvent: (event) => {
     switch (event.type) {
       case 'loading':
+      case 'load-progress':
+      case 'indexed':
       case 'loaded':
       case 'error':
       case 'warning':
@@ -618,6 +659,7 @@ WebGL2 and Canvas2D fallback remain automatic. Use `onWebGPUFallback`, `onWebGL2
 - `detectSubtitleFormat(source: AutoSubtitleSource): 'pgs' | 'vobsub' | null` detects the bitmap subtitle format from file hints or binary data.
 - `createAutoSubtitleRenderer(options: AutoVideoSubtitleOptions): PgsRenderer | VobSubRenderer` creates a high-level renderer after format detection.
 - `openSubtitles(source, options?): Promise<OpenedSubtitles>` initializes WASM, auto-detects the low-level format, and returns a normalized parser handle.
+- `probeRangeSupport(url, options?)` / `fetchSubtitleAsset(url, options?, onChunk?)` / `fetchSubtitleText(url, options?)` perform Range-aware progressive asset downloads for custom loaders.
 - `renderFrameData(frame, options?): SubtitleRenderedFrameData | null` composes a `SubtitleData` frame into exportable pixels.
 - `toCanvas(frame, target?, options?): HTMLCanvasElement | OffscreenCanvas` draws a rendered frame to a new or existing canvas/context.
 - `toImageBitmap(frame, options?): Promise<ImageBitmap>` creates an `ImageBitmap` from a subtitle frame export.
@@ -659,7 +701,9 @@ WebGL2 and Canvas2D fallback remain automatic. Use `onWebGPUFallback`, `onWebGL2
 
 #### `PgsParser`
 
-- `load(data: Uint8Array): number` loads PGS data and returns the cue count.
+- `load(data: Uint8Array): number` loads PGS data and returns the cue count (simple in-memory path).
+- `reset(): void` / `feed(data: Uint8Array): number` / `finishFeed(): number` progressive indexing APIs for streamed chunks.
+- `pendingLen: number` incomplete trailing bytes retained between `feed()` calls.
 - `getTimestamps(): Float64Array` returns cue timestamps in milliseconds.
 - `count: number` returns the number of cues.
 - `findIndexAtTimestamp(timeSeconds: number): number` finds the cue index for a playback time in seconds.
@@ -672,7 +716,10 @@ WebGL2 and Canvas2D fallback remain automatic. Use `onWebGPUFallback`, `onWebGL2
 
 #### `VobSubParserLowLevel`
 
-- `loadFromData(idxContent: string, subData: Uint8Array): void` loads IDX and SUB data.
+- `loadFromData(idxContent: string, subData: Uint8Array): void` loads IDX and SUB data (simple in-memory path).
+- `loadFromIdx(idxContent: string): void` indexes timestamps from IDX before packet bytes arrive.
+- `attachSubData(subData: Uint8Array): void` attaches `.sub` packets after an IDX-first load.
+- `hasSubData: boolean` whether packet bytes are currently attached.
 - `loadFromSubOnly(subData: Uint8Array): void` loads SUB-only VobSub data.
 - `getTimestamps(): Float64Array`, `count`, `findIndexAtTimestamp()`, `renderAtIndex()`, `renderAtTimestamp()`, `getMetadata()`, `getCueMetadata()`, `clearCache()`, and `dispose()` behave like `PgsParser`.
 - `setDebandEnabled(enabled: boolean): void`, `setDebandThreshold(threshold: number): void`, `setDebandRange(range: number): void`, and `debandEnabled` control debanding.
@@ -707,6 +754,8 @@ interface VideoSubtitleOptions {
     before?: number
     after?: number
   }
+  streamingLoad?: boolean // default true — progressive URL loads
+  rangeRequests?: boolean // default true — use HTTP Range when supported
   onEvent?: (event: SubtitleRendererEvent) => void
 }
 ```

@@ -47,6 +47,25 @@ impl VobSubParser {
         self.apply_loaded_data(parse_idx(idx_content), sub_data, true);
     }
 
+    pub fn load_from_idx(&mut self, idx_content: &str) {
+        self.dispose();
+        let idx = parse_idx(idx_content);
+        self.timestamps_ms = idx.timestamps.iter().map(|t| t.timestamp_ms).collect();
+        self.idx_data = Some(idx);
+        self.sub_data = None;
+        self.loaded_from_idx = true;
+    }
+
+    pub fn attach_sub_data(&mut self, sub_data: Vec<u8>) {
+        self.packet_cache.clear();
+        self.last_render_issue = None;
+        self.sub_data = Some(sub_data);
+    }
+
+    pub fn has_sub_data(&self) -> bool {
+        self.sub_data.is_some()
+    }
+
     /// Load VobSub from a Matroska subtitle container with embedded S_VOBSUB tracks.
     pub fn load_from_mks(&mut self, mks_data: &[u8]) -> Result<(), String> {
         self.dispose();
@@ -301,9 +320,12 @@ impl VobSubParser {
             return Some(());
         }
 
+        let Some(sub_data) = self.sub_data.as_ref() else {
+            return None;
+        };
+
         let packet = {
             let idx_data = self.idx_data.as_ref()?;
-            let sub_data = self.sub_data.as_ref()?;
             let timestamp = idx_data.timestamps.get(index)?;
 
             parse_subtitle_packet(
@@ -437,6 +459,29 @@ mod tests {
             DebandConfig::default().threshold
         );
         assert_eq!(parser.deband_config.range, DebandConfig::default().range);
+    }
+
+    #[test]
+    fn load_from_idx_indexes_before_sub_bytes_arrive() {
+        let idx = "\
+size: 720x480
+palette: 000000, ffffff, 000000, 808080, 000000, 000000, 000000, 000000, 000000, 000000, 000000, 000000, 000000, 000000, 000000, 000000
+timestamp: 00:00:01:000, filepos: 00000000
+timestamp: 00:00:05:500, filepos: 00001000
+";
+
+        let mut parser = VobSubParser::new();
+        parser.load_from_idx(idx);
+
+        assert!(parser.has_idx_metadata());
+        assert!(!parser.has_sub_data());
+        assert_eq!(parser.count(), 2);
+        assert_eq!(parser.get_timestamps(), vec![1000.0, 5500.0]);
+        assert_eq!(parser.get_cue_file_position(1), 4096.0);
+        assert!(parser.render_at_index(0).is_none());
+
+        parser.attach_sub_data(vec![0u8; 32]);
+        assert!(parser.has_sub_data());
     }
 }
 

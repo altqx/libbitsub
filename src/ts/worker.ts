@@ -130,6 +130,50 @@ self.onmessage = async function(event) {
                 );
                 break;
             }
+            case 'beginPgs': {
+                disposeSession(request.sessionId);
+                const parser = new wasmModule.PgsParser();
+                parser.reset();
+                pgsParsers.set(request.sessionId, parser);
+                const timestamps = parser.getTimestamps();
+                postResponse(
+                    { type: 'pgsProgress', count: 0, added: 0, partial: true, metadata: buildPgsMetadata(parser), timestamps },
+                    [timestamps.buffer],
+                    _id
+                );
+                break;
+            }
+            case 'appendPgs': {
+                let parser = pgsParsers.get(request.sessionId);
+                if (!parser) {
+                    parser = new wasmModule.PgsParser();
+                    parser.reset();
+                    pgsParsers.set(request.sessionId, parser);
+                }
+                const added = parser.feed(new Uint8Array(request.data));
+                const timestamps = parser.getTimestamps();
+                postResponse(
+                    { type: 'pgsProgress', count: parser.count, added, partial: true, metadata: buildPgsMetadata(parser), timestamps },
+                    [timestamps.buffer],
+                    _id
+                );
+                break;
+            }
+            case 'finishPgs': {
+                const parser = pgsParsers.get(request.sessionId);
+                if (!parser) {
+                    postResponse({ type: 'error', message: 'PGS session not found for finishPgs' }, [], _id);
+                    break;
+                }
+                const count = parser.finishFeed();
+                const timestamps = parser.getTimestamps();
+                postResponse(
+                    { type: 'pgsProgress', count, added: 0, partial: false, metadata: buildPgsMetadata(parser), timestamps },
+                    [timestamps.buffer],
+                    _id
+                );
+                break;
+            }
             case 'loadVobSub': {
                 disposeSession(request.sessionId);
                 const parser = new wasmModule.VobSubParser();
@@ -138,6 +182,48 @@ self.onmessage = async function(event) {
                 vobSubParsers.set(request.sessionId, parser);
                 postResponse(
                     { type: 'vobSubLoaded', count: parser.count, metadata: buildVobSubMetadata(parser), timestamps },
+                    [timestamps.buffer],
+                    _id
+                );
+                break;
+            }
+            case 'loadVobSubIdx': {
+                disposeSession(request.sessionId);
+                const parser = new wasmModule.VobSubParser();
+                parser.loadFromIdx(request.idxContent);
+                const timestamps = parser.getTimestamps();
+                vobSubParsers.set(request.sessionId, parser);
+                postResponse(
+                    {
+                        type: 'vobSubProgress',
+                        count: parser.count,
+                        partial: true,
+                        hasSubData: !!parser.hasSubData,
+                        metadata: buildVobSubMetadata(parser),
+                        timestamps
+                    },
+                    [timestamps.buffer],
+                    _id
+                );
+                break;
+            }
+            case 'attachVobSubData': {
+                const parser = vobSubParsers.get(request.sessionId);
+                if (!parser) {
+                    postResponse({ type: 'error', message: 'VobSub session not found for attachVobSubData' }, [], _id);
+                    break;
+                }
+                parser.attachSubData(new Uint8Array(request.subData));
+                const timestamps = parser.getTimestamps();
+                postResponse(
+                    {
+                        type: 'vobSubProgress',
+                        count: parser.count,
+                        partial: false,
+                        hasSubData: !!parser.hasSubData,
+                        metadata: buildVobSubMetadata(parser),
+                        timestamps
+                    },
                     [timestamps.buffer],
                     _id
                 );

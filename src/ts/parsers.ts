@@ -34,8 +34,18 @@ import { initWasm } from './wasm'
 import { getWasm } from './wasm'
 import { detectSubtitleFormat, getSubtitleBounds, isMksSource, trimTransparentImageData } from './utils'
 
+interface WasmPgsParserWithFeed extends WasmPgsParser {
+  reset(): void
+  feed(data: Uint8Array): number
+  finishFeed(): number
+  readonly pendingLen: number
+}
+
 interface WasmVobSubParserWithMks extends WasmVobSubParser {
   loadFromMks(data: Uint8Array): void
+  loadFromIdx(idxContent: string): void
+  attachSubData(data: Uint8Array): void
+  readonly hasSubData: boolean
 }
 
 interface WasmSubtitleRendererWithMks extends WasmSubtitleRenderer {
@@ -47,7 +57,7 @@ interface WasmSubtitleRendererWithMks extends WasmSubtitleRenderer {
  * Use this for programmatic access to PGS data without video integration.
  */
 export class PgsParser {
-  private parser: WasmPgsParser | null = null
+  private parser: WasmPgsParserWithFeed | null = null
   private timestamps: Float64Array = new Float64Array(0)
   private cueMetadataCache = new Map<number, SubtitleCueMetadata | null>()
   private readonly debug: boolean
@@ -55,14 +65,11 @@ export class PgsParser {
 
   constructor(options: SubtitleDiagnosticsOptions = {}) {
     const wasm = getWasm()
-    this.parser = new wasm.PgsParser()
+    this.parser = new wasm.PgsParser() as WasmPgsParserWithFeed
     this.debug = Boolean(options.debug)
     this.onWarning = options.onWarning
   }
 
-  /**
-   * Load PGS subtitle data from a Uint8Array.
-   */
   load(data: Uint8Array): number {
     try {
       if (!this.parser) throw new Error('Parser not initialized')
@@ -73,6 +80,41 @@ export class PgsParser {
     } catch (error) {
       throw normalizeSubtitleError(error, { format: 'pgs' })
     }
+  }
+
+  reset(): void {
+    this.parser?.reset()
+    this.timestamps = new Float64Array(0)
+    this.cueMetadataCache.clear()
+  }
+
+  feed(data: Uint8Array): number {
+    try {
+      if (!this.parser) throw new Error('Parser not initialized')
+      const added = this.parser.feed(data)
+      if (added > 0 || this.timestamps.length !== this.parser.count) {
+        this.timestamps = this.parser.getTimestamps()
+        this.cueMetadataCache.clear()
+      }
+      return added
+    } catch (error) {
+      throw normalizeSubtitleError(error, { format: 'pgs' })
+    }
+  }
+
+  finishFeed(): number {
+    try {
+      if (!this.parser) throw new Error('Parser not initialized')
+      const count = this.parser.finishFeed()
+      this.timestamps = this.parser.getTimestamps()
+      return count
+    } catch (error) {
+      throw normalizeSubtitleError(error, { format: 'pgs' })
+    }
+  }
+
+  get pendingLen(): number {
+    return this.parser?.pendingLen ?? 0
   }
 
   /**
@@ -274,9 +316,6 @@ export class VobSubParserLowLevel {
     this.onWarning = options.onWarning
   }
 
-  /**
-   * Load VobSub from IDX and SUB data.
-   */
   loadFromData(idxContent: string, subData: Uint8Array): void {
     try {
       if (!this.parser) throw new Error('Parser not initialized')
@@ -292,6 +331,37 @@ export class VobSubParserLowLevel {
     } catch (error) {
       throw normalizeSubtitleError(error, { format: 'vobsub', fallbackCode: 'BAD_IDX' })
     }
+  }
+
+  loadFromIdx(idxContent: string): void {
+    try {
+      if (!this.parser) throw new Error('Parser not initialized')
+      this.parser.loadFromIdx(idxContent)
+      this.timestamps = this.parser.getTimestamps()
+      this.cueMetadataCache.clear()
+
+      if (this.timestamps.length === 0 && idxContent.trim().length > 0) {
+        throw createSubtitleDiagnosticError('BAD_IDX', 'IDX metadata did not yield any subtitle timestamps.', {
+          format: 'vobsub'
+        })
+      }
+    } catch (error) {
+      throw normalizeSubtitleError(error, { format: 'vobsub', fallbackCode: 'BAD_IDX' })
+    }
+  }
+
+  attachSubData(subData: Uint8Array): void {
+    try {
+      if (!this.parser) throw new Error('Parser not initialized')
+      this.parser.attachSubData(subData)
+      this.cueMetadataCache.clear()
+    } catch (error) {
+      throw normalizeSubtitleError(error, { format: 'vobsub' })
+    }
+  }
+
+  get hasSubData(): boolean {
+    return this.parser?.hasSubData ?? false
   }
 
   /**

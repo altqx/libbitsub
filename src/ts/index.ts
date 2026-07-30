@@ -4,6 +4,7 @@
 
 // Types
 export type {
+  AssetFetchStrategy,
   AutoSubtitleSource,
   OpenedSubtitles,
   SubtitleAspectMode,
@@ -63,6 +64,15 @@ export {
   setCacheLimit,
   setCachedFrame
 } from './utils'
+
+export {
+  fetchSubtitleAsset,
+  fetchSubtitleText,
+  probeRangeSupport,
+  type AssetFetchOptions,
+  type AssetFetchProgress,
+  type RangeProbeResult
+} from './range-loader'
 
 // Frame export helpers
 export { renderFrameData, toBlob, toCanvas, toImageBitmap } from './frame-export'

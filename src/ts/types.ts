@@ -38,7 +38,10 @@ export type SubtitleDiagnosticWarningCode =
   | 'INVALID_FRAME_DATA'
   | 'INVALID_SUBTITLE_DATA'
   | 'MISSING_PALETTE'
+  | 'RANGE_FALLBACK'
   | 'WORKER_FALLBACK'
+
+export type AssetFetchStrategy = 'memory' | 'stream' | 'range-chunks' | 'basic'
 
 export interface SubtitleDiagnosticWarning {
   code: SubtitleDiagnosticWarningCode
@@ -215,6 +218,8 @@ export interface VideoSubtitleOptions {
     before?: number
     after?: number
   }
+  streamingLoad?: boolean
+  rangeRequests?: boolean
   /** Generic observability hook for renderer lifecycle, cache, worker and cue changes */
   onEvent?: (event: SubtitleRendererEvent) => void
   /** Enable richer diagnostics capture for render attempts and warnings */
@@ -259,6 +264,17 @@ export type SubtitleRendererBackend = 'webgpu' | 'webgl2' | 'canvas2d'
 
 export type SubtitleRendererEvent =
   | { type: 'loading'; format: SubtitleFormatName }
+  | {
+      type: 'load-progress'
+      format: SubtitleFormatName
+      loadedBytes: number
+      totalBytes: number | null
+      ratio: number | null
+      strategy: AssetFetchStrategy
+      rangeSupported: boolean
+      indexedCues: number
+    }
+  | { type: 'indexed'; format: SubtitleFormatName; metadata: SubtitleParserMetadata; partial: boolean }
   | { type: 'loaded'; format: SubtitleFormatName; metadata: SubtitleParserMetadata }
   | { type: 'error'; format: SubtitleFormatName; error: SubtitleDiagnosticErrorLike }
   | { type: 'warning'; warning: SubtitleDiagnosticWarning }
@@ -342,7 +358,12 @@ export interface WorkerSessionMetadata {
 export type WorkerRequest =
   | { type: 'init'; wasmUrl: string; glueUrl?: string }
   | { type: 'loadPgs'; sessionId: string; data: ArrayBuffer }
+  | { type: 'beginPgs'; sessionId: string }
+  | { type: 'appendPgs'; sessionId: string; data: ArrayBuffer }
+  | { type: 'finishPgs'; sessionId: string }
   | { type: 'loadVobSub'; sessionId: string; idxContent: string; subData: ArrayBuffer }
+  | { type: 'loadVobSubIdx'; sessionId: string; idxContent: string }
+  | { type: 'attachVobSubData'; sessionId: string; subData: ArrayBuffer }
   | { type: 'loadVobSubMks'; sessionId: string; subData: ArrayBuffer }
   | { type: 'loadVobSubOnly'; sessionId: string; subData: ArrayBuffer }
   | { type: 'renderPgsAtIndex'; sessionId: string; index: number }
@@ -362,7 +383,23 @@ export type WorkerRequest =
 export type WorkerResponse =
   | { type: 'initComplete'; success: boolean; error?: string }
   | { type: 'pgsLoaded'; count: number; byteLength: number; metadata: WorkerSessionMetadata; timestamps: Float64Array }
+  | {
+      type: 'pgsProgress'
+      count: number
+      added: number
+      partial: boolean
+      metadata: WorkerSessionMetadata
+      timestamps: Float64Array
+    }
   | { type: 'vobSubLoaded'; count: number; metadata: WorkerSessionMetadata; timestamps: Float64Array }
+  | {
+      type: 'vobSubProgress'
+      count: number
+      partial: boolean
+      hasSubData: boolean
+      metadata: WorkerSessionMetadata
+      timestamps: Float64Array
+    }
   | { type: 'pgsFrame'; frame: FrameData | null; renderIssue?: string }
   | { type: 'vobSubFrame'; frame: FrameData | null; renderIssue?: string }
   | { type: 'pgsIndex'; index: number }

@@ -4,6 +4,7 @@
  */
 
 import type {
+  AssetFetchStrategy,
   AutoVideoSubtitleOptions,
   SubtitleCacheStats,
   SubtitleCueMetadata,
@@ -19,12 +20,14 @@ import type {
   WorkerRendererState
 } from './types'
 import {
+  SubtitleDiagnosticError,
   createSubtitleDiagnosticError,
   createSubtitleWarning,
   formatSubtitleWarningForConsole,
   normalizeSubtitleError,
   warningFromRenderIssue
 } from './diagnostics'
+import { fetchSubtitleAsset, fetchSubtitleText, type AssetFetchProgress } from './range-loader'
 import { initWasm } from './wasm'
 import { getOrCreateWorker, sendToWorker } from './worker'
 import {
@@ -140,6 +143,8 @@ abstract class BaseVideoSubtitleRenderer {
   protected cacheLimit: number = 24
   protected prefetchBefore: number = 0
   protected prefetchAfter: number = 0
+  protected streamingLoad: boolean = true
+  protected rangeRequests: boolean = true
   protected onEvent?: (event: SubtitleRendererEvent) => void
   protected onWarning?: (warning: SubtitleDiagnosticWarning) => void
   protected currentRendererBackend: SubtitleRendererBackend | null = null
@@ -184,6 +189,39 @@ abstract class BaseVideoSubtitleRenderer {
     this.cacheLimit = Math.max(0, Math.floor(options.cacheLimit ?? 24))
     this.prefetchBefore = Math.max(0, Math.floor(options.prefetchWindow?.before ?? 0))
     this.prefetchAfter = Math.max(0, Math.floor(options.prefetchWindow?.after ?? 0))
+    this.streamingLoad = options.streamingLoad !== false
+    this.rangeRequests = options.rangeRequests !== false
+  }
+
+  protected emitLoadProgress(
+    format: 'pgs' | 'vobsub',
+    progress: AssetFetchProgress,
+    indexedCues: number
+  ): void {
+    this.emitEvent({
+      type: 'load-progress',
+      format,
+      loadedBytes: progress.loaded,
+      totalBytes: progress.total,
+      ratio: progress.ratio,
+      strategy: progress.strategy,
+      rangeSupported: progress.rangeSupported,
+      indexedCues
+    })
+  }
+
+  protected emitIndexed(format: 'pgs' | 'vobsub', metadata: SubtitleParserMetadata, partial: boolean): void {
+    this.emitEvent({ type: 'indexed', format, metadata, partial })
+  }
+
+  protected memoryProgress(byteLength: number): AssetFetchProgress {
+    return {
+      loaded: byteLength,
+      total: byteLength,
+      ratio: 1,
+      rangeSupported: false,
+      strategy: 'memory'
+    }
   }
 
   /** Get current display settings */
@@ -916,62 +954,34 @@ export class PgsRenderer extends BaseVideoSubtitleRenderer {
       this.emitEvent({ type: 'loading', format: 'pgs' })
       this.onLoading?.()
 
-      let arrayBuffer: ArrayBuffer
       if (this.subContent) {
-        arrayBuffer = this.subContent
-      } else if (this.subUrl) {
-        const response = await fetch(this.subUrl)
-        if (!response.ok) throw new Error(`Failed to fetch subtitle: ${response.status}`)
-        arrayBuffer = await response.arrayBuffer()
-      } else {
+        const data = new Uint8Array(this.subContent)
+        this.emitLoadProgress('pgs', this.memoryProgress(data.byteLength), 0)
+        await this.loadPgsBuffer(data, true)
+        this.onLoaded?.()
+        return
+      }
+
+      if (!this.subUrl) {
         throw new Error('No subtitle content or URL provided')
       }
 
-      let data = new Uint8Array(arrayBuffer)
-
-      if (this.state.useWorker) {
-        try {
-          this.state.sessionId = createWorkerSessionId()
-          await getOrCreateWorker()
-          this.emitWorkerState(true, false, this.state.sessionId)
-          const transferableData = createTransferableBuffer(data, Boolean(this.subContent))
-          const loadResponse = await sendToWorker({
-            type: 'loadPgs',
-            sessionId: this.state.sessionId,
-            data: transferableData
-          })
-
-          if (loadResponse.type === 'pgsLoaded') {
-            this.state.workerReady = true
-            this.state.metadata = loadResponse.metadata
-            this.state.timestamps = loadResponse.timestamps
-            this.isLoaded = true
-            this.setParserMetadata(loadResponse.metadata)
-            this.emitWorkerState(true, true, this.state.sessionId)
-            this.onLoaded?.()
-            return // Success, don't fall through to main thread
-          } else if (loadResponse.type === 'error') {
-            throw new Error(loadResponse.message)
-          }
-        } catch (workerError) {
-          this.state.useWorker = false
-          this.emitWorkerState(false, false, this.state.sessionId, true)
-          this.emitWarning(
-            createSubtitleWarning('WORKER_FALLBACK', 'PGS worker initialization failed, falling back to main-thread rendering.', {
-              format: 'pgs',
-              details: { reason: workerError instanceof Error ? workerError.message : String(workerError) }
-            })
-          )
-          if (!this.subContent && this.subUrl && data.byteLength === 0) {
-            const response = await fetch(this.subUrl)
-            if (!response.ok) throw new Error(`Failed to fetch subtitle: ${response.status}`)
-            data = new Uint8Array(await response.arrayBuffer())
-          }
-        }
+      if (!this.streamingLoad) {
+        const { data, strategy, rangeSupported, total } = await fetchSubtitleAsset(this.subUrl, {
+          preferRange: this.rangeRequests,
+          onProgress: (progress) => this.emitLoadProgress('pgs', progress, this.state.timestamps.length)
+        })
+        this.emitLoadProgress(
+          'pgs',
+          { loaded: data.byteLength, total: total ?? data.byteLength, ratio: 1, rangeSupported, strategy },
+          0
+        )
+        await this.loadPgsBuffer(data, false)
+        this.onLoaded?.()
+        return
       }
 
-      // Main thread fallback - use idle callback to avoid blocking UI
-      await this.loadOnMainThread(data)
+      await this.loadPgsStreaming(this.subUrl)
       this.onLoaded?.()
     } catch (error) {
       const resolvedError = normalizeSubtitleError(error, { format: 'pgs' })
@@ -980,15 +990,193 @@ export class PgsRenderer extends BaseVideoSubtitleRenderer {
     }
   }
 
+  private applyPgsIndexState(
+    metadata: SubtitleParserMetadata,
+    timestamps: Float64Array,
+    partial: boolean,
+    usingWorker: boolean
+  ): void {
+    this.state.metadata = metadata
+    this.state.timestamps = timestamps
+    this.setParserMetadata(metadata)
+    this.emitIndexed('pgs', metadata, partial)
+    if (!this.isLoaded && timestamps.length > 0) {
+      this.isLoaded = true
+      if (usingWorker) {
+        this.state.workerReady = true
+        this.emitWorkerState(true, true, this.state.sessionId)
+      }
+    }
+  }
+
+  private async loadPgsBuffer(data: Uint8Array, preserveSource: boolean): Promise<void> {
+    if (this.state.useWorker) {
+      try {
+        this.state.sessionId = createWorkerSessionId()
+        await getOrCreateWorker()
+        this.emitWorkerState(true, false, this.state.sessionId)
+        const transferableData = createTransferableBuffer(data, preserveSource)
+        const loadResponse = await sendToWorker({
+          type: 'loadPgs',
+          sessionId: this.state.sessionId,
+          data: transferableData
+        })
+
+        if (loadResponse.type === 'pgsLoaded') {
+          this.state.workerReady = true
+          this.state.metadata = loadResponse.metadata
+          this.state.timestamps = loadResponse.timestamps
+          this.isLoaded = true
+          this.setParserMetadata(loadResponse.metadata)
+          this.emitIndexed('pgs', loadResponse.metadata, false)
+          this.emitWorkerState(true, true, this.state.sessionId)
+          return
+        } else if (loadResponse.type === 'error') {
+          throw new Error(loadResponse.message)
+        }
+      } catch (workerError) {
+        this.state.useWorker = false
+        this.emitWorkerState(false, false, this.state.sessionId, true)
+        this.emitWarning(
+          createSubtitleWarning('WORKER_FALLBACK', 'PGS worker initialization failed, falling back to main-thread rendering.', {
+            format: 'pgs',
+            details: { reason: workerError instanceof Error ? workerError.message : String(workerError) }
+          })
+        )
+      }
+    }
+
+    await this.loadOnMainThread(data)
+  }
+
+  private async loadPgsStreaming(url: string): Promise<void> {
+    let usedWorker = false
+    let indexedOnce = false
+
+    if (this.state.useWorker) {
+      try {
+        this.state.sessionId = createWorkerSessionId()
+        await getOrCreateWorker()
+        this.emitWorkerState(true, false, this.state.sessionId)
+        const begin = await sendToWorker({ type: 'beginPgs', sessionId: this.state.sessionId })
+        if (begin.type === 'error') throw new Error(begin.message)
+        usedWorker = true
+      } catch (workerError) {
+        this.state.useWorker = false
+        usedWorker = false
+        this.emitWorkerState(false, false, this.state.sessionId, true)
+        this.emitWarning(
+          createSubtitleWarning('WORKER_FALLBACK', 'PGS worker initialization failed, falling back to main-thread rendering.', {
+            format: 'pgs',
+            details: { reason: workerError instanceof Error ? workerError.message : String(workerError) }
+          })
+        )
+      }
+    }
+
+    if (!usedWorker) {
+      await this.yieldToMain()
+      this.pgsParser = new PgsParser({ debug: this.debug, onWarning: (warning) => this.emitWarning(warning) })
+      this.pgsParser.reset()
+    }
+
+    try {
+      const { data, strategy, rangeSupported, total } = await fetchSubtitleAsset(
+        url,
+        {
+          preferRange: this.rangeRequests,
+          onProgress: (progress) => this.emitLoadProgress('pgs', progress, this.state.timestamps.length)
+        },
+        async (chunk, progress) => {
+          if (chunk.byteLength === 0) return
+
+          if (usedWorker && this.state.sessionId) {
+            const transferable = createTransferableBuffer(chunk, true)
+            const response = await sendToWorker({
+              type: 'appendPgs',
+              sessionId: this.state.sessionId,
+              data: transferable
+            })
+            if (response.type === 'pgsProgress') {
+              if (response.added > 0 || !indexedOnce) {
+                this.applyPgsIndexState(response.metadata, response.timestamps, true, true)
+                indexedOnce = true
+              } else {
+                this.state.timestamps = response.timestamps
+                this.state.metadata = response.metadata
+              }
+            } else if (response.type === 'error') {
+              throw new Error(response.message)
+            }
+          } else if (this.pgsParser) {
+            const added = this.pgsParser.feed(chunk)
+            if (added > 0 || !indexedOnce) {
+              const metadata = this.pgsParser.getMetadata()
+              this.applyPgsIndexState(metadata, this.pgsParser.getTimestamps(), true, false)
+              indexedOnce = true
+            }
+          }
+
+          this.emitLoadProgress('pgs', progress, this.state.timestamps.length)
+        }
+      )
+
+      if (usedWorker && this.state.sessionId) {
+        const finish = await sendToWorker({ type: 'finishPgs', sessionId: this.state.sessionId })
+        if (finish.type === 'pgsProgress') {
+          this.applyPgsIndexState(finish.metadata, finish.timestamps, false, true)
+          this.state.workerReady = true
+          this.isLoaded = true
+          this.emitWorkerState(true, true, this.state.sessionId)
+        } else if (finish.type === 'error') {
+          throw new Error(finish.message)
+        }
+      } else if (this.pgsParser) {
+        this.pgsParser.finishFeed()
+        const metadata = this.pgsParser.getMetadata()
+        this.state.timestamps = this.pgsParser.getTimestamps()
+        this.state.metadata = metadata
+        this.isLoaded = true
+        this.setParserMetadata(metadata)
+        this.emitIndexed('pgs', metadata, false)
+        if (metadata.cueCount === 0) {
+          this.state.renderIssues.set(-1, 'INVALID_SUBTITLE_DATA')
+        }
+      }
+
+      this.emitLoadProgress(
+        'pgs',
+        {
+          loaded: data.byteLength,
+          total: total ?? data.byteLength,
+          ratio: 1,
+          rangeSupported,
+          strategy: strategy as AssetFetchStrategy
+        },
+        this.state.timestamps.length
+      )
+    } catch (error) {
+      if (usedWorker) {
+        this.state.useWorker = false
+        this.emitWorkerState(false, false, this.state.sessionId, true)
+      }
+      this.emitWarning(
+        createSubtitleWarning('RANGE_FALLBACK', 'Progressive PGS load failed; retrying with a full buffer fetch.', {
+          format: 'pgs',
+          details: { reason: error instanceof Error ? error.message : String(error) }
+        })
+      )
+      const { data } = await fetchSubtitleAsset(url, { preferRange: this.rangeRequests })
+      await this.loadPgsBuffer(data, false)
+    }
+  }
+
   private async loadOnMainThread(data: Uint8Array): Promise<void> {
-    // Yield to browser before heavy parsing
     await this.yieldToMain()
 
     this.pgsParser = new PgsParser({ debug: this.debug, onWarning: (warning) => this.emitWarning(warning) })
 
-    // Parse in a microtask to allow UI to update
     await new Promise<void>((resolve) => {
-      // Use requestIdleCallback if available, otherwise setTimeout
       const scheduleTask =
         typeof requestIdleCallback !== 'undefined'
           ? (cb: () => void) => requestIdleCallback(() => cb(), { timeout: 1000 })
@@ -1000,6 +1188,7 @@ export class PgsRenderer extends BaseVideoSubtitleRenderer {
         this.state.metadata = this.pgsParser!.getMetadata()
         this.isLoaded = true
         this.setParserMetadata(this.state.metadata)
+        this.emitIndexed('pgs', this.state.metadata, false)
         if (count === 0) {
           this.state.renderIssues.set(-1, 'INVALID_SUBTITLE_DATA')
         }
@@ -1221,126 +1410,30 @@ export class VobSubRenderer extends BaseVideoSubtitleRenderer {
       this.emitEvent({ type: 'loading', format: 'vobsub' })
       this.onLoading?.()
 
-      let subArrayBuffer: ArrayBuffer | undefined
-      let idxData: string | undefined
-      const useMksSource = !this.idxContent && !this.idxUrl && isMksSource({
-        subData: this.subContent,
-        fileName: this.fileName,
-        subUrl: this.subUrl
-      })
+      const useMksSource =
+        !this.idxContent &&
+        !this.idxUrl &&
+        isMksSource({
+          subData: this.subContent,
+          fileName: this.fileName,
+          subUrl: this.subUrl
+        })
 
-      // Resolve SUB content
-      if (this.subContent) {
-        subArrayBuffer = this.subContent
+      if (this.subContent && (useMksSource || this.idxContent)) {
+        const subData = new Uint8Array(this.subContent)
+        this.emitLoadProgress('vobsub', this.memoryProgress(subData.byteLength), 0)
+        await this.loadVobSubBuffer(subData, this.idxContent, useMksSource, true)
+        this.onLoaded?.()
+        return
       }
 
-      // Resolve IDX content
-      if (this.idxContent) {
-        idxData = this.idxContent
+      if (useMksSource) {
+        await this.loadVobSubMksStreaming()
+        this.onLoaded?.()
+        return
       }
 
-      // Fetch missing parts
-      const promises: Promise<void>[] = []
-
-      if (!subArrayBuffer) {
-        if (!this.subUrl) {
-          throw createSubtitleDiagnosticError('MISSING_INPUT', 'No SUB content or URL provided.', { format: 'vobsub' })
-        }
-        promises.push(
-          fetch(this.subUrl)
-            .then((r) => {
-              if (!r.ok) throw new Error(`Failed to fetch .sub file: ${r.status}`)
-              return r.arrayBuffer()
-            })
-            .then((b) => {
-              subArrayBuffer = b
-            })
-        )
-      }
-
-      if (!useMksSource && !idxData) {
-        if (!this.idxUrl) {
-          throw createSubtitleDiagnosticError('MISSING_INPUT', 'No IDX content or URL provided.', { format: 'vobsub' })
-        }
-        promises.push(
-          fetch(this.idxUrl)
-            .then((r) => {
-              if (!r.ok) throw new Error(`Failed to fetch .idx file: ${r.status}`)
-              return r.text()
-            })
-            .then((t) => {
-              idxData = t
-            })
-        )
-      }
-
-      if (promises.length > 0) {
-        await Promise.all(promises)
-      }
-
-      if (!subArrayBuffer || (!useMksSource && !idxData)) {
-        throw createSubtitleDiagnosticError('MISSING_INPUT', 'Failed to load VobSub data.', { format: 'vobsub' })
-      }
-
-      let subData = new Uint8Array(subArrayBuffer)
-
-      if (this.state.useWorker) {
-        try {
-          this.state.sessionId = createWorkerSessionId()
-          await getOrCreateWorker()
-          this.emitWorkerState(true, false, this.state.sessionId)
-          const transferableSubData = createTransferableBuffer(subData, Boolean(this.subContent))
-          const loadResponse = await sendToWorker(
-            useMksSource
-              ? {
-                  type: 'loadVobSubMks',
-                  sessionId: this.state.sessionId,
-                  subData: transferableSubData
-                }
-              : {
-                  type: 'loadVobSub',
-                  sessionId: this.state.sessionId,
-                  idxContent: idxData!,
-                  subData: transferableSubData
-                }
-          )
-
-          if (loadResponse.type === 'vobSubLoaded') {
-            if (!useMksSource && idxData && loadResponse.count === 0) {
-              throw createSubtitleDiagnosticError('BAD_IDX', 'IDX metadata did not yield any subtitle timestamps.', {
-                format: 'vobsub'
-              })
-            }
-            this.state.workerReady = true
-            this.state.metadata = loadResponse.metadata
-            this.state.timestamps = loadResponse.timestamps
-            this.isLoaded = true
-            this.setParserMetadata(loadResponse.metadata)
-            this.emitWorkerState(true, true, this.state.sessionId)
-            this.onLoaded?.()
-            return // Success, don't fall through to main thread
-          } else if (loadResponse.type === 'error') {
-            throw new Error(loadResponse.message)
-          }
-        } catch (workerError) {
-          this.state.useWorker = false
-          this.emitWorkerState(false, false, this.state.sessionId, true)
-          this.emitWarning(
-            createSubtitleWarning('WORKER_FALLBACK', 'VobSub worker initialization failed, falling back to main-thread rendering.', {
-              format: 'vobsub',
-              details: { reason: workerError instanceof Error ? workerError.message : String(workerError) }
-            })
-          )
-          if (!this.subContent && this.subUrl && subData.byteLength === 0) {
-            const response = await fetch(this.subUrl)
-            if (!response.ok) throw new Error(`Failed to fetch .sub file: ${response.status}`)
-            subData = new Uint8Array(await response.arrayBuffer())
-          }
-        }
-      }
-
-      // Main thread fallback
-      await this.loadOnMainThread(subData, idxData, useMksSource)
+      await this.loadVobSubIdxSubStreaming()
       this.onLoaded?.()
     } catch (error) {
       const resolvedError = normalizeSubtitleError(error, { format: 'vobsub' })
@@ -1349,13 +1442,248 @@ export class VobSubRenderer extends BaseVideoSubtitleRenderer {
     }
   }
 
+  private applyVobSubIndexState(
+    metadata: SubtitleParserMetadata,
+    timestamps: Float64Array,
+    partial: boolean,
+    renderable: boolean,
+    usingWorker: boolean
+  ): void {
+    this.state.metadata = metadata
+    this.state.timestamps = timestamps
+    this.setParserMetadata(metadata)
+    this.emitIndexed('vobsub', metadata, partial)
+    if (renderable && !this.isLoaded && timestamps.length > 0) {
+      this.isLoaded = true
+      if (usingWorker) {
+        this.state.workerReady = true
+        this.emitWorkerState(true, true, this.state.sessionId)
+      }
+    }
+  }
+
+  private async ensureVobSubWorkerSession(): Promise<boolean> {
+    if (!this.state.useWorker) return false
+    try {
+      this.state.sessionId = createWorkerSessionId()
+      await getOrCreateWorker()
+      this.emitWorkerState(true, false, this.state.sessionId)
+      return true
+    } catch (workerError) {
+      this.state.useWorker = false
+      this.emitWorkerState(false, false, this.state.sessionId, true)
+      this.emitWarning(
+        createSubtitleWarning('WORKER_FALLBACK', 'VobSub worker initialization failed, falling back to main-thread rendering.', {
+          format: 'vobsub',
+          details: { reason: workerError instanceof Error ? workerError.message : String(workerError) }
+        })
+      )
+      return false
+    }
+  }
+
+  private async loadVobSubBuffer(
+    subData: Uint8Array,
+    idxData: string | undefined,
+    useMksSource: boolean,
+    preserveSource: boolean
+  ): Promise<void> {
+    if (await this.ensureVobSubWorkerSession()) {
+      try {
+        const transferableSubData = createTransferableBuffer(subData, preserveSource)
+        const loadResponse = await sendToWorker(
+          useMksSource
+            ? {
+                type: 'loadVobSubMks',
+                sessionId: this.state.sessionId!,
+                subData: transferableSubData
+              }
+            : {
+                type: 'loadVobSub',
+                sessionId: this.state.sessionId!,
+                idxContent: idxData!,
+                subData: transferableSubData
+              }
+        )
+
+        if (loadResponse.type === 'vobSubLoaded') {
+          if (!useMksSource && idxData && loadResponse.count === 0) {
+            throw createSubtitleDiagnosticError('BAD_IDX', 'IDX metadata did not yield any subtitle timestamps.', {
+              format: 'vobsub'
+            })
+          }
+          this.state.workerReady = true
+          this.state.metadata = loadResponse.metadata
+          this.state.timestamps = loadResponse.timestamps
+          this.isLoaded = true
+          this.setParserMetadata(loadResponse.metadata)
+          this.emitIndexed('vobsub', loadResponse.metadata, false)
+          this.emitWorkerState(true, true, this.state.sessionId)
+          return
+        } else if (loadResponse.type === 'error') {
+          throw new Error(loadResponse.message)
+        }
+      } catch (workerError) {
+        if (workerError instanceof SubtitleDiagnosticError && workerError.code === 'BAD_IDX') {
+          throw workerError
+        }
+        this.state.useWorker = false
+        this.emitWorkerState(false, false, this.state.sessionId, true)
+        this.emitWarning(
+          createSubtitleWarning('WORKER_FALLBACK', 'VobSub worker load failed, falling back to main-thread rendering.', {
+            format: 'vobsub',
+            details: { reason: workerError instanceof Error ? workerError.message : String(workerError) }
+          })
+        )
+      }
+    }
+
+    await this.loadOnMainThread(subData, idxData, useMksSource)
+  }
+
+  private async loadVobSubMksStreaming(): Promise<void> {
+    if (this.subContent) {
+      await this.loadVobSubBuffer(new Uint8Array(this.subContent), undefined, true, true)
+      return
+    }
+    if (!this.subUrl) {
+      throw createSubtitleDiagnosticError('MISSING_INPUT', 'No SUB content or URL provided.', { format: 'vobsub' })
+    }
+
+    const { data, strategy, rangeSupported, total } = await fetchSubtitleAsset(this.subUrl, {
+      preferRange: this.rangeRequests && this.streamingLoad,
+      onProgress: (progress) => this.emitLoadProgress('vobsub', progress, this.state.timestamps.length)
+    })
+    this.emitLoadProgress(
+      'vobsub',
+      {
+        loaded: data.byteLength,
+        total: total ?? data.byteLength,
+        ratio: 1,
+        rangeSupported,
+        strategy
+      },
+      0
+    )
+    await this.loadVobSubBuffer(data, undefined, true, false)
+  }
+
+  private async loadVobSubIdxSubStreaming(): Promise<void> {
+    let idxData = this.idxContent
+    if (!idxData) {
+      if (!this.idxUrl) {
+        throw createSubtitleDiagnosticError('MISSING_INPUT', 'No IDX content or URL provided.', { format: 'vobsub' })
+      }
+      idxData = await fetchSubtitleText(this.idxUrl, {
+        onProgress: (progress) => this.emitLoadProgress('vobsub', progress, 0)
+      })
+    }
+
+    let usedWorker = await this.ensureVobSubWorkerSession()
+    if (usedWorker && this.state.sessionId) {
+      try {
+        const idxResponse = await sendToWorker({
+          type: 'loadVobSubIdx',
+          sessionId: this.state.sessionId,
+          idxContent: idxData
+        })
+        if (idxResponse.type === 'vobSubProgress') {
+          if (idxResponse.count === 0) {
+            throw createSubtitleDiagnosticError('BAD_IDX', 'IDX metadata did not yield any subtitle timestamps.', {
+              format: 'vobsub'
+            })
+          }
+          this.applyVobSubIndexState(idxResponse.metadata, idxResponse.timestamps, true, false, true)
+          this.state.workerReady = true
+          this.emitWorkerState(true, true, this.state.sessionId)
+        } else if (idxResponse.type === 'error') {
+          throw new Error(idxResponse.message)
+        }
+      } catch (error) {
+        if (error instanceof SubtitleDiagnosticError && error.code === 'BAD_IDX') {
+          throw error
+        }
+        usedWorker = false
+        this.state.useWorker = false
+        this.emitWorkerState(false, false, this.state.sessionId, true)
+        this.emitWarning(
+          createSubtitleWarning('WORKER_FALLBACK', 'VobSub worker IDX load failed, falling back to main-thread rendering.', {
+            format: 'vobsub',
+            details: { reason: error instanceof Error ? error.message : String(error) }
+          })
+        )
+      }
+    }
+
+    if (!usedWorker) {
+      await this.yieldToMain()
+      this.vobsubParser = new VobSubParserLowLevel({ debug: this.debug, onWarning: (warning) => this.emitWarning(warning) })
+      this.vobsubParser.loadFromIdx(idxData)
+      this.applyVobSubIndexState(this.vobsubParser.getMetadata(), this.vobsubParser.getTimestamps(), true, false, false)
+    }
+
+    let subData: Uint8Array
+    if (this.subContent) {
+      subData = new Uint8Array(this.subContent)
+      this.emitLoadProgress('vobsub', this.memoryProgress(subData.byteLength), this.state.timestamps.length)
+    } else {
+      if (!this.subUrl) {
+        throw createSubtitleDiagnosticError('MISSING_INPUT', 'No SUB content or URL provided.', { format: 'vobsub' })
+      }
+      const fetched = await fetchSubtitleAsset(this.subUrl, {
+        preferRange: this.rangeRequests && this.streamingLoad,
+        onProgress: (progress) => this.emitLoadProgress('vobsub', progress, this.state.timestamps.length)
+      })
+      subData = fetched.data
+      this.emitLoadProgress(
+        'vobsub',
+        {
+          loaded: subData.byteLength,
+          total: fetched.total ?? subData.byteLength,
+          ratio: 1,
+          rangeSupported: fetched.rangeSupported,
+          strategy: fetched.strategy
+        },
+        this.state.timestamps.length
+      )
+    }
+
+    if (usedWorker && this.state.sessionId) {
+      const transferable = createTransferableBuffer(subData, Boolean(this.subContent))
+      const attachResponse = await sendToWorker({
+        type: 'attachVobSubData',
+        sessionId: this.state.sessionId,
+        subData: transferable
+      })
+      if (attachResponse.type === 'vobSubProgress') {
+        this.applyVobSubIndexState(attachResponse.metadata, attachResponse.timestamps, false, true, true)
+        this.state.workerReady = true
+        this.isLoaded = true
+        this.emitWorkerState(true, true, this.state.sessionId)
+        return
+      } else if (attachResponse.type === 'error') {
+        throw new Error(attachResponse.message)
+      }
+    }
+
+    if (!this.vobsubParser) {
+      this.vobsubParser = new VobSubParserLowLevel({ debug: this.debug, onWarning: (warning) => this.emitWarning(warning) })
+      this.vobsubParser.loadFromIdx(idxData)
+    }
+    this.vobsubParser.attachSubData(subData)
+    const metadata = this.vobsubParser.getMetadata()
+    this.state.timestamps = this.vobsubParser.getTimestamps()
+    this.state.metadata = metadata
+    this.isLoaded = true
+    this.setParserMetadata(metadata)
+    this.emitIndexed('vobsub', metadata, false)
+  }
+
   private async loadOnMainThread(subData: Uint8Array, idxData?: string, useMksSource: boolean = false): Promise<void> {
-    // Yield to browser before heavy parsing
     await this.yieldToMain()
 
     this.vobsubParser = new VobSubParserLowLevel({ debug: this.debug, onWarning: (warning) => this.emitWarning(warning) })
 
-    // Parse in a microtask to allow UI to update
     await new Promise<void>((resolve) => {
       const scheduleTask =
         typeof requestIdleCallback !== 'undefined'
@@ -1374,6 +1702,7 @@ export class VobSubRenderer extends BaseVideoSubtitleRenderer {
         this.state.metadata = this.vobsubParser!.getMetadata()
         this.isLoaded = true
         this.setParserMetadata(this.state.metadata)
+        this.emitIndexed('vobsub', this.state.metadata, false)
         resolve()
       })
     })

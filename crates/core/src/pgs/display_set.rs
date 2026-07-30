@@ -6,6 +6,13 @@ use super::{
 };
 use crate::utils::BigEndianReader;
 
+#[derive(Debug, Clone)]
+pub enum DisplaySetParseAttempt {
+    Complete(DisplaySet, usize),
+    Incomplete,
+    Invalid,
+}
+
 /// A display set contains all segments for a single subtitle update.
 #[derive(Debug, Clone)]
 pub struct DisplaySet {
@@ -39,6 +46,13 @@ impl DisplaySet {
     /// Parse a display set from binary data.
     /// Returns the display set and the number of bytes consumed.
     pub fn parse(data: &[u8], include_header: bool) -> Option<(Self, usize)> {
+        match Self::try_parse(data, include_header) {
+            DisplaySetParseAttempt::Complete(display_set, consumed) => Some((display_set, consumed)),
+            DisplaySetParseAttempt::Incomplete | DisplaySetParseAttempt::Invalid => None,
+        }
+    }
+
+    pub fn try_parse(data: &[u8], include_header: bool) -> DisplaySetParseAttempt {
         let mut reader = BigEndianReader::new(data);
         let mut display_set = Self::new();
 
@@ -47,30 +61,48 @@ impl DisplaySet {
             let dts: u32;
 
             if include_header {
-                // Read PGS header
-                let magic = reader.read_u16()?;
-                if magic != 0x5047 {
-                    return None; // Invalid magic number "PG"
+                if reader.remaining() < 13 {
+                    return DisplaySetParseAttempt::Incomplete;
                 }
 
-                pts = reader.read_u32()?;
-                dts = reader.read_u32()?;
+                let Some(magic) = reader.read_u16() else {
+                    return DisplaySetParseAttempt::Incomplete;
+                };
+                if magic != 0x5047 {
+                    return DisplaySetParseAttempt::Invalid;
+                }
+
+                let Some(read_pts) = reader.read_u32() else {
+                    return DisplaySetParseAttempt::Incomplete;
+                };
+                let Some(read_dts) = reader.read_u32() else {
+                    return DisplaySetParseAttempt::Incomplete;
+                };
+                pts = read_pts;
+                dts = read_dts;
 
                 if display_set.pts == 0 {
                     display_set.pts = pts;
                     display_set.dts = dts;
                 }
             } else {
+                if reader.remaining() < 3 {
+                    return DisplaySetParseAttempt::Incomplete;
+                }
                 pts = 0;
                 dts = 0;
             }
 
-            let segment_type = reader.read_u8()?;
-            let segment_size = reader.read_u16()? as usize;
+            let Some(segment_type) = reader.read_u8() else {
+                return DisplaySetParseAttempt::Incomplete;
+            };
+            let Some(segment_size_u16) = reader.read_u16() else {
+                return DisplaySetParseAttempt::Incomplete;
+            };
+            let segment_size = segment_size_u16 as usize;
 
-            // Check if we have enough data
             if reader.remaining() < segment_size {
-                return None;
+                return DisplaySetParseAttempt::Incomplete;
             }
 
             let start_pos = reader.position();
@@ -121,7 +153,7 @@ impl DisplaySet {
             }
         }
 
-        Some((display_set, reader.position()))
+        DisplaySetParseAttempt::Complete(display_set, reader.position())
     }
 
     /// Get the presentation timestamp in milliseconds.

@@ -52,6 +52,20 @@ await ready()       // before first track switch / renderer creation
 
 `warmup()` and `ready()` share one init promise with concurrent renderer creation. The shared worker is published only after in-worker WASM init succeeds.
 
+### Range / streaming loads
+
+URL loads stream by default and use HTTP Range for large assets when the origin supports it:
+
+- PGS: progressive `feed()` indexing while bytes arrive
+- VobSub: parse `.idx` first for timestamps, then attach streamed `.sub` packets
+- MKS: Range/stream download first, then extract (container still needs full payload)
+- `subContent` / `idxContent` stay the simple in-memory path
+
+Options: `streamingLoad` (default `true`), `rangeRequests` (default `true`).
+Events: `load-progress`, `indexed` (partial or final), then `loaded`.
+
+Helpers: `probeRangeSupport()`, `fetchSubtitleAsset()`, `fetchSubtitleText()`.
+
 ## High-level video renderers
 
 These attach a canvas overlay to the video's parent, handle playback sync, resize, and use a shared Web Worker + GPU rendering automatically.
