@@ -93,6 +93,7 @@ export {
   getRuntimeCapabilities,
   canUseWorkerOffscreenRender,
   isOffscreenCanvasSupported,
+  isOffscreenCanvas2DSupported,
   isTransferControlToOffscreenSupported,
   isCanvas2DSupported
 } from './capabilities'

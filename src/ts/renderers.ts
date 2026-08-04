@@ -179,6 +179,8 @@ abstract class BaseVideoSubtitleRenderer {
   protected canvasPixelWidth = 1
   protected canvasPixelHeight = 1
   private offscreenPresentToken = 0
+  private offscreenAttachPromise: Promise<void> | null = null
+  private offscreenTransferPending = false
   private offscreenFrameMetadata = new Map<number, OffscreenFrameMetadata>()
 
   // Performance tracking
@@ -439,16 +441,34 @@ abstract class BaseVideoSubtitleRenderer {
     this.initCanvas2D()
   }
 
-  protected async ensureWorkerOffscreenAttached(): Promise<void> {
-    if (!this.pendingWorkerOffscreen || !this.canvas) return
+  protected ensureWorkerOffscreenAttached(): Promise<void> {
+    if (this.disposed) return Promise.resolve()
+    if (this.offscreenAttachPromise) return this.offscreenAttachPromise
+    if (!this.pendingWorkerOffscreen || !this.canvas) return Promise.resolve()
 
     const state = this.getWorkerRendererState()
     if (!state.useWorker || !state.workerReady || !state.sessionId) {
       this.pendingWorkerOffscreen = false
       this.initCanvas2D()
-      return
+      return Promise.resolve()
     }
 
+    const sessionId = state.sessionId
+    this.pendingWorkerOffscreen = false
+    this.offscreenTransferPending = true
+
+    let attachPromise: Promise<void>
+    attachPromise = this.attachWorkerOffscreen(sessionId).finally(() => {
+      this.offscreenTransferPending = false
+      if (this.offscreenAttachPromise === attachPromise) {
+        this.offscreenAttachPromise = null
+      }
+    })
+    this.offscreenAttachPromise = attachPromise
+    return attachPromise
+  }
+
+  private async attachWorkerOffscreen(sessionId: string): Promise<void> {
     try {
       const transferableCanvas = this.canvas as HTMLCanvasElement & {
         transferControlToOffscreen: () => OffscreenCanvas
@@ -456,7 +476,7 @@ abstract class BaseVideoSubtitleRenderer {
       const offscreen = transferableCanvas.transferControlToOffscreen()
       const attachResponse = await sendToWorker({
         type: 'attachOffscreenCanvas',
-        sessionId: state.sessionId,
+        sessionId,
         canvas: offscreen
       })
       if (attachResponse.type === 'error') {
@@ -465,8 +485,11 @@ abstract class BaseVideoSubtitleRenderer {
       if (attachResponse.type !== 'offscreenAttached') {
         throw new Error('Worker OffscreenCanvas attach failed')
       }
+      if (this.disposed) {
+        await sendToWorker({ type: 'detachOffscreenCanvas', sessionId })
+        return
+      }
 
-      this.pendingWorkerOffscreen = false
       this.useWorkerOffscreen = true
       this.emitRendererBackend('worker-offscreen')
       this.lastRenderedIndex = -1
@@ -474,13 +497,14 @@ abstract class BaseVideoSubtitleRenderer {
 
       await sendToWorker({
         type: 'resizeOffscreenCanvas',
-        sessionId: state.sessionId,
+        sessionId,
         width: this.canvasPixelWidth,
         height: this.canvasPixelHeight
       })
     } catch (error) {
-      this.pendingWorkerOffscreen = false
+      this.offscreenTransferPending = false
       this.useWorkerOffscreen = false
+      if (this.disposed) return
       this.recreateCanvasForMainThreadFallback()
       this.emitWarning(
         createSubtitleWarning(
@@ -714,9 +738,9 @@ abstract class BaseVideoSubtitleRenderer {
     this.canvas.style.width = `${bounds.width}px`
     this.canvas.style.height = `${bounds.height}px`
 
-    if (this.useWorkerOffscreen) {
+    if (this.useWorkerOffscreen || this.pendingWorkerOffscreen || this.offscreenTransferPending) {
       const state = this.getWorkerRendererState()
-      if (state.sessionId && state.workerReady) {
+      if (this.useWorkerOffscreen && state.sessionId && state.workerReady) {
         sendToWorker({
           type: 'resizeOffscreenCanvas',
           sessionId: state.sessionId,
@@ -819,7 +843,7 @@ abstract class BaseVideoSubtitleRenderer {
     this.animationFrameId = requestAnimationFrame(render)
   }
 
-  private recordRenderPerformance(renderTime: number, capturedAt: number): void {
+  private recordRenderPerformance(renderTime: number, capturedAt: number, countAsDropped = true): void {
     this.perfStats.lastRenderTime = renderTime
     this.perfStats.renderTimes.push(renderTime)
     if (this.perfStats.renderTimes.length > 60) {
@@ -827,7 +851,7 @@ abstract class BaseVideoSubtitleRenderer {
     }
     this.perfStats.framesRendered++
     this.perfStats.fpsTimestamps.push(capturedAt)
-    if (renderTime > 16.67) {
+    if (countAsDropped && renderTime > 16.67) {
       this.perfStats.framesDropped++
     }
   }
@@ -843,7 +867,7 @@ abstract class BaseVideoSubtitleRenderer {
   ): void {
     const completedAt = performance.now()
     const renderTime = completedAt - startedAt
-    this.recordRenderPerformance(renderTime, completedAt)
+    this.recordRenderPerformance(renderTime, completedAt, false)
     const cue = index >= 0 ? this.buildCueMetadata(index) : null
     this.emitCueChange(cue)
     this.recordLastRenderInfo({
@@ -965,7 +989,9 @@ abstract class BaseVideoSubtitleRenderer {
             response.compositionCount ?? 0,
             startedAt
           )
-          this.fallbackFromWorkerOffscreen(response.renderIssue || 'Offscreen presentation failed.')
+          if (response.fatal) {
+            this.fallbackFromWorkerOffscreen(response.renderIssue || 'Offscreen presentation failed.')
+          }
           return
         }
 
@@ -1237,6 +1263,8 @@ abstract class BaseVideoSubtitleRenderer {
     this.useWebGL2 = false
     this.useWorkerOffscreen = false
     this.pendingWorkerOffscreen = false
+    this.offscreenTransferPending = false
+    this.offscreenAttachPromise = null
   }
 }
 

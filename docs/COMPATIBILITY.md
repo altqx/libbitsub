@@ -5,16 +5,16 @@ worker correctness fixes into durable guarantees.
 
 ## What the suite covers
 
-| Area | Guarantees |
-| --- | --- |
-| Malformed PGS | Bad magic, truncated segments, ODS length mismatches never panic and never produce bogus bitmaps |
-| Malformed VobSub / IDX | Missing palette still yields timestamps; corrupt packets fail closed |
-| Malformed MKS | Non-`S_VOBSUB` tracks and empty/invalid blocks are rejected |
-| Palette edge cases | Index 255, short palettes, out-of-range indices, fully transparent entries |
-| Zero-length RLE | PGS count-0 color/transparent runs do not hang; VobSub EOL uses the code color |
-| Alternate display sizes | 720×480, 1280×720, 1920×1080, 3840×2160 screen metrics round-trip |
-| Slow worker startup | Concurrent `warmup()` / `ready()` / `getOrCreateWorker()` share one init; failures do not publish a ready worker |
-| Golden pixels | Software compositor fingerprints + Canvas2D/WebGL2/WebGPU parity |
+| Area                    | Guarantees                                                                                                       |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| Malformed PGS           | Bad magic, truncated segments, ODS length mismatches never panic and never produce bogus bitmaps                 |
+| Malformed VobSub / IDX  | Missing palette still yields timestamps; corrupt packets fail closed                                             |
+| Malformed MKS           | Non-`S_VOBSUB` tracks and empty/invalid blocks are rejected                                                      |
+| Palette edge cases      | Index 255, short palettes, out-of-range indices, fully transparent entries                                       |
+| Zero-length RLE         | PGS count-0 color/transparent runs do not hang; VobSub EOL uses the code color                                   |
+| Alternate display sizes | 720×480, 1280×720, 1920×1080, 3840×2160 screen metrics round-trip                                                |
+| Slow worker startup     | Concurrent `warmup()` / `ready()` / `getOrCreateWorker()` share one init; failures do not publish a ready worker |
+| Golden pixels           | Software compositor fingerprints + Canvas2D/WebGL2/WebGPU parity                                                 |
 
 ## How to run
 
@@ -34,12 +34,12 @@ bun run test:visual
 
 ### Suite layout
 
-| Path | Role |
-| --- | --- |
-| `crates/core/src/compatibility.rs` | Rust fixtures + golden decoder tests |
-| `src/ts/compatibility/` | TS fixtures, pixel helpers, backend harness, Bun tests |
-| `tests/visual/` | Headless Chromium runner for Canvas2D / WebGL2 / WebGPU |
-| `docs/COMPATIBILITY.md` | This matrix |
+| Path                               | Role                                                    |
+| ---------------------------------- | ------------------------------------------------------- |
+| `crates/core/src/compatibility.rs` | Rust fixtures + golden decoder tests                    |
+| `src/ts/compatibility/`            | TS fixtures, pixel helpers, backend harness, Bun tests  |
+| `tests/visual/`                    | Headless Chromium runner for Canvas2D / WebGL2 / WebGPU |
+| `docs/COMPATIBILITY.md`            | This matrix                                             |
 
 Synthetic fixtures are generated in-process (no large binary blobs). Real
 sample assets remain under `src/testfiles/` and `crates/core/src/testfiles/`.
@@ -67,20 +67,20 @@ Support levels:
 - **Best-effort** — works on current firmware but OEM WebViews vary
 - **Unsupported** — missing required Web APIs
 
-| Environment | Engine notes | PGS | VobSub | MKS | Worker | Canvas2D | WebGL2 | WebGPU | Level |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Chrome / Edge 120+ (desktop) | Blink | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | Full |
-| Chrome Android 120+ | Blink | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓* | Full |
-| Firefox 120+ | Gecko | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓* | Full |
-| Safari 17+ (macOS) | WebKit | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓* | Full |
-| Safari iOS / iPadOS 17+ | WebKit | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | Limited | Core |
-| Samsung Internet 24+ | Blink | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓* | Full |
-| Chromium Embedded (Electron 28+) | Blink | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓* | Full |
-| **webOS TV 6 / 22 / 23** | Chromium 53→108 family (OEM) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — | Core |
-| **webOS TV 24+** | Newer Chromium WebApp | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | Best-effort | Core / Full* |
-| Tizen TV 6.5+ | Chromium-based | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — | Core |
-| vidda / Hisense / other TV WebViews | Varies | ✓ | ✓ | ✓ | Best-effort | ✓ | Best-effort | — | Best-effort |
-| Node / Bun (no DOM) | — | Parse via WASM only | Parse via WASM only | Parse via WASM only | Mockable | Software golden only | — | — | Test-only |
+| Environment                         | Engine notes                 | PGS                 | VobSub              | MKS                 | Worker      | Canvas2D             | WebGL2      | WebGPU      | Level         |
+| ----------------------------------- | ---------------------------- | ------------------- | ------------------- | ------------------- | ----------- | -------------------- | ----------- | ----------- | ------------- |
+| Chrome / Edge 120+ (desktop)        | Blink                        | ✓                   | ✓                   | ✓                   | ✓           | ✓                    | ✓           | ✓           | Full          |
+| Chrome Android 120+                 | Blink                        | ✓                   | ✓                   | ✓                   | ✓           | ✓                    | ✓           | ✓\*         | Full          |
+| Firefox 120+                        | Gecko                        | ✓                   | ✓                   | ✓                   | ✓           | ✓                    | ✓           | ✓\*         | Full          |
+| Safari 17+ (macOS)                  | WebKit                       | ✓                   | ✓                   | ✓                   | ✓           | ✓                    | ✓           | ✓\*         | Full          |
+| Safari iOS / iPadOS 17+             | WebKit                       | ✓                   | ✓                   | ✓                   | ✓           | ✓                    | ✓           | Limited     | Core          |
+| Samsung Internet 24+                | Blink                        | ✓                   | ✓                   | ✓                   | ✓           | ✓                    | ✓           | ✓\*         | Full          |
+| Chromium Embedded (Electron 28+)    | Blink                        | ✓                   | ✓                   | ✓                   | ✓           | ✓                    | ✓           | ✓\*         | Full          |
+| **webOS TV 6 / 22 / 23**            | Chromium 53→108 family (OEM) | ✓                   | ✓                   | ✓                   | ✓           | ✓                    | ✓           | —           | Core          |
+| **webOS TV 24+**                    | Newer Chromium WebApp        | ✓                   | ✓                   | ✓                   | ✓           | ✓                    | ✓           | Best-effort | Core / Full\* |
+| Tizen TV 6.5+                       | Chromium-based               | ✓                   | ✓                   | ✓                   | ✓           | ✓                    | ✓           | —           | Core          |
+| vidda / Hisense / other TV WebViews | Varies                       | ✓                   | ✓                   | ✓                   | Best-effort | ✓                    | Best-effort | —           | Best-effort   |
+| Node / Bun (no DOM)                 | —                            | Parse via WASM only | Parse via WASM only | Parse via WASM only | Mockable    | Software golden only | —           | —           | Test-only     |
 
 \* WebGPU availability depends on OS/GPU flags and may fall back automatically
 to WebGL2, then Canvas2D.
@@ -107,12 +107,13 @@ WebGPU → WebGL2 → Worker OffscreenCanvas → Canvas2D
 
 - **WebGPU / WebGL2** — main-thread GPU present; worker still preferred for parse/decode (transfer RGBA path).
 - **Worker OffscreenCanvas** — when GPU is unavailable but `Worker` + `OffscreenCanvas` +
-  `transferControlToOffscreen` exist, decode **and** Canvas2D present run in the shared worker
+  `transferControlToOffscreen` + an OffscreenCanvas 2D context exist, decode **and** Canvas2D present run in the shared worker
   (no RGBA transfer back to the UI thread). Helps subtitle switching on constrained TVs.
 - **Canvas2D** — main-thread present fallback for older WebViews without OffscreenCanvas transfer.
 
-High-level renderers select the first available backend and emit
-`renderer-change` / fallback callbacks when stepping down.
+High-level renderers select the first available enabled backend and emit
+`renderer-change` / fallback callbacks when stepping down. Setting `offscreenRender: false`
+disables and skips Worker OffscreenCanvas even when the runtime supports it.
 
 Use `getRuntimeCapabilities()` to explain why a device landed on the transfer or Canvas2D path:
 
@@ -126,11 +127,11 @@ const caps = getRuntimeCapabilities()
 
 ## CI expectations
 
-| Job command | Required |
-| --- | --- |
-| `bun run test` (cargo) | Yes |
-| `bun run test:ts` | Yes |
-| `bun run test:visual` | Required in CI (Chrome installed via `browser-actions/setup-chrome`). Locally requires Chrome/Chromium or `CHROME_PATH`. Set `VISUAL_OPTIONAL=1` to skip when no browser is available. |
+| Job command            | Required                                                                                                                                                                               |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `bun run test` (cargo) | Yes                                                                                                                                                                                    |
+| `bun run test:ts`      | Yes                                                                                                                                                                                    |
+| `bun run test:visual`  | Required in CI (Chrome installed via `browser-actions/setup-chrome`). Locally requires Chrome/Chromium or `CHROME_PATH`. Set `VISUAL_OPTIONAL=1` to skip when no browser is available. |
 
 ## Extending the suite
 

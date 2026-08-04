@@ -468,6 +468,9 @@ self.onmessage = async function(event) {
                 if (!canvas || typeof canvas.getContext !== 'function') {
                     throw new Error('OffscreenCanvas attach requires a transferable OffscreenCanvas');
                 }
+                if (offscreenSurfaces.has(request.sessionId)) {
+                    throw new Error('OffscreenCanvas already attached for this session');
+                }
                 const ctx = canvas.getContext('2d', { alpha: true, desynchronized: true });
                 if (!ctx) {
                     throw new Error('OffscreenCanvas 2D context unavailable');
@@ -508,7 +511,7 @@ self.onmessage = async function(event) {
             case 'presentOffscreen': {
                 const surface = offscreenSurfaces.get(request.sessionId);
                 if (!surface) {
-                    postResponse({ type: 'offscreenPresented', status: 'failed', renderIssue: 'OFFSCREEN_SURFACE_MISSING' }, [], _id);
+                    postResponse({ type: 'offscreenPresented', status: 'failed', fatal: true, renderIssue: 'OFFSCREEN_SURFACE_MISSING' }, [], _id);
                     break;
                 }
 
@@ -532,7 +535,7 @@ self.onmessage = async function(event) {
                 if (request.format === 'pgs') {
                     const parser = pgsParsers.get(request.sessionId);
                     if (!parser) {
-                        postResponse({ type: 'offscreenPresented', status: 'failed', renderIssue: 'PARSER_MISSING' }, [], _id);
+                        postResponse({ type: 'offscreenPresented', status: 'failed', fatal: true, renderIssue: 'PARSER_MISSING' }, [], _id);
                         break;
                     }
                     const rendered = parser.renderAtIndex(request.index);
@@ -541,7 +544,7 @@ self.onmessage = async function(event) {
                 } else {
                     const parser = vobSubParsers.get(request.sessionId);
                     if (!parser) {
-                        postResponse({ type: 'offscreenPresented', status: 'failed', renderIssue: 'PARSER_MISSING' }, [], _id);
+                        postResponse({ type: 'offscreenPresented', status: 'failed', fatal: true, renderIssue: 'PARSER_MISSING' }, [], _id);
                         break;
                     }
                     const rendered = parser.renderAtIndex(request.index);

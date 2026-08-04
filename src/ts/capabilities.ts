@@ -19,7 +19,7 @@ export function isTransferControlToOffscreenSupported(): boolean {
   )
 }
 
-function isOffscreenCanvas2DSupported(): boolean {
+export function isOffscreenCanvas2DSupported(): boolean {
   if (typeof OffscreenCanvas !== 'undefined') {
     try {
       const canvas = new OffscreenCanvas(1, 1)
@@ -81,6 +81,14 @@ function resolvePreferredPresentPath(capabilities: Omit<RuntimeCapabilities, 'pr
   if (!capabilities.transferControlToOffscreen) {
     reasons.push('transferControlToOffscreen unavailable; cannot move canvas present into a Worker.')
   }
+  if (
+    capabilities.worker &&
+    capabilities.offscreenCanvas &&
+    capabilities.transferControlToOffscreen &&
+    !capabilities.offscreenCanvas2d
+  ) {
+    reasons.push('OffscreenCanvas 2D context unavailable; Worker presentation requires Canvas2D in the Worker.')
+  }
   reasons.push(
     'Worker OffscreenCanvas present path unavailable; composition uses the transfer or main-thread Canvas2D path.'
   )
@@ -101,16 +109,18 @@ export function getRuntimeCapabilities(): RuntimeCapabilities {
   const worker = isWorkerAvailable()
   const offscreenCanvas = isOffscreenCanvasSupported()
   const transferControlToOffscreen = isTransferControlToOffscreenSupported()
+  const offscreenCanvas2d = isOffscreenCanvas2DSupported()
   const webgpu = isWebGPUSupported()
   const webgl2 = isWebGL2Supported()
   const canvas2d = isCanvas2DSupported()
   const createImageBitmap = typeof globalThis.createImageBitmap === 'function'
-  const workerOffscreenRender = canUseWorkerOffscreenRender()
+  const workerOffscreenRender = worker && offscreenCanvas && transferControlToOffscreen && offscreenCanvas2d
 
   const base = {
     worker,
     offscreenCanvas,
     transferControlToOffscreen,
+    offscreenCanvas2d,
     workerOffscreenRender,
     webgpu,
     webgl2,

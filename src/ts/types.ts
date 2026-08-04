@@ -34,7 +34,12 @@ export type SubtitleDiagnosticErrorCode =
   | 'UNKNOWN'
 
 export type SubtitleDiagnosticWarningCode =
-  'BAD_IDX' | 'INVALID_FRAME_DATA' | 'INVALID_SUBTITLE_DATA' | 'MISSING_PALETTE' | 'RANGE_FALLBACK' | 'WORKER_FALLBACK'
+  | 'BAD_IDX'
+  | 'INVALID_FRAME_DATA'
+  | 'INVALID_SUBTITLE_DATA'
+  | 'MISSING_PALETTE'
+  | 'RANGE_FALLBACK'
+  | 'WORKER_FALLBACK'
 
 export type AssetFetchStrategy = 'memory' | 'stream' | 'range-chunks' | 'basic'
 
@@ -99,7 +104,10 @@ export interface SubtitleRenderedFrameData {
 }
 
 export type SubtitleFrameCanvasTarget =
-  HTMLCanvasElement | OffscreenCanvas | CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D
+  | HTMLCanvasElement
+  | OffscreenCanvas
+  | CanvasRenderingContext2D
+  | OffscreenCanvasRenderingContext2D
 
 export interface SubtitleFrameCanvasOptions extends SubtitleFrameRenderOptions {
   /** Resize the target canvas to the rendered frame size before drawing. */
@@ -259,17 +267,13 @@ export interface SubtitleDisplaySettings {
 
 export type SubtitleRendererBackend = 'webgpu' | 'webgl2' | 'worker-offscreen' | 'canvas2d'
 
-export type SubtitlePresentPath =
-  | 'main-webgpu'
-  | 'main-webgl2'
-  | 'worker-offscreen'
-  | 'main-canvas2d'
-  | 'main-thread'
+export type SubtitlePresentPath = 'main-webgpu' | 'main-webgl2' | 'worker-offscreen' | 'main-canvas2d' | 'main-thread'
 
 export interface RuntimeCapabilities {
   worker: boolean
   offscreenCanvas: boolean
   transferControlToOffscreen: boolean
+  offscreenCanvas2d: boolean
   workerOffscreenRender: boolean
   webgpu: boolean
   webgl2: boolean
@@ -459,6 +463,8 @@ export type WorkerResponse =
   | {
       type: 'offscreenPresented'
       status: WorkerOffscreenPresentStatus
+      /** True only when the worker presentation infrastructure is unusable. */
+      fatal?: boolean
       renderIssue?: string
       width?: number
       height?: number

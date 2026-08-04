@@ -378,7 +378,7 @@ new PgsRenderer({
   subUrl,
   // default true: when on the Canvas2D tier, paint via Worker OffscreenCanvas if supported
   offscreenRender: true,
-  onWebGPUFallback: () => console.warn('WebGPU unavailable, using WebGL2'),
+  onWebGPUFallback: () => console.warn('WebGPU unavailable, trying WebGL2'),
   onWebGL2Fallback: () => console.warn('WebGL2 unavailable, trying OffscreenCanvas/Canvas2D')
 })
 ```

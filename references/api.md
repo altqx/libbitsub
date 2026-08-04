@@ -2,33 +2,34 @@
 
 ## Top-level exports
 
-| Export                          | Signature                                                                                                                                                              | Notes                                                                                                                                                                  |
-| ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `initWasm`                      | `() => Promise<void>`                                                                                                                                                  | Must be called before any parser or renderer. Safe to call multiple times.                                                                                             |
-| `isWasmInitialized`             | `() => boolean`                                                                                                                                                        |                                                                                                                                                                        |
-| `warmup`                        | `() => Promise<void>`                                                                                                                                                  | Pre-initialize the shared subtitle worker (and its WASM). Safe to call multiple times; concurrent callers share one init promise. No-ops when Workers are unavailable. |
-| `ready`                         | `() => Promise<void>`                                                                                                                                                  | Resolves when the shared worker is ready for parse/render requests. Starts init if needed (same as `warmup`).                                                          |
-| `isWorkerAvailable`             | `() => boolean`                                                                                                                                                        |                                                                                                                                                                        |
-| `isWorkerReady`                 | `() => boolean`                                                                                                                                                        | `true` only after worker WASM initialization succeeds.                                                                                                                 |
-| `isWebGPUSupported`             | `() => boolean`                                                                                                                                                        |                                                                                                                                                                        |
-| `getRuntimeCapabilities`        | `() => RuntimeCapabilities`                                                                                                                                            | Snapshot of worker / OffscreenCanvas / GPU / Canvas2D support plus `preferredPresentPath` and human-readable `reasons` for fallback UI copy                            |
-| `canUseWorkerOffscreenRender`   | `() => boolean`                                                                                                                                                        | `true` when Worker + OffscreenCanvas + `transferControlToOffscreen` + Canvas2D are all available                                                                       |
-| `isOffscreenCanvasSupported`    | `() => boolean`                                                                                                                                                        |                                                                                                                                                                        |
-| `isTransferControlToOffscreenSupported` | `() => boolean`                                                                                                                                                |                                                                                                                                                                        |
-| `isCanvas2DSupported`           | `() => boolean`                                                                                                                                                        |                                                                                                                                                                        |
-| `detectSubtitleFormat`          | `(source: AutoSubtitleSource) => 'pgs' \| 'vobsub' \| null`                                                                                                            | Uses file hints and binary magic bytes, including `.mks` sources carrying embedded `S_VOBSUB`                                                                          |
-| `createAutoSubtitleRenderer`    | `(options: AutoVideoSubtitleOptions) => PgsRenderer \| VobSubRenderer`                                                                                                 | Throws if format cannot be determined                                                                                                                                  |
-| `openSubtitles`                 | `(source: AutoSubtitleSource, options?: SubtitleDiagnosticsOptions) => Promise<OpenedSubtitles>`                                                                       | Initializes WASM, auto-detects the format, and returns a normalized low-level handle                                                                                   |
-| `probeRangeSupport`             | `(url: string, options?: AssetFetchOptions) => Promise<RangeProbeResult>`                                                                                              | Probe HTTP Range support and content length                                                                                                                            |
-| `fetchSubtitleAsset`            | `(url: string, options?: AssetFetchOptions, onChunk?) => Promise<{ data, strategy, rangeSupported, total }>`                                                           | Range/stream-aware binary download with progressive chunk callbacks                                                                                                    |
-| `fetchSubtitleText`             | `(url: string, options?: AssetFetchOptions) => Promise<string>`                                                                                                        | Text download helper for small assets such as `.idx`                                                                                                                   |
-| `renderFrameData`               | `(frame: SubtitleData, options?: SubtitleFrameRenderOptions) => SubtitleRenderedFrameData \| null`                                                                     | Composes subtitle compositions into a single `ImageData` export                                                                                                        |
-| `toCanvas`                      | `(frame: SubtitleData \| SubtitleRenderedFrameData, target?: SubtitleFrameCanvasTarget, options?: SubtitleFrameCanvasOptions) => HTMLCanvasElement \| OffscreenCanvas` | Draws a frame export to a new or existing canvas or 2D context                                                                                                         |
-| `toImageBitmap`                 | `(frame: SubtitleData \| SubtitleRenderedFrameData, options?: SubtitleFrameRenderOptions) => Promise<ImageBitmap>`                                                     | Creates an `ImageBitmap` from a composed subtitle frame                                                                                                                |
-| `toBlob`                        | `(frame: SubtitleData \| SubtitleRenderedFrameData, type?: string, quality?: number, options?: SubtitleFrameRenderOptions) => Promise<Blob>`                           | Encodes a composed subtitle frame, defaulting to PNG                                                                                                                   |
-| `SubtitleDiagnosticError`       | `class extends Error`                                                                                                                                                  | Structured diagnostic error with `code`, `format`, and `details`                                                                                                       |
-| `createSubtitleDiagnosticError` | `(code, message, options?) => SubtitleDiagnosticError`                                                                                                                 | Create a typed diagnostics error manually                                                                                                                              |
-| `normalizeSubtitleError`        | `(error, context?) => SubtitleDiagnosticError`                                                                                                                         | Map generic errors into stable libbitsub diagnostic codes                                                                                                              |
+| Export                                  | Signature                                                                                                                                                              | Notes                                                                                                                                                                  |
+| --------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `initWasm`                              | `() => Promise<void>`                                                                                                                                                  | Must be called before any parser or renderer. Safe to call multiple times.                                                                                             |
+| `isWasmInitialized`                     | `() => boolean`                                                                                                                                                        |                                                                                                                                                                        |
+| `warmup`                                | `() => Promise<void>`                                                                                                                                                  | Pre-initialize the shared subtitle worker (and its WASM). Safe to call multiple times; concurrent callers share one init promise. No-ops when Workers are unavailable. |
+| `ready`                                 | `() => Promise<void>`                                                                                                                                                  | Resolves when the shared worker is ready for parse/render requests. Starts init if needed (same as `warmup`).                                                          |
+| `isWorkerAvailable`                     | `() => boolean`                                                                                                                                                        |                                                                                                                                                                        |
+| `isWorkerReady`                         | `() => boolean`                                                                                                                                                        | `true` only after worker WASM initialization succeeds.                                                                                                                 |
+| `isWebGPUSupported`                     | `() => boolean`                                                                                                                                                        |                                                                                                                                                                        |
+| `getRuntimeCapabilities`                | `() => RuntimeCapabilities`                                                                                                                                            | Snapshot of worker / OffscreenCanvas / GPU / Canvas2D support plus `preferredPresentPath` and human-readable `reasons` for fallback UI copy                            |
+| `canUseWorkerOffscreenRender`           | `() => boolean`                                                                                                                                                        | `true` when Worker + OffscreenCanvas + `transferControlToOffscreen` + Canvas2D are all available                                                                       |
+| `isOffscreenCanvasSupported`            | `() => boolean`                                                                                                                                                        |                                                                                                                                                                        |
+| `isOffscreenCanvas2DSupported`          | `() => boolean`                                                                                                                                                        |                                                                                                                                                                        |
+| `isTransferControlToOffscreenSupported` | `() => boolean`                                                                                                                                                        |                                                                                                                                                                        |
+| `isCanvas2DSupported`                   | `() => boolean`                                                                                                                                                        |                                                                                                                                                                        |
+| `detectSubtitleFormat`                  | `(source: AutoSubtitleSource) => 'pgs' \| 'vobsub' \| null`                                                                                                            | Uses file hints and binary magic bytes, including `.mks` sources carrying embedded `S_VOBSUB`                                                                          |
+| `createAutoSubtitleRenderer`            | `(options: AutoVideoSubtitleOptions) => PgsRenderer \| VobSubRenderer`                                                                                                 | Throws if format cannot be determined                                                                                                                                  |
+| `openSubtitles`                         | `(source: AutoSubtitleSource, options?: SubtitleDiagnosticsOptions) => Promise<OpenedSubtitles>`                                                                       | Initializes WASM, auto-detects the format, and returns a normalized low-level handle                                                                                   |
+| `probeRangeSupport`                     | `(url: string, options?: AssetFetchOptions) => Promise<RangeProbeResult>`                                                                                              | Probe HTTP Range support and content length                                                                                                                            |
+| `fetchSubtitleAsset`                    | `(url: string, options?: AssetFetchOptions, onChunk?) => Promise<{ data, strategy, rangeSupported, total }>`                                                           | Range/stream-aware binary download with progressive chunk callbacks                                                                                                    |
+| `fetchSubtitleText`                     | `(url: string, options?: AssetFetchOptions) => Promise<string>`                                                                                                        | Text download helper for small assets such as `.idx`                                                                                                                   |
+| `renderFrameData`                       | `(frame: SubtitleData, options?: SubtitleFrameRenderOptions) => SubtitleRenderedFrameData \| null`                                                                     | Composes subtitle compositions into a single `ImageData` export                                                                                                        |
+| `toCanvas`                              | `(frame: SubtitleData \| SubtitleRenderedFrameData, target?: SubtitleFrameCanvasTarget, options?: SubtitleFrameCanvasOptions) => HTMLCanvasElement \| OffscreenCanvas` | Draws a frame export to a new or existing canvas or 2D context                                                                                                         |
+| `toImageBitmap`                         | `(frame: SubtitleData \| SubtitleRenderedFrameData, options?: SubtitleFrameRenderOptions) => Promise<ImageBitmap>`                                                     | Creates an `ImageBitmap` from a composed subtitle frame                                                                                                                |
+| `toBlob`                                | `(frame: SubtitleData \| SubtitleRenderedFrameData, type?: string, quality?: number, options?: SubtitleFrameRenderOptions) => Promise<Blob>`                           | Encodes a composed subtitle frame, defaulting to PNG                                                                                                                   |
+| `SubtitleDiagnosticError`               | `class extends Error`                                                                                                                                                  | Structured diagnostic error with `code`, `format`, and `details`                                                                                                       |
+| `createSubtitleDiagnosticError`         | `(code, message, options?) => SubtitleDiagnosticError`                                                                                                                 | Create a typed diagnostics error manually                                                                                                                              |
+| `normalizeSubtitleError`                | `(error, context?) => SubtitleDiagnosticError`                                                                                                                         | Map generic errors into stable libbitsub diagnostic codes                                                                                                              |
 
 Legacy aliases: `PGSRenderer`, `VobsubRenderer`, `UnifiedSubtitleRenderer`.
 
@@ -163,17 +164,13 @@ interface SubtitleDiagnosticsOptions {
 Returned by `getRuntimeCapabilities()`:
 
 ```ts
-type SubtitlePresentPath =
-  | 'main-webgpu'
-  | 'main-webgl2'
-  | 'worker-offscreen'
-  | 'main-canvas2d'
-  | 'main-thread'
+type SubtitlePresentPath = 'main-webgpu' | 'main-webgl2' | 'worker-offscreen' | 'main-canvas2d' | 'main-thread'
 
 interface RuntimeCapabilities {
   worker: boolean
   offscreenCanvas: boolean
   transferControlToOffscreen: boolean
+  offscreenCanvas2d: boolean
   workerOffscreenRender: boolean
   webgpu: boolean
   webgl2: boolean
@@ -232,7 +229,10 @@ interface SubtitleRenderedFrameData {
 }
 
 type SubtitleFrameCanvasTarget =
-  HTMLCanvasElement | OffscreenCanvas | CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D
+  | HTMLCanvasElement
+  | OffscreenCanvas
+  | CanvasRenderingContext2D
+  | OffscreenCanvasRenderingContext2D
 
 interface SubtitleFrameCanvasOptions extends SubtitleFrameRenderOptions {
   resizeCanvas?: boolean
@@ -443,7 +443,12 @@ type SubtitleDiagnosticErrorCode =
   | 'UNKNOWN'
 
 type SubtitleDiagnosticWarningCode =
-  'BAD_IDX' | 'INVALID_FRAME_DATA' | 'INVALID_SUBTITLE_DATA' | 'MISSING_PALETTE' | 'RANGE_FALLBACK' | 'WORKER_FALLBACK'
+  | 'BAD_IDX'
+  | 'INVALID_FRAME_DATA'
+  | 'INVALID_SUBTITLE_DATA'
+  | 'MISSING_PALETTE'
+  | 'RANGE_FALLBACK'
+  | 'WORKER_FALLBACK'
 ```
 
 `SubtitleDiagnosticErrorLike` extends `Error` with `code`, `format?`, `details?`, and `cause?`.
@@ -524,7 +529,7 @@ interface SubtitleRendererStats {
   avgRenderTime: number // ms
   maxRenderTime: number // ms
   minRenderTime: number // ms
-  lastRenderTime: number // ms
+  lastRenderTime: number // ms; presentation latency on worker-offscreen, UI-thread render cost otherwise
   renderFps: number
   usingWorker: boolean
   cachedFrames: number

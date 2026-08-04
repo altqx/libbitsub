@@ -4,9 +4,11 @@ import {
   canUseWorkerOffscreenRender,
   getRuntimeCapabilities,
   isCanvas2DSupported,
+  isOffscreenCanvas2DSupported,
   isOffscreenCanvasSupported,
   isTransferControlToOffscreenSupported
 } from './capabilities'
+import { isWorkerAvailable } from './worker'
 
 test('getRuntimeCapabilities reports a coherent present-path snapshot', () => {
   const caps = getRuntimeCapabilities()
@@ -14,6 +16,7 @@ test('getRuntimeCapabilities reports a coherent present-path snapshot', () => {
   expect(typeof caps.worker).toBe('boolean')
   expect(typeof caps.offscreenCanvas).toBe('boolean')
   expect(typeof caps.transferControlToOffscreen).toBe('boolean')
+  expect(typeof caps.offscreenCanvas2d).toBe('boolean')
   expect(typeof caps.workerOffscreenRender).toBe('boolean')
   expect(typeof caps.webgpu).toBe('boolean')
   expect(typeof caps.webgl2).toBe('boolean')
@@ -25,14 +28,12 @@ test('getRuntimeCapabilities reports a coherent present-path snapshot', () => {
   expect(Array.isArray(caps.reasons)).toBe(true)
 })
 
-test('workerOffscreenRender requires worker + OffscreenCanvas + transferControlToOffscreen', () => {
+test('workerOffscreenRender requires worker + OffscreenCanvas + transferControlToOffscreen + OffscreenCanvas 2D', () => {
   const expected =
-    typeof Worker !== 'undefined' &&
-    typeof window !== 'undefined' &&
-    typeof Blob !== 'undefined' &&
+    isWorkerAvailable() &&
     isOffscreenCanvasSupported() &&
     isTransferControlToOffscreenSupported() &&
-    isCanvas2DSupported()
+    isOffscreenCanvas2DSupported()
 
   expect(canUseWorkerOffscreenRender()).toBe(expected)
   expect(getRuntimeCapabilities().workerOffscreenRender).toBe(expected)
@@ -85,6 +86,54 @@ test('Canvas2D detection falls back to an HTML canvas when OffscreenCanvas lacks
       Object.defineProperty(globalThis, 'document', documentDescriptor)
     } else {
       delete (globalThis as { document?: unknown }).document
+    }
+  }
+})
+
+test('reports a dedicated reason when Worker OffscreenCanvas lacks a 2D context', () => {
+  const workerDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'Worker')
+  const windowDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'window')
+  const offscreenDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'OffscreenCanvas')
+  const htmlCanvasDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'HTMLCanvasElement')
+
+  Object.defineProperty(globalThis, 'Worker', { configurable: true, value: class {} })
+  Object.defineProperty(globalThis, 'window', { configurable: true, value: globalThis })
+  Object.defineProperty(globalThis, 'OffscreenCanvas', {
+    configurable: true,
+    value: class {
+      getContext(): null {
+        return null
+      }
+    }
+  })
+  class MockHtmlCanvasElement {}
+  Object.defineProperty(MockHtmlCanvasElement.prototype, 'transferControlToOffscreen', {
+    configurable: true,
+    value: () => ({})
+  })
+  Object.defineProperty(globalThis, 'HTMLCanvasElement', { configurable: true, value: MockHtmlCanvasElement })
+
+  try {
+    const caps = getRuntimeCapabilities()
+    expect(caps.offscreenCanvas2d).toBe(false)
+    expect(caps.workerOffscreenRender).toBe(false)
+    if (!caps.webgpu && !caps.webgl2) {
+      expect(caps.reasons).toContain(
+        'OffscreenCanvas 2D context unavailable; Worker presentation requires Canvas2D in the Worker.'
+      )
+    }
+  } finally {
+    for (const [name, descriptor] of [
+      ['Worker', workerDescriptor],
+      ['window', windowDescriptor],
+      ['OffscreenCanvas', offscreenDescriptor],
+      ['HTMLCanvasElement', htmlCanvasDescriptor]
+    ] as const) {
+      if (descriptor) {
+        Object.defineProperty(globalThis, name, descriptor)
+      } else {
+        Reflect.deleteProperty(globalThis, name)
+      }
     }
   }
 })
