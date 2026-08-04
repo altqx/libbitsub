@@ -1,11 +1,11 @@
 ---
 name: libbitsub
-description: Integration guide for libbitsub — a WASM-based high-performance bitmap subtitle renderer (PGS, VobSub, and MKS-embedded VobSub) for the browser. Use when adding graphical subtitle support to a video player (including Video.js, Shaka Player, hls.js, or React), integrating PGS (.sup), VobSub (.sub/.idx), or `.mks` files carrying embedded `S_VOBSUB`, configuring layout controls (scale, aspect mode, offset, opacity), or using the low-level parser APIs.
+description: Integration guide for libbitsub — a WASM-based high-performance bitmap subtitle renderer (PGS, VobSub, DVB, and MKS-embedded VobSub) for the browser. Use when adding graphical subtitle support to a video player (including Video.js, Shaka Player, hls.js, or React), integrating PGS (.sup), VobSub (.sub/.idx), DVB (`"DV"` framed / PES), or `.mks` files carrying embedded `S_VOBSUB`, configuring layout controls (scale, aspect mode, offset, opacity), or using the low-level parser APIs.
 ---
 
 # libbitsub Integration
 
-libbitsub is a Rust/WASM-powered bitmap subtitle renderer for PGS (Blu-ray .sup), VobSub (DVD .sub/.idx), and Matroska `.mks` files with embedded `S_VOBSUB` tracks. It manages canvas overlay, video sync, resize, worker offloading, and GPU rendering automatically.
+libbitsub is a Rust/WASM-powered bitmap subtitle renderer for PGS (Blu-ray .sup), VobSub (DVD .sub/.idx), DVB-SUB (ETSI EN 300 743), and Matroska `.mks` files with embedded `S_VOBSUB` tracks. It manages canvas overlay, video sync, resize, worker offloading, and GPU rendering automatically.
 
 ## Installation
 
@@ -49,9 +49,9 @@ All adapters ultimately bind a high-level renderer to an `HTMLVideoElement` and 
 
 ## WASM initialization
 
-The WASM module initializes automatically — high-level renderers (`PgsRenderer`, `VobSubRenderer`) call `initWasm()` internally, and the module also triggers a non-blocking pre-init on first import in browser environments. No explicit initialization is needed for renderer usage.
+The WASM module initializes automatically — high-level renderers (`PgsRenderer`, `VobSubRenderer`, `DvbRenderer`) call `initWasm()` internally, and the module also triggers a non-blocking pre-init on first import in browser environments. No explicit initialization is needed for renderer usage.
 
-For low-level parsers (`PgsParser`, `VobSubParserLowLevel`), await `initWasm()` before calling parser methods:
+For low-level parsers (`PgsParser`, `VobSubParserLowLevel`, `DvbParser`), await `initWasm()` before calling parser methods:
 
 ```ts
 import { initWasm, PgsParser } from 'libbitsub'
@@ -141,6 +141,24 @@ renderer.setDebandRange(15)
 renderer.dispose()
 ```
 
+### DVB
+
+```ts
+import { DvbRenderer } from 'libbitsub'
+
+const renderer = new DvbRenderer({
+  video: videoElement,
+  subUrl: '/subtitles/track.dvb' // or a `"DV"`-framed dump served as .sub
+  // or pass subContent: arrayBuffer for in-memory PES / DV-framed data
+})
+
+renderer.dispose()
+```
+
+DVB file dumps use libbitsub framing: `"DV" | pts_90k_be_u32 | payload_len_be_u32 | payload…`, where `payload` is a PES data field (`0x20 0x00 …`) or raw segments starting at sync byte `0x0F`. Concatenated MPEG PES (`00 00 01 BD`) with PTS is also accepted.
+
+The DVB decoder renders bitmap object coding method 0. Character-string and reserved object coding methods are ignored.
+
 ### Auto-detect format
 
 ```ts
@@ -153,7 +171,7 @@ const renderer = createAutoSubtitleRenderer({
 })
 ```
 
-Detection uses file extension + binary magic bytes. `.mks` sources resolve to VobSub only when they contain an embedded `S_VOBSUB` track. Throws if format cannot be determined.
+Detection uses file hints + binary magic bytes. `.idx` / `idxContent` still means VobSub. Bare `.sub` is probed for DVB before VobSub. `.mks` sources resolve to VobSub only when they contain an embedded `S_VOBSUB` track. Throws if format cannot be determined.
 
 ## Layout controls
 
@@ -219,7 +237,7 @@ Key points:
 
 ## One-shot auto opener
 
-When the caller only wants a stable low-level surface and does not care whether the source is PGS or VobSub, use `openSubtitles()` instead of manually combining `initWasm()`, `UnifiedSubtitleParser`, and `loadAuto()`.
+When the caller only wants a stable low-level surface and does not care whether the source is PGS, VobSub, or DVB, use `openSubtitles()` instead of manually combining `initWasm()`, `UnifiedSubtitleParser`, and `loadAuto()`.
 
 ```ts
 import { openSubtitles } from 'libbitsub'
@@ -389,7 +407,7 @@ The transfer RGBA path remains for main-thread GPU/Canvas2D present; older TVs w
 
 ## Key constraints
 
-- Bitmap subtitles only (PGS, VobSub, and `.mks` files carrying embedded `S_VOBSUB`). Does **not** handle SRT, ASS, or any text-based formats.
+- Bitmap subtitles only (PGS, VobSub, DVB-SUB, and `.mks` files carrying embedded `S_VOBSUB`). Does **not** handle SRT, ASS, or any text-based formats.
 - `.mks` support is limited to embedded `S_VOBSUB` tracks. It is not a general Matroska subtitle parser.
 - Multiple renderers can coexist; each has its own isolated parser session.
 - If the shared worker fails to start, the API falls back to main-thread rendering and emits `WORKER_FALLBACK` through diagnostics/event hooks.

@@ -355,6 +355,133 @@ impl Default for VobSubParser {
     }
 }
 
+/// DVB subtitle parser and renderer exposed to JavaScript.
+#[wasm_bindgen]
+pub struct DvbParser {
+    inner: core::DvbParser,
+}
+
+#[wasm_bindgen]
+impl DvbParser {
+    #[wasm_bindgen(constructor)]
+    pub fn new() -> Self {
+        Self {
+            inner: core::DvbParser::new(),
+        }
+    }
+
+    pub fn parse(&mut self, data: &[u8]) -> usize {
+        self.inner.parse(data)
+    }
+
+    pub fn reset(&mut self) {
+        self.inner.reset()
+    }
+
+    pub fn feed(&mut self, data: &[u8]) -> usize {
+        self.inner.feed(data)
+    }
+
+    #[wasm_bindgen(js_name = finishFeed)]
+    pub fn finish_feed(&mut self) -> usize {
+        self.inner.finish_feed()
+    }
+
+    #[wasm_bindgen(getter, js_name = pendingLen)]
+    pub fn pending_len(&self) -> usize {
+        self.inner.pending_len()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn count(&self) -> usize {
+        self.inner.count()
+    }
+
+    #[wasm_bindgen(getter, js_name = screenWidth)]
+    pub fn screen_width(&self) -> u16 {
+        self.inner.screen_width()
+    }
+
+    #[wasm_bindgen(getter, js_name = screenHeight)]
+    pub fn screen_height(&self) -> u16 {
+        self.inner.screen_height()
+    }
+
+    #[wasm_bindgen(js_name = getTimestamps)]
+    pub fn get_timestamps(&self) -> Float64Array {
+        timestamps_to_array(self.inner.get_timestamps())
+    }
+
+    #[wasm_bindgen(js_name = getEndTimestamps)]
+    pub fn get_end_timestamps(&self) -> Float64Array {
+        timestamps_to_array(self.inner.get_end_timestamps())
+    }
+
+    #[wasm_bindgen(js_name = findIndexAtTimestamp)]
+    pub fn find_index_at_timestamp(&self, time_ms: f64) -> i32 {
+        self.inner.find_index_at_timestamp(time_ms)
+    }
+
+    #[wasm_bindgen(js_name = getCueStartTime)]
+    pub fn get_cue_start_time(&self, index: usize) -> f64 {
+        self.inner.get_cue_start_time(index)
+    }
+
+    #[wasm_bindgen(js_name = getCueEndTime)]
+    pub fn get_cue_end_time(&self, index: usize) -> f64 {
+        self.inner.get_cue_end_time(index)
+    }
+
+    #[wasm_bindgen(js_name = getCueCompositionCount)]
+    pub fn get_cue_composition_count(&self, index: usize) -> u32 {
+        self.inner.get_cue_composition_count(index)
+    }
+
+    #[wasm_bindgen(js_name = getCuePageState)]
+    pub fn get_cue_page_state(&self, index: usize) -> i32 {
+        self.inner.get_cue_page_state(index)
+    }
+
+    #[wasm_bindgen(js_name = renderAtIndex)]
+    pub fn render_at_index(&mut self, index: usize) -> Option<SubtitleFrame> {
+        self.inner
+            .render_at_index(index)
+            .map(|frame| SubtitleFrame {
+                inner: core::SubtitleFrame {
+                    width: frame.width,
+                    height: frame.height,
+                    compositions: frame
+                        .compositions
+                        .into_iter()
+                        .map(|comp| core::SubtitleComposition {
+                            x: comp.x,
+                            y: comp.y,
+                            width: comp.width,
+                            height: comp.height,
+                            rgba: comp.rgba,
+                        })
+                        .collect(),
+                },
+            })
+    }
+
+    #[wasm_bindgen(getter, js_name = lastRenderIssue)]
+    pub fn last_render_issue(&self) -> String {
+        self.inner.last_render_issue()
+    }
+
+    #[wasm_bindgen(js_name = clearCache)]
+    pub fn clear_cache(&mut self) {
+        self.inner.clear_cache();
+    }
+}
+
+impl Default for DvbParser {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// A VobSub subtitle frame.
 #[wasm_bindgen]
 pub struct VobSubFrame {
@@ -405,13 +532,15 @@ impl VobSubFrame {
 pub enum SubtitleFormat {
     Pgs = 0,
     VobSub = 1,
+    Dvb = 2,
 }
 
-/// Unified subtitle renderer for both PGS and VobSub formats.
+/// Unified subtitle renderer for PGS, VobSub, and DVB formats.
 #[wasm_bindgen]
 pub struct SubtitleRenderer {
     pgs_parser: Option<core::PgsParser>,
     vobsub_parser: Option<core::VobSubParser>,
+    dvb_parser: Option<core::DvbParser>,
     format: Option<SubtitleFormat>,
 }
 
@@ -422,6 +551,7 @@ impl SubtitleRenderer {
         Self {
             pgs_parser: None,
             vobsub_parser: None,
+            dvb_parser: None,
             format: None,
         }
     }
@@ -466,6 +596,16 @@ impl SubtitleRenderer {
         self.format = Some(SubtitleFormat::VobSub);
     }
 
+    #[wasm_bindgen(js_name = loadDvb)]
+    pub fn load_dvb(&mut self, data: &[u8]) -> usize {
+        self.dispose();
+        let mut parser = core::DvbParser::new();
+        let count = parser.parse(data);
+        self.dvb_parser = Some(parser);
+        self.format = Some(SubtitleFormat::Dvb);
+        count
+    }
+
     #[wasm_bindgen(getter)]
     pub fn format(&self) -> Option<SubtitleFormat> {
         self.format
@@ -476,6 +616,7 @@ impl SubtitleRenderer {
         match self.format {
             Some(SubtitleFormat::Pgs) => self.pgs_parser.as_ref().map_or(0, |p| p.count()),
             Some(SubtitleFormat::VobSub) => self.vobsub_parser.as_ref().map_or(0, |p| p.count()),
+            Some(SubtitleFormat::Dvb) => self.dvb_parser.as_ref().map_or(0, |p| p.count()),
             None => 0,
         }
     }
@@ -487,6 +628,7 @@ impl SubtitleRenderer {
             Some(SubtitleFormat::VobSub) => {
                 self.vobsub_parser.as_ref().map_or(0, |p| p.screen_width())
             }
+            Some(SubtitleFormat::Dvb) => self.dvb_parser.as_ref().map_or(0, |p| p.screen_width()),
             None => 0,
         }
     }
@@ -498,6 +640,7 @@ impl SubtitleRenderer {
             Some(SubtitleFormat::VobSub) => {
                 self.vobsub_parser.as_ref().map_or(0, |p| p.screen_height())
             }
+            Some(SubtitleFormat::Dvb) => self.dvb_parser.as_ref().map_or(0, |p| p.screen_height()),
             None => 0,
         }
     }
@@ -511,6 +654,10 @@ impl SubtitleRenderer {
                 .map_or(-1.0, |p| p.get_cue_start_time(index)),
             Some(SubtitleFormat::VobSub) => self
                 .vobsub_parser
+                .as_ref()
+                .map_or(-1.0, |p| p.get_cue_start_time(index)),
+            Some(SubtitleFormat::Dvb) => self
+                .dvb_parser
                 .as_ref()
                 .map_or(-1.0, |p| p.get_cue_start_time(index)),
             None => -1.0,
@@ -527,6 +674,10 @@ impl SubtitleRenderer {
             Some(SubtitleFormat::VobSub) => self
                 .vobsub_parser
                 .as_mut()
+                .map_or(-1.0, |p| p.get_cue_end_time(index)),
+            Some(SubtitleFormat::Dvb) => self
+                .dvb_parser
+                .as_ref()
                 .map_or(-1.0, |p| p.get_cue_end_time(index)),
             None => -1.0,
         }
@@ -586,6 +737,10 @@ impl SubtitleRenderer {
                 .vobsub_parser
                 .as_ref()
                 .map_or_else(String::new, |p| p.last_render_issue()),
+            Some(SubtitleFormat::Dvb) => self
+                .dvb_parser
+                .as_ref()
+                .map_or_else(String::new, |p| p.last_render_issue()),
             None => String::new(),
         }
     }
@@ -598,6 +753,10 @@ impl SubtitleRenderer {
                 |p| timestamps_to_array(p.get_timestamps()),
             ),
             Some(SubtitleFormat::VobSub) => self.vobsub_parser.as_ref().map_or_else(
+                || Float64Array::new_with_length(0),
+                |p| timestamps_to_array(p.get_timestamps()),
+            ),
+            Some(SubtitleFormat::Dvb) => self.dvb_parser.as_ref().map_or_else(
                 || Float64Array::new_with_length(0),
                 |p| timestamps_to_array(p.get_timestamps()),
             ),
@@ -615,6 +774,10 @@ impl SubtitleRenderer {
             Some(SubtitleFormat::VobSub) => self
                 .vobsub_parser
                 .as_mut()
+                .map_or(-1, |p| p.find_index_at_timestamp(time_ms)),
+            Some(SubtitleFormat::Dvb) => self
+                .dvb_parser
+                .as_ref()
                 .map_or(-1, |p| p.find_index_at_timestamp(time_ms)),
             None => -1,
         }
@@ -657,6 +820,26 @@ impl SubtitleRenderer {
                     }],
                 })
             }
+            Some(SubtitleFormat::Dvb) => {
+                let frame = self.dvb_parser.as_mut()?.render_at_index(index)?;
+                let compositions = frame
+                    .compositions
+                    .into_iter()
+                    .map(|comp| RenderComposition {
+                        x: comp.x,
+                        y: comp.y,
+                        width: comp.width,
+                        height: comp.height,
+                        rgba: comp.rgba,
+                    })
+                    .collect();
+
+                Some(RenderResult {
+                    screen_width: frame.width,
+                    screen_height: frame.height,
+                    compositions,
+                })
+            }
             None => None,
         }
     }
@@ -678,11 +861,15 @@ impl SubtitleRenderer {
         if let Some(parser) = self.vobsub_parser.as_mut() {
             parser.clear_cache();
         }
+        if let Some(parser) = self.dvb_parser.as_mut() {
+            parser.clear_cache();
+        }
     }
 
     pub fn dispose(&mut self) {
         self.pgs_parser = None;
         self.vobsub_parser = None;
+        self.dvb_parser = None;
         self.format = None;
     }
 }

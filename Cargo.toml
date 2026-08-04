@@ -5,10 +5,10 @@ edition = "2024"
 rust-version = "1.85"
 authors = ["altqx"]
 license = "MIT"
-description = "High-performance WASM renderer for graphical subtitles (PGS and VobSub)"
+description = "High-performance WASM renderer for graphical subtitles (PGS, VobSub, and DVB)"
 readme = "README.md"
 repository = "https://github.com/altqx/libbitsub"
-keywords = ["pgs", "vobsub", "subtitle", "wasm", "rendering"]
+keywords = ["pgs", "vobsub", "dvb", "subtitle", "wasm"]
 categories = ["multimedia::video", "parser-implementations", "wasm"]
 include = [
     "/Cargo.toml",

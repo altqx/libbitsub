@@ -80,10 +80,10 @@ export {
 export { renderFrameData, toBlob, toCanvas, toImageBitmap } from './frame-export'
 
 // Parsers
-export { PgsParser, VobSubParserLowLevel, UnifiedSubtitleParser, openSubtitles } from './parsers'
+export { PgsParser, DvbParser, VobSubParserLowLevel, UnifiedSubtitleParser, openSubtitles } from './parsers'
 
 // Renderers
-export { PgsRenderer, VobSubRenderer, createAutoSubtitleRenderer } from './renderers'
+export { PgsRenderer, DvbRenderer, VobSubRenderer, createAutoSubtitleRenderer } from './renderers'
 
 // GPU renderers (advanced use)
 export { WebGPURenderer, isWebGPUSupported } from './webgpu-renderer'

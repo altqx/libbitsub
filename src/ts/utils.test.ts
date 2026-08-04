@@ -90,3 +90,62 @@ describe('detectSubtitleFormat Matroska VobSub probing', () => {
     expect(detectSubtitleFormat({ data: binary })).toBeNull()
   })
 })
+
+describe('detectSubtitleFormat DVB probing', () => {
+  function encodeDvFrame(pts90k: number, payload: Uint8Array): Uint8Array {
+    const out = new Uint8Array(10 + payload.length)
+    out[0] = 0x44 // D
+    out[1] = 0x56 // V
+    out[2] = (pts90k >>> 24) & 0xff
+    out[3] = (pts90k >>> 16) & 0xff
+    out[4] = (pts90k >>> 8) & 0xff
+    out[5] = pts90k & 0xff
+    out[6] = (payload.length >>> 24) & 0xff
+    out[7] = (payload.length >>> 16) & 0xff
+    out[8] = (payload.length >>> 8) & 0xff
+    out[9] = payload.length & 0xff
+    out.set(payload, 10)
+    return out
+  }
+
+  function makeDvbPayload(): Uint8Array {
+    // PES data field + page composition + end of display set
+    return Uint8Array.from([
+      0x20,
+      0x00,
+      0x0f,
+      0x10,
+      0x00,
+      0x01,
+      0x00,
+      0x02,
+      0x05,
+      0x10,
+      0x0f,
+      0x80,
+      0x00,
+      0x01,
+      0x00,
+      0x00,
+      0xff
+    ])
+  }
+
+  test('detects DV-framed dumps as DVB', () => {
+    const framed = encodeDvFrame(90_000, makeDvbPayload())
+    expect(detectSubtitleFormat({ data: framed, fileName: 'track.sub' })).toBe('dvb')
+  })
+
+  test('detects .dvb filename hint', () => {
+    expect(detectSubtitleFormat({ fileName: 'track.dvb' })).toBe('dvb')
+  })
+
+  test('idx companion still forces VobSub over DVB-looking .sub', () => {
+    const framed = encodeDvFrame(90_000, makeDvbPayload())
+    expect(detectSubtitleFormat({ data: framed, fileName: 'track.sub', idxUrl: 'track.idx' })).toBe('vobsub')
+  })
+
+  test('bare .sub without bytes still defaults to VobSub', () => {
+    expect(detectSubtitleFormat({ fileName: 'track.sub' })).toBe('vobsub')
+  })
+})

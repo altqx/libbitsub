@@ -5,16 +5,18 @@ worker correctness fixes into durable guarantees.
 
 ## What the suite covers
 
-| Area                    | Guarantees                                                                                                       |
-| ----------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| Malformed PGS           | Bad magic, truncated segments, ODS length mismatches never panic and never produce bogus bitmaps                 |
-| Malformed VobSub / IDX  | Missing palette still yields timestamps; corrupt packets fail closed                                             |
-| Malformed MKS           | Non-`S_VOBSUB` tracks and empty/invalid blocks are rejected                                                      |
-| Palette edge cases      | Index 255, short palettes, out-of-range indices, fully transparent entries                                       |
-| Zero-length RLE         | PGS count-0 color/transparent runs do not hang; VobSub EOL uses the code color                                   |
-| Alternate display sizes | 720×480, 1280×720, 1920×1080, 3840×2160 screen metrics round-trip                                                |
-| Slow worker startup     | Concurrent `warmup()` / `ready()` / `getOrCreateWorker()` share one init; failures do not publish a ready worker |
-| Golden pixels           | Software compositor fingerprints + Canvas2D/WebGL2/WebGPU parity                                                 |
+| Area                    | Guarantees                                                                                                                               |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| Malformed PGS           | Bad magic, truncated segments, ODS length mismatches never panic and never produce bogus bitmaps                                         |
+| Malformed VobSub / IDX  | Missing palette still yields timestamps; corrupt packets fail closed                                                                     |
+| Malformed DVB           | Truncated segments / invalid field lengths fail closed; `"DV"` framing requires real PTS; incomplete display sets wait for EDS           |
+| DVB state/timing        | Acquisition and mode-change pages reset inherited state; page timeouts produce real cue gaps on main-thread, worker, and offscreen paths |
+| Malformed MKS           | Non-`S_VOBSUB` tracks and empty/invalid blocks are rejected                                                                              |
+| Palette edge cases      | Index 255, short palettes, out-of-range indices, fully transparent entries                                                               |
+| Zero-length RLE         | PGS count-0 color/transparent runs do not hang; VobSub EOL uses the code color                                                           |
+| Alternate display sizes | 720×480, 1280×720, 1920×1080, 3840×2160 screen metrics round-trip                                                                        |
+| Slow worker startup     | Concurrent `warmup()` / `ready()` / `getOrCreateWorker()` share one init; failures do not publish a ready worker                         |
+| Golden pixels           | Software compositor fingerprints + Canvas2D/WebGL2/WebGPU parity                                                                         |
 
 ## How to run
 

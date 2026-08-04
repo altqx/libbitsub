@@ -1,6 +1,6 @@
 # libbit(map)sub
 
-High-performance WASM renderer for graphical subtitles (PGS, VobSub, and MKS-embedded VobSub), written in Rust.
+High-performance WASM renderer for graphical subtitles (PGS, VobSub, DVB-SUB, and MKS-embedded VobSub), written in Rust.
 
 Started as a fork of Arcus92's [libpgs-js](https://github.com/Arcus92/libpgs-js), this project was reworked for higher performance and broader format support. It keeps the familiar high-level PGS-oriented API while adding a lower-level parser surface, VobSub support, GPU backends, and worker-backed rendering.
 
@@ -8,6 +8,7 @@ Started as a fork of Arcus92's [libpgs-js](https://github.com/Arcus92/libpgs-js)
 
 - PGS (Blu-ray) subtitle parsing and rendering
 - VobSub (DVD) subtitle parsing and rendering
+- DVB-SUB (ETSI EN 300 743) parsing and rendering via PES/ES and `"DV"` PTS-framed dumps
 - Matroska `.mks` extraction for embedded `S_VOBSUB` tracks
 - WebGPU, WebGL2, and Canvas2D rendering with automatic fallback
 - Worker-backed parsing/rendering for large subtitle files
@@ -290,6 +291,27 @@ renderer.setDebandThreshold(64)
 renderer.setDebandRange(15)
 ```
 
+### DVB renderer
+
+```ts
+import { DvbRenderer } from 'libbitsub'
+
+const renderer = new DvbRenderer({
+  video: videoElement,
+  subUrl: '/subtitles/track.dvb'
+})
+```
+
+DVB dumps use libbitsub framing:
+
+```
+"DV" | pts_90k_be_u32 | payload_len_be_u32 | payload…
+```
+
+`payload` is a PES data field (`0x20 0x00 …`) or raw segments (`sync_byte 0x0F`). Concatenated MPEG PES packets (`00 00 01 BD`) with PTS are also accepted.
+
+The DVB decoder renders bitmap object coding method 0. Character-string and reserved object coding methods are ignored.
+
 ### Automatic format detection
 
 ```ts
@@ -302,7 +324,7 @@ const renderer = createAutoSubtitleRenderer({
 })
 ```
 
-Automatic detection uses file hints when available and otherwise inspects the binary payload. `.mks` sources are treated as VobSub only when they contain an embedded `S_VOBSUB` track. If the format cannot be identified confidently, it throws instead of silently forcing a parser.
+Automatic detection uses file hints when available and otherwise inspects the binary payload. `.idx` / `idxContent` still means VobSub. Bare `.sub` is content-probed for DVB before VobSub. `.mks` sources are treated as VobSub only when they contain an embedded `S_VOBSUB` track. If the format cannot be identified confidently, it throws instead of silently forcing a parser.
 
 ## Layout controls
 
@@ -608,7 +630,7 @@ Emitted events:
 | `loaded`          | subtitle format and parser metadata                                               |
 | `error`           | subtitle format and `SubtitleDiagnosticErrorLike`                                 |
 | `warning`         | `SubtitleDiagnosticWarning`                                                       |
-| `renderer-change` | active backend: `webgpu`, `webgl2`, `worker-offscreen`, or `canvas2d`              |
+| `renderer-change` | active backend: `webgpu`, `webgl2`, `worker-offscreen`, or `canvas2d`             |
 | `worker-state`    | whether worker mode is enabled, ready, fallback status, and the active session ID |
 | `cache-change`    | cached frame count, pending renders, and configured cache limit                   |
 | `cue-change`      | current cue metadata or `null` when nothing is displayed                          |
@@ -744,8 +766,8 @@ Browser/device support matrix (including webOS TV): [docs/COMPATIBILITY.md](./do
 - `warmup(): Promise<void>` / `ready(): Promise<void>` pre-initialize the shared subtitle worker (including in-worker WASM). Safe to call multiple times; concurrent callers share one init promise. Prefer these in TV/player apps before the first track switch.
 - `isWorkerAvailable(): boolean` / `isWorkerReady(): boolean` report worker support and whether the shared worker has finished initializing.
 - `isWebGPUSupported(): boolean` checks WebGPU support.
-- `detectSubtitleFormat(source: AutoSubtitleSource): 'pgs' | 'vobsub' | null` detects the bitmap subtitle format from file hints or binary data.
-- `createAutoSubtitleRenderer(options: AutoVideoSubtitleOptions): PgsRenderer | VobSubRenderer` creates a high-level renderer after format detection.
+- `detectSubtitleFormat(source: AutoSubtitleSource): 'pgs' | 'vobsub' | 'dvb' | null` detects the bitmap subtitle format from file hints or binary data.
+- `createAutoSubtitleRenderer(options: AutoVideoSubtitleOptions): PgsRenderer | VobSubRenderer | DvbRenderer` creates a high-level renderer after format detection.
 - `openSubtitles(source, options?): Promise<OpenedSubtitles>` initializes WASM, auto-detects the low-level format, and returns a normalized parser handle.
 - `probeRangeSupport(url, options?)` / `fetchSubtitleAsset(url, options?, onChunk?)` / `fetchSubtitleText(url, options?)` perform Range-aware progressive asset downloads for custom loaders.
 - `renderFrameData(frame, options?): SubtitleRenderedFrameData | null` composes a `SubtitleData` frame into exportable pixels.
@@ -786,6 +808,10 @@ Browser/device support matrix (including webOS TV): [docs/COMPATIBILITY.md](./do
 - `setDebandRange(range: number): void` updates the deband sample range.
 - `debandEnabled: boolean` reports whether debanding is enabled.
 
+#### `DvbRenderer`
+
+- Supports all `PgsRenderer` methods above (streaming/`feed` path, no debanding).
+
 ### Low-level parsers
 
 #### `PgsParser`
@@ -803,6 +829,12 @@ Browser/device support matrix (including webOS TV): [docs/COMPATIBILITY.md](./do
 - `clearCache(): void` clears parser-side caches.
 - `dispose(): void` frees parser resources.
 
+#### `DvbParser`
+
+- Same progressive surface as `PgsParser` for `"DV"`-framed dumps and MPEG PES streams.
+- `load(data: Uint8Array): number` / `feed` / `finishFeed` / `renderAtIndex` / `renderAtTimestamp` / `getMetadata` / `getCueMetadata` / `dispose`.
+- `getEndTimestamps(): Float64Array` returns the page-timeout-aware cue end timestamps in milliseconds.
+
 #### `VobSubParserLowLevel`
 
 - `loadFromData(idxContent: string, subData: Uint8Array): void` loads IDX and SUB data (simple in-memory path).
@@ -818,8 +850,9 @@ Browser/device support matrix (including webOS TV): [docs/COMPATIBILITY.md](./do
 - `loadPgs(data: Uint8Array): number` loads PGS data.
 - `loadVobSub(idxContent: string, subData: Uint8Array): void` loads VobSub from IDX and SUB.
 - `loadVobSubOnly(subData: Uint8Array): void` loads SUB-only VobSub data.
+- `loadDvb(data: Uint8Array): number` loads DVB data.
 - `loadAuto(source: AutoSubtitleSource): SubtitleFormatName` detects and loads a supported bitmap subtitle format.
-- `format: 'pgs' | 'vobsub' | null` returns the active format.
+- `format: 'pgs' | 'vobsub' | 'dvb' | null` returns the active format.
 - `getTimestamps()`, `count`, `findIndexAtTimestamp()`, `renderAtIndex()`, `renderAtTimestamp()`, `getMetadata()`, `getCueMetadata()`, `clearCache()`, and `dispose()` are available as on the format-specific parsers.
 
 ### Core option and data types
@@ -925,7 +958,7 @@ Related diagnostics shapes:
 
 ```ts
 interface SubtitleParserMetadata {
-  format: 'pgs' | 'vobsub'
+  format: 'pgs' | 'vobsub' | 'dvb'
   cueCount: number
   screenWidth: number
   screenHeight: number

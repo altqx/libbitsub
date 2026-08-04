@@ -43,7 +43,7 @@ import {
   setCacheLimit as applyCacheLimit,
   setCachedFrame
 } from './utils'
-import { PgsParser, VobSubParserLowLevel } from './parsers'
+import { PgsParser, DvbParser, VobSubParserLowLevel } from './parsers'
 import { WebGPURenderer, isWebGPUSupported } from './webgpu-renderer'
 import { WebGL2Renderer, isWebGL2Supported } from './webgl2-renderer'
 
@@ -127,7 +127,7 @@ export interface SubtitleRendererStats {
  */
 abstract class BaseVideoSubtitleRenderer {
   protected video: HTMLVideoElement
-  protected readonly format: 'pgs' | 'vobsub'
+  protected readonly format: 'pgs' | 'vobsub' | 'dvb'
   protected subUrl?: string
   protected subContent?: ArrayBuffer
   protected canvas: HTMLCanvasElement | null = null
@@ -193,7 +193,7 @@ abstract class BaseVideoSubtitleRenderer {
     lastFrameTime: 0
   }
 
-  constructor(options: VideoSubtitleOptions, format: 'pgs' | 'vobsub') {
+  constructor(options: VideoSubtitleOptions, format: 'pgs' | 'vobsub' | 'dvb') {
     this.video = options.video
     this.format = format
     this.subUrl = options.subUrl
@@ -213,7 +213,11 @@ abstract class BaseVideoSubtitleRenderer {
     this.rangeRequests = options.rangeRequests !== false
   }
 
-  protected emitLoadProgress(format: 'pgs' | 'vobsub', progress: AssetFetchProgress, indexedCues: number): void {
+  protected emitLoadProgress(
+    format: 'pgs' | 'vobsub' | 'dvb',
+    progress: AssetFetchProgress,
+    indexedCues: number
+  ): void {
     this.emitEvent({
       type: 'load-progress',
       format,
@@ -226,7 +230,7 @@ abstract class BaseVideoSubtitleRenderer {
     })
   }
 
-  protected emitIndexed(format: 'pgs' | 'vobsub', metadata: SubtitleParserMetadata, partial: boolean): void {
+  protected emitIndexed(format: 'pgs' | 'vobsub' | 'dvb', metadata: SubtitleParserMetadata, partial: boolean): void {
     this.emitEvent({ type: 'indexed', format, metadata, partial })
   }
 
@@ -2341,8 +2345,480 @@ export class VobSubRenderer extends BaseVideoSubtitleRenderer {
   }
 }
 
+export class DvbRenderer extends BaseVideoSubtitleRenderer {
+  private dvbParser: DvbParser | null = null
+  private endTimestamps: Float64Array = new Float64Array(0)
+  private state = createWorkerState()
+  private onLoading?: () => void
+  private onLoaded?: () => void
+  private onError?: (error: Error) => void
+
+  constructor(options: VideoSubtitleOptions) {
+    super(options, 'dvb')
+    this.onLoading = options.onLoading
+    this.onLoaded = options.onLoaded
+    this.onError = options.onError
+    applyCacheLimit(this.state, this.cacheLimit)
+    this.startInit()
+  }
+
+  protected async loadSubtitles(): Promise<void> {
+    try {
+      this.emitEvent({ type: 'loading', format: 'dvb' })
+      this.onLoading?.()
+
+      if (this.subContent) {
+        const data = new Uint8Array(this.subContent)
+        this.emitLoadProgress('dvb', this.memoryProgress(data.byteLength), 0)
+        await this.loadDvbBuffer(data, true)
+        this.onLoaded?.()
+        return
+      }
+
+      if (!this.subUrl) {
+        throw new Error('No subtitle content or URL provided')
+      }
+
+      if (!this.streamingLoad) {
+        const { data, strategy, rangeSupported, total } = await fetchSubtitleAsset(this.subUrl, {
+          preferRange: this.rangeRequests,
+          onProgress: (progress) => this.emitLoadProgress('dvb', progress, this.state.timestamps.length)
+        })
+        this.emitLoadProgress(
+          'dvb',
+          { loaded: data.byteLength, total: total ?? data.byteLength, ratio: 1, rangeSupported, strategy },
+          0
+        )
+        await this.loadDvbBuffer(data, false)
+        this.onLoaded?.()
+        return
+      }
+
+      await this.loadDvbStreaming(this.subUrl)
+      this.onLoaded?.()
+    } catch (error) {
+      const resolvedError = normalizeSubtitleError(error, { format: 'dvb' })
+      this.emitEvent({ type: 'error', format: 'dvb', error: resolvedError })
+      this.onError?.(resolvedError)
+    }
+  }
+
+  private applyDvbIndexState(
+    metadata: SubtitleParserMetadata,
+    timestamps: Float64Array,
+    endTimestamps: Float64Array,
+    partial: boolean,
+    usingWorker: boolean
+  ): void {
+    this.state.metadata = metadata
+    this.state.timestamps = timestamps
+    this.endTimestamps = endTimestamps
+    this.setParserMetadata(metadata)
+    this.emitIndexed('dvb', metadata, partial)
+    if (!this.isLoaded && timestamps.length > 0) {
+      this.isLoaded = true
+      if (usingWorker) {
+        this.state.workerReady = true
+        this.emitWorkerState(true, true, this.state.sessionId)
+      }
+    }
+  }
+
+  private async loadDvbBuffer(data: Uint8Array, preserveSource: boolean): Promise<void> {
+    if (this.state.useWorker) {
+      try {
+        this.state.sessionId = createWorkerSessionId()
+        await getOrCreateWorker()
+        this.emitWorkerState(true, false, this.state.sessionId)
+        const transferableData = createTransferableBuffer(data, preserveSource)
+        const loadResponse = await sendToWorker({
+          type: 'loadDvb',
+          sessionId: this.state.sessionId,
+          data: transferableData
+        })
+
+        if (loadResponse.type === 'dvbLoaded') {
+          this.state.workerReady = true
+          this.state.metadata = loadResponse.metadata
+          this.state.timestamps = loadResponse.timestamps
+          this.endTimestamps = loadResponse.endTimestamps
+          this.isLoaded = true
+          this.setParserMetadata(loadResponse.metadata)
+          this.emitIndexed('dvb', loadResponse.metadata, false)
+          this.emitWorkerState(true, true, this.state.sessionId)
+          return
+        } else if (loadResponse.type === 'error') {
+          throw new Error(loadResponse.message)
+        }
+      } catch (workerError) {
+        this.state.useWorker = false
+        this.emitWorkerState(false, false, this.state.sessionId, true)
+        this.emitWarning(
+          createSubtitleWarning(
+            'WORKER_FALLBACK',
+            'DVB worker initialization failed, falling back to main-thread rendering.',
+            {
+              format: 'dvb',
+              details: { reason: workerError instanceof Error ? workerError.message : String(workerError) }
+            }
+          )
+        )
+      }
+    }
+
+    await this.loadOnMainThread(data)
+  }
+
+  private async loadDvbStreaming(url: string): Promise<void> {
+    let usedWorker = false
+    let indexedOnce = false
+
+    if (this.state.useWorker) {
+      try {
+        this.state.sessionId = createWorkerSessionId()
+        await getOrCreateWorker()
+        this.emitWorkerState(true, false, this.state.sessionId)
+        const begin = await sendToWorker({ type: 'beginDvb', sessionId: this.state.sessionId })
+        if (begin.type === 'error') throw new Error(begin.message)
+        usedWorker = true
+      } catch (workerError) {
+        this.state.useWorker = false
+        usedWorker = false
+        this.emitWorkerState(false, false, this.state.sessionId, true)
+        this.emitWarning(
+          createSubtitleWarning(
+            'WORKER_FALLBACK',
+            'DVB worker initialization failed, falling back to main-thread rendering.',
+            {
+              format: 'dvb',
+              details: { reason: workerError instanceof Error ? workerError.message : String(workerError) }
+            }
+          )
+        )
+      }
+    }
+
+    if (!usedWorker) {
+      await this.yieldToMain()
+      this.dvbParser = new DvbParser({ debug: this.debug, onWarning: (warning) => this.emitWarning(warning) })
+      this.dvbParser.reset()
+    }
+
+    try {
+      const { data, strategy, rangeSupported, total } = await fetchSubtitleAsset(
+        url,
+        {
+          preferRange: this.rangeRequests,
+          onProgress: (progress) => this.emitLoadProgress('dvb', progress, this.state.timestamps.length)
+        },
+        async (chunk, progress) => {
+          if (chunk.byteLength === 0) return
+
+          if (usedWorker && this.state.sessionId) {
+            const transferable = createTransferableBuffer(chunk, true)
+            const response = await sendToWorker({
+              type: 'appendDvb',
+              sessionId: this.state.sessionId,
+              data: transferable
+            })
+            if (response.type === 'dvbProgress') {
+              if (response.added > 0 || !indexedOnce) {
+                this.applyDvbIndexState(response.metadata, response.timestamps, response.endTimestamps, true, true)
+                indexedOnce = true
+              } else {
+                this.state.timestamps = response.timestamps
+                this.endTimestamps = response.endTimestamps
+                this.state.metadata = response.metadata
+              }
+            } else if (response.type === 'error') {
+              throw new Error(response.message)
+            }
+          } else if (this.dvbParser) {
+            const added = this.dvbParser.feed(chunk)
+            if (added > 0 || !indexedOnce) {
+              const metadata = this.dvbParser.getMetadata()
+              this.applyDvbIndexState(
+                metadata,
+                this.dvbParser.getTimestamps(),
+                this.dvbParser.getEndTimestamps(),
+                true,
+                false
+              )
+              indexedOnce = true
+            }
+          }
+
+          this.emitLoadProgress('dvb', progress, this.state.timestamps.length)
+        }
+      )
+
+      if (usedWorker && this.state.sessionId) {
+        const finish = await sendToWorker({ type: 'finishDvb', sessionId: this.state.sessionId })
+        if (finish.type === 'dvbProgress') {
+          this.applyDvbIndexState(finish.metadata, finish.timestamps, finish.endTimestamps, false, true)
+          this.state.workerReady = true
+          this.isLoaded = true
+          this.emitWorkerState(true, true, this.state.sessionId)
+        } else if (finish.type === 'error') {
+          throw new Error(finish.message)
+        }
+      } else if (this.dvbParser) {
+        this.dvbParser.finishFeed()
+        const metadata = this.dvbParser.getMetadata()
+        this.state.timestamps = this.dvbParser.getTimestamps()
+        this.endTimestamps = this.dvbParser.getEndTimestamps()
+        this.state.metadata = metadata
+        this.isLoaded = true
+        this.setParserMetadata(metadata)
+        this.emitIndexed('dvb', metadata, false)
+        if (metadata.cueCount === 0) {
+          this.state.renderIssues.set(-1, 'INVALID_SUBTITLE_DATA')
+        }
+      }
+
+      this.emitLoadProgress(
+        'dvb',
+        {
+          loaded: data.byteLength,
+          total: total ?? data.byteLength,
+          ratio: 1,
+          rangeSupported,
+          strategy: strategy as AssetFetchStrategy
+        },
+        this.state.timestamps.length
+      )
+    } catch (error) {
+      if (usedWorker) {
+        this.state.useWorker = false
+        this.emitWorkerState(false, false, this.state.sessionId, true)
+      }
+      this.emitWarning(
+        createSubtitleWarning('RANGE_FALLBACK', 'Progressive DVB load failed; retrying with a full buffer fetch.', {
+          format: 'dvb',
+          details: { reason: error instanceof Error ? error.message : String(error) }
+        })
+      )
+      const { data } = await fetchSubtitleAsset(url, { preferRange: this.rangeRequests })
+      await this.loadDvbBuffer(data, false)
+    }
+  }
+
+  private async loadOnMainThread(data: Uint8Array): Promise<void> {
+    await this.yieldToMain()
+
+    this.dvbParser = new DvbParser({ debug: this.debug, onWarning: (warning) => this.emitWarning(warning) })
+
+    await new Promise<void>((resolve) => {
+      const scheduleTask =
+        typeof requestIdleCallback !== 'undefined'
+          ? (cb: () => void) => requestIdleCallback(() => cb(), { timeout: 1000 })
+          : (cb: () => void) => setTimeout(cb, 0)
+
+      scheduleTask(() => {
+        const count = this.dvbParser!.load(data)
+        this.state.timestamps = this.dvbParser!.getTimestamps()
+        this.endTimestamps = this.dvbParser!.getEndTimestamps()
+        this.state.metadata = this.dvbParser!.getMetadata()
+        this.isLoaded = true
+        this.setParserMetadata(this.state.metadata)
+        this.emitIndexed('dvb', this.state.metadata, false)
+        if (count === 0) {
+          this.state.renderIssues.set(-1, 'INVALID_SUBTITLE_DATA')
+        }
+        resolve()
+      })
+    })
+  }
+
+  protected getWorkerRendererState(): WorkerRendererState {
+    return this.state
+  }
+
+  /** Yield to main thread to prevent UI blocking */
+  private yieldToMain(): Promise<void> {
+    // Use scheduler.yield if available (Chrome 115+)
+    const globalScheduler = (globalThis as unknown as { scheduler?: { yield?: () => Promise<void> } }).scheduler
+    if (globalScheduler && typeof globalScheduler.yield === 'function') {
+      return globalScheduler.yield()
+    }
+    // Fallback to setTimeout
+    return new Promise((resolve) => setTimeout(resolve, 0))
+  }
+
+  protected renderAtTime(time: number): SubtitleData | undefined {
+    const index = this.findCurrentIndex(time)
+    return index < 0 ? undefined : this.renderAtIndex(index)
+  }
+
+  protected findCurrentIndex(time: number): number {
+    if (this.state.useWorker && this.state.workerReady) {
+      const timeMs = time * 1000
+      const index = binarySearchTimestamp(this.state.timestamps, timeMs)
+      return index >= 0 && timeMs < (this.endTimestamps[index] ?? this.state.timestamps[index]) ? index : -1
+    }
+    return this.dvbParser?.findIndexAtTimestamp(time) ?? -1
+  }
+
+  protected renderAtIndex(index: number): SubtitleData | undefined {
+    if (this.state.frameCache.has(index)) {
+      return this.state.frameCache.get(index) ?? undefined
+    }
+
+    if (this.state.useWorker && this.state.workerReady) {
+      if (!this.state.pendingRenders.has(index)) {
+        const renderTask = sendToWorker({
+          type: 'renderDvbAtIndex',
+          sessionId: this.state.sessionId!,
+          index
+        }).then((response) => {
+          if (response.type === 'dvbFrame') {
+            return {
+              frame: response.frame ? convertFrameData(response.frame) : null,
+              renderIssue: response.renderIssue?.trim() || null
+            }
+          }
+
+          return { frame: null, renderIssue: null }
+        })
+
+        const renderPromise = renderTask.then(({ frame }) => frame)
+
+        this.state.pendingRenders.set(index, renderPromise)
+        this.emitCacheChange(this.state.frameCache.size, this.state.pendingRenders.size)
+        renderTask.then(({ frame, renderIssue }) => {
+          setCachedFrame(this.state, index, frame, renderIssue)
+          this.state.pendingRenders.delete(index)
+          this.emitCacheChange(this.state.frameCache.size, this.state.pendingRenders.size)
+          // Force re-render on next frame by resetting lastRenderedIndex
+          if (this.findCurrentIndex(this.video.currentTime + this.timeOffset) === index) {
+            this.lastRenderedIndex = -1
+          }
+        })
+      }
+      // Return undefined to indicate async loading in progress
+      return undefined
+    }
+
+    const rendered = this.dvbParser?.renderAtIndex(index) ?? null
+    setCachedFrame(this.state, index, rendered, this.dvbParser?.getLastRenderIssue() ?? null)
+    this.emitCacheChange(this.state.frameCache.size, this.state.pendingRenders.size)
+    return rendered ?? undefined
+  }
+
+  protected buildCueMetadata(index: number): SubtitleCueMetadata | null {
+    if (this.dvbParser) {
+      return this.dvbParser.getCueMetadata(index)
+    }
+
+    const metadata = this.state.metadata
+    if (!metadata || index < 0 || index >= this.state.timestamps.length) return null
+
+    const startTime = this.state.timestamps[index]
+    const endTime = this.endTimestamps[index] ?? startTime
+    const frame = this.state.frameCache.get(index) ?? null
+    const offscreenFrame = this.getOffscreenFrameMetadata(index)
+
+    return {
+      index,
+      format: 'dvb',
+      startTime,
+      endTime,
+      duration: Math.max(0, endTime - startTime),
+      screenWidth: metadata.screenWidth,
+      screenHeight: metadata.screenHeight,
+      bounds: frame ? getSubtitleBounds(frame) : (offscreenFrame?.bounds ?? null),
+      compositionCount: frame?.compositionData.length ?? offscreenFrame?.compositionCount ?? 0
+    }
+  }
+
+  protected isPendingRender(index: number): boolean {
+    return this.state.pendingRenders.has(index)
+  }
+
+  protected onSeek(): void {
+    this.state.frameCache.clear()
+    this.state.renderIssues.clear()
+    this.state.pendingRenders.clear()
+    this.emitCacheChange(this.state.frameCache.size, this.state.pendingRenders.size)
+    if (this.state.useWorker && this.state.workerReady) {
+      sendToWorker({ type: 'clearDvbCache', sessionId: this.state.sessionId! }).catch(() => {})
+    }
+    this.dvbParser?.clearCache()
+  }
+
+  setCacheLimit(limit: number): void {
+    this.cacheLimit = applyCacheLimit(this.state, limit)
+    this.emitCacheChange(this.state.frameCache.size, this.state.pendingRenders.size)
+  }
+
+  clearFrameCache(): void {
+    this.state.frameCache.clear()
+    this.state.renderIssues.clear()
+    this.state.pendingRenders.clear()
+    this.clearOffscreenFrameMetadata()
+    this.lastRenderedIndex = -1
+    if (this.state.useWorker && this.state.workerReady) {
+      sendToWorker({ type: 'clearDvbCache', sessionId: this.state.sessionId! }).catch(() => {})
+    }
+    this.dvbParser?.clearCache()
+    this.emitCacheChange(this.state.frameCache.size, this.state.pendingRenders.size)
+  }
+
+  async prefetchRange(startIndex: number, endIndex: number): Promise<void> {
+    const safeStart = Math.max(0, Math.min(startIndex, endIndex))
+    const safeEnd = Math.min(Math.max(startIndex, endIndex), this.state.timestamps.length - 1)
+
+    for (let index = safeStart; index <= safeEnd; index++) {
+      if (this.state.frameCache.has(index)) continue
+      const result = this.renderAtIndex(index)
+      if (result === undefined && this.state.pendingRenders.has(index)) {
+        await this.state.pendingRenders.get(index)
+      }
+    }
+  }
+
+  async prefetchAroundTime(time: number, before = this.prefetchBefore, after = this.prefetchAfter): Promise<void> {
+    const currentIndex = this.findCurrentIndex(time)
+    if (currentIndex < 0) return
+    await this.prefetchRange(currentIndex - before, currentIndex + after)
+  }
+
+  /** Get performance statistics for DVB renderer */
+  getStats(): SubtitleRendererStats {
+    const baseStats = this.getBaseStats()
+    return {
+      ...baseStats,
+      usingWorker: this.state.useWorker && this.state.workerReady,
+      cachedFrames: this.state.frameCache.size,
+      pendingRenders: this.state.pendingRenders.size,
+      totalEntries: this.state.timestamps.length || (this.dvbParser?.getTimestamps().length ?? 0)
+    }
+  }
+
+  dispose(): void {
+    super.dispose()
+    this.state.frameCache.clear()
+    this.state.renderIssues.clear()
+    this.state.pendingRenders.clear()
+    if (this.state.useWorker && this.state.workerReady) {
+      sendToWorker({ type: 'disposeDvb', sessionId: this.state.sessionId! }).catch(() => {})
+    }
+    this.dvbParser?.dispose()
+    this.dvbParser = null
+    this.endTimestamps = new Float64Array(0)
+    this.state.sessionId = null
+  }
+}
+
+/**
+ * High-level VobSub subtitle renderer with Web Worker support.
+ * Compatible with the old libpgs-js API.
+ */
+
 /** Create a video subtitle renderer with automatic format detection. */
-export function createAutoSubtitleRenderer(options: AutoVideoSubtitleOptions): PgsRenderer | VobSubRenderer {
+export function createAutoSubtitleRenderer(
+  options: AutoVideoSubtitleOptions
+): PgsRenderer | VobSubRenderer | DvbRenderer {
   const format = detectSubtitleFormat({
     data: options.subContent,
     idxContent: options.idxContent,
@@ -2353,6 +2829,10 @@ export function createAutoSubtitleRenderer(options: AutoVideoSubtitleOptions): P
 
   if (format === 'pgs') {
     return new PgsRenderer(options)
+  }
+
+  if (format === 'dvb') {
+    return new DvbRenderer(options)
   }
 
   if (format === 'vobsub') {

@@ -19,6 +19,7 @@ import type {
   VobSubFrame,
   RenderResult,
   WasmPgsParser,
+  WasmDvbParser,
   WasmVobSubParser,
   WasmSubtitleRenderer
 } from './types'
@@ -41,6 +42,16 @@ interface WasmPgsParserWithFeed extends WasmPgsParser {
   readonly pendingLen: number
 }
 
+interface WasmDvbParserWithFeed extends WasmDvbParser {
+  reset(): void
+  feed(data: Uint8Array): number
+  finishFeed(): number
+  readonly pendingLen: number
+  getEndTimestamps(): Float64Array
+  getCueCompositionCount(index: number): number
+  getCuePageState(index: number): number
+}
+
 interface WasmVobSubParserWithMks extends WasmVobSubParser {
   loadFromMks(data: Uint8Array): void
   loadFromIdx(idxContent: string): void
@@ -50,6 +61,7 @@ interface WasmVobSubParserWithMks extends WasmVobSubParser {
 
 interface WasmSubtitleRendererWithMks extends WasmSubtitleRenderer {
   loadVobSubMks(data: Uint8Array): void
+  loadDvb(data: Uint8Array): number
 }
 
 /**
@@ -296,6 +308,235 @@ export class PgsParser {
     this.parser?.free()
     this.parser = null
     this.timestamps = new Float64Array(0)
+    this.cueMetadataCache.clear()
+  }
+
+  private emitWarning(warning: SubtitleDiagnosticWarning): void {
+    this.onWarning?.(warning)
+
+    if (this.debug && !this.onWarning) {
+      console.warn(formatSubtitleWarningForConsole(warning), warning.details ?? {})
+    }
+  }
+}
+
+/**
+ * Low-level DVB subtitle parser using WASM.
+ * Use this for programmatic access to DVB data without video integration.
+ */
+export class DvbParser {
+  private parser: WasmDvbParserWithFeed | null = null
+  private timestamps: Float64Array = new Float64Array(0)
+  private endTimestamps: Float64Array = new Float64Array(0)
+  private cueMetadataCache = new Map<number, SubtitleCueMetadata | null>()
+  private readonly debug: boolean
+  private readonly onWarning?: (warning: SubtitleDiagnosticWarning) => void
+
+  constructor(options: SubtitleDiagnosticsOptions = {}) {
+    const wasm = getWasm()
+    this.parser = new wasm.DvbParser() as WasmDvbParserWithFeed
+    this.debug = Boolean(options.debug)
+    this.onWarning = options.onWarning
+  }
+
+  load(data: Uint8Array): number {
+    try {
+      if (!this.parser) throw new Error('Parser not initialized')
+      const count = this.parser.parse(data)
+      this.timestamps = this.parser.getTimestamps()
+      this.endTimestamps = this.parser.getEndTimestamps()
+      this.cueMetadataCache.clear()
+      return count
+    } catch (error) {
+      throw normalizeSubtitleError(error, { format: 'dvb' })
+    }
+  }
+
+  reset(): void {
+    this.parser?.reset()
+    this.timestamps = new Float64Array(0)
+    this.endTimestamps = new Float64Array(0)
+    this.cueMetadataCache.clear()
+  }
+
+  feed(data: Uint8Array): number {
+    try {
+      if (!this.parser) throw new Error('Parser not initialized')
+      const added = this.parser.feed(data)
+      if (added > 0 || this.timestamps.length !== this.parser.count) {
+        this.timestamps = this.parser.getTimestamps()
+        this.endTimestamps = this.parser.getEndTimestamps()
+        this.cueMetadataCache.clear()
+      }
+      return added
+    } catch (error) {
+      throw normalizeSubtitleError(error, { format: 'dvb' })
+    }
+  }
+
+  finishFeed(): number {
+    try {
+      if (!this.parser) throw new Error('Parser not initialized')
+      const count = this.parser.finishFeed()
+      this.timestamps = this.parser.getTimestamps()
+      this.endTimestamps = this.parser.getEndTimestamps()
+      return count
+    } catch (error) {
+      throw normalizeSubtitleError(error, { format: 'dvb' })
+    }
+  }
+
+  get pendingLen(): number {
+    return this.parser?.pendingLen ?? 0
+  }
+
+  getTimestamps(): Float64Array {
+    return this.timestamps
+  }
+
+  getEndTimestamps(): Float64Array {
+    return this.endTimestamps
+  }
+
+  get count(): number {
+    return this.parser?.count ?? 0
+  }
+
+  findIndexAtTimestamp(timeSeconds: number): number {
+    if (!this.parser) return -1
+    return this.parser.findIndexAtTimestamp(timeSeconds * 1000)
+  }
+
+  renderAtIndex(index: number): SubtitleData | undefined {
+    if (!this.parser) return undefined
+
+    const frame = this.parser.renderAtIndex(index)
+    if (!frame) {
+      const warning = warningFromRenderIssue(this.getLastRenderIssue(), { format: 'dvb', cueIndex: index })
+      if (warning) this.emitWarning(warning)
+      return undefined
+    }
+
+    return this.convertFrame(frame)
+  }
+
+  getLastRenderIssue(): string | null {
+    const issue = this.parser?.lastRenderIssue?.trim()
+    return issue ? issue : null
+  }
+
+  getMetadata(): SubtitleParserMetadata {
+    return {
+      format: 'dvb',
+      cueCount: this.count,
+      screenWidth: this.parser?.screenWidth ?? 0,
+      screenHeight: this.parser?.screenHeight ?? 0
+    }
+  }
+
+  getCueMetadata(index: number): SubtitleCueMetadata | null {
+    if (!this.parser || index < 0 || index >= this.count) return null
+    if (this.cueMetadataCache.has(index)) return this.cueMetadataCache.get(index) ?? null
+
+    const startTime = this.parser.getCueStartTime(index)
+    const endTime = this.parser.getCueEndTime(index)
+    const frame = this.renderAtIndex(index)
+
+    const cueMetadata: SubtitleCueMetadata = {
+      index,
+      format: 'dvb',
+      startTime,
+      endTime,
+      duration: Math.max(0, endTime - startTime),
+      screenWidth: this.parser.screenWidth,
+      screenHeight: this.parser.screenHeight,
+      bounds: frame ? getSubtitleBounds(frame) : null,
+      compositionCount: this.parser.getCueCompositionCount(index),
+      compositionState: this.parser.getCuePageState(index)
+    }
+
+    this.cueMetadataCache.set(index, cueMetadata)
+    return cueMetadata
+  }
+
+  renderAtTimestamp(timeSeconds: number): SubtitleData | undefined {
+    const index = this.findIndexAtTimestamp(timeSeconds)
+    if (index < 0) return undefined
+    return this.renderAtIndex(index)
+  }
+
+  renderFrameDataAtIndex(
+    index: number,
+    options: SubtitleFrameRenderOptions = {}
+  ): SubtitleRenderedFrameData | undefined {
+    const frame = this.renderAtIndex(index)
+    return frame ? (renderFrameData(frame, options) ?? undefined) : undefined
+  }
+
+  renderFrameDataAtTimestamp(
+    timeSeconds: number,
+    options: SubtitleFrameRenderOptions = {}
+  ): SubtitleRenderedFrameData | undefined {
+    const frame = this.renderAtTimestamp(timeSeconds)
+    return frame ? (renderFrameData(frame, options) ?? undefined) : undefined
+  }
+
+  private convertFrame(frame: SubtitleFrame): SubtitleData {
+    const compositionData: SubtitleCompositionData[] = []
+
+    for (let i = 0; i < frame.compositionCount; i++) {
+      const comp = frame.getComposition(i)
+      if (!comp) continue
+
+      const rgba = comp.getRgba()
+      const expectedLength = comp.width * comp.height * 4
+
+      if (rgba.length !== expectedLength || comp.width === 0 || comp.height === 0) {
+        this.emitWarning(
+          createSubtitleWarning(
+            'INVALID_FRAME_DATA',
+            'Invalid DVB composition buffer dimensions during frame conversion.',
+            {
+              format: 'dvb',
+              details: {
+                expectedLength,
+                actualLength: rgba.length,
+                width: comp.width,
+                height: comp.height
+              }
+            }
+          )
+        )
+        continue
+      }
+
+      const trimmed = trimTransparentImageData(rgba, comp.width, comp.height)
+      if (!trimmed) continue
+
+      compositionData.push({
+        pixelData: trimmed.pixelData,
+        x: comp.x + trimmed.offsetX,
+        y: comp.y + trimmed.offsetY
+      })
+    }
+
+    return {
+      width: frame.width,
+      height: frame.height,
+      compositionData
+    }
+  }
+
+  clearCache(): void {
+    this.parser?.clearCache()
+    this.cueMetadataCache.clear()
+  }
+
+  dispose(): void {
+    this.parser?.free()
+    this.parser = null
+    this.timestamps = new Float64Array(0)
+    this.endTimestamps = new Float64Array(0)
     this.cueMetadataCache.clear()
   }
 
@@ -623,7 +864,7 @@ export class VobSubParserLowLevel {
 }
 
 /**
- * Unified subtitle parser that handles both PGS and VobSub formats.
+ * Unified subtitle parser that handles PGS, VobSub, and DVB formats.
  */
 export class UnifiedSubtitleParser {
   private renderer: WasmSubtitleRendererWithMks | null = null
@@ -651,6 +892,21 @@ export class UnifiedSubtitleParser {
       return count
     } catch (error) {
       throw normalizeSubtitleError(error, { format: 'pgs' })
+    }
+  }
+
+  /**
+   * Load DVB subtitle data (`"DV"` framed and/or MPEG PES).
+   */
+  loadDvb(data: Uint8Array): number {
+    try {
+      if (!this.renderer) throw new Error('Renderer not initialized')
+      const count = this.renderer.loadDvb(data)
+      this.timestamps = this.renderer.getTimestamps()
+      this.cueMetadataCache.clear()
+      return count
+    } catch (error) {
+      throw normalizeSubtitleError(error, { format: 'dvb' })
     }
   }
 
@@ -720,6 +976,17 @@ export class UnifiedSubtitleParser {
       return 'pgs'
     }
 
+    if (format === 'dvb') {
+      const data = source.data ?? source.subData
+      if (!data) {
+        throw createSubtitleDiagnosticError('MISSING_INPUT', 'No binary subtitle data provided for DVB.', {
+          format: 'dvb'
+        })
+      }
+      this.loadDvb(data instanceof Uint8Array ? data : new Uint8Array(data))
+      return 'dvb'
+    }
+
     const subBinary = source.subData ?? source.data
     if (!subBinary) {
       throw createSubtitleDiagnosticError('MISSING_INPUT', 'No SUB binary data provided for VobSub.', {
@@ -743,10 +1010,11 @@ export class UnifiedSubtitleParser {
   /**
    * Get the current subtitle format.
    */
-  get format(): 'pgs' | 'vobsub' | null {
+  get format(): SubtitleFormatName | null {
     const fmt = this.renderer?.format
     if (fmt === 0) return 'pgs'
     if (fmt === 1) return 'vobsub'
+    if (fmt === 2) return 'dvb'
     return null
   }
 

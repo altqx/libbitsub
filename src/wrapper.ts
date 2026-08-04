@@ -63,13 +63,19 @@ export {
 } from './ts/capabilities'
 
 // Re-export parsers
-export { PgsParser, VobSubParserLowLevel, UnifiedSubtitleParser, openSubtitles } from './ts/parsers'
+export { PgsParser, DvbParser, VobSubParserLowLevel, UnifiedSubtitleParser, openSubtitles } from './ts/parsers'
 
 // Re-export frame export helpers
 export { renderFrameData, toBlob, toCanvas, toImageBitmap } from './ts/frame-export'
 
 // Re-export renderers
-export { PgsRenderer, VobSubRenderer, createAutoSubtitleRenderer, type SubtitleRendererStats } from './ts/renderers'
+export {
+  PgsRenderer,
+  DvbRenderer,
+  VobSubRenderer,
+  createAutoSubtitleRenderer,
+  type SubtitleRendererStats
+} from './ts/renderers'
 
 // Re-export format detection utilities
 export { detectSubtitleFormat } from './ts/utils'
