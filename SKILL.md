@@ -268,7 +268,7 @@ new PgsRenderer({
       case 'loaded': // { format, metadata } ready
       case 'error': // { format, error }
       case 'warning': // { warning }
-      case 'renderer-change': // { renderer: 'webgpu' | 'webgl2' | 'canvas2d' }
+      case 'renderer-change': // { renderer: 'webgpu' | 'webgl2' | 'worker-offscreen' | 'canvas2d' }
       case 'worker-state': // { enabled, ready, sessionId, fallback? }
       case 'cache-change': // { cachedFrames, pendingRenders, cacheLimit }
       case 'cue-change': // { cue: SubtitleCueMetadata | null }
@@ -363,22 +363,29 @@ const openedFrame = opened.renderAtTimestamp(120.5)
 opened.dispose()
 ```
 
-## GPU backends
+## GPU / present backends
 
-libbitsub prefers WebGPU → WebGL2 → Canvas2D, with automatic fallback:
+libbitsub prefers WebGPU → WebGL2 → Worker OffscreenCanvas → Canvas2D:
 
 ```ts
-import { isWebGPUSupported } from 'libbitsub'
+import { getRuntimeCapabilities, isWebGPUSupported } from 'libbitsub'
+
+const caps = getRuntimeCapabilities()
+// Use caps.preferredPresentPath + caps.reasons to explain fallback UI copy.
 
 new PgsRenderer({
   video,
   subUrl,
-  onWebGPUFallback: () => console.warn('WebGPU unavailable, using WebGL2'),
-  onWebGL2Fallback: () => console.warn('WebGL2 unavailable, using Canvas2D')
+  // default true: when on the Canvas2D tier, paint via Worker OffscreenCanvas if supported
+  offscreenRender: true,
+  onWebGPUFallback: () => console.warn('WebGPU unavailable, trying WebGL2'),
+  onWebGL2Fallback: () => console.warn('WebGL2 unavailable, trying OffscreenCanvas/Canvas2D')
 })
 ```
 
-WebGL2 and Canvas2D fallback are automatic. Use the fallback callbacks or diagnostics hooks if you need to observe the active backend path.
+Fallbacks are automatic. `renderer-change` reports `webgpu` | `webgl2` | `worker-offscreen` | `canvas2d`.
+The transfer RGBA path remains for main-thread GPU/Canvas2D present; older TVs without
+`transferControlToOffscreen` stay on main-thread Canvas2D.
 
 ## Key constraints
 

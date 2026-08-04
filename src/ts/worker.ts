@@ -31,6 +31,7 @@ function createWorkerScript(): string {
 let wasmModule = null;
 const pgsParsers = new Map();
 const vobSubParsers = new Map();
+const offscreenSurfaces = new Map();
 
 function buildPgsMetadata(parser) {
     return {
@@ -53,6 +54,10 @@ function buildVobSubMetadata(parser) {
     };
 }
 
+function detachOffscreenSurface(sessionId) {
+    offscreenSurfaces.delete(sessionId);
+}
+
 function disposeSession(sessionId) {
     const pgsParser = pgsParsers.get(sessionId);
     if (pgsParser) {
@@ -64,6 +69,126 @@ function disposeSession(sessionId) {
         vobSubParser.free();
         vobSubParsers.delete(sessionId);
     }
+    detachOffscreenSurface(sessionId);
+}
+
+function getCompositionBounds(compositions) {
+    if (!compositions || compositions.length === 0) return null;
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const comp of compositions) {
+        minX = Math.min(minX, comp.x);
+        minY = Math.min(minY, comp.y);
+        maxX = Math.max(maxX, comp.x + comp.width);
+        maxY = Math.max(maxY, comp.y + comp.height);
+    }
+    if (!Number.isFinite(minX) || !Number.isFinite(minY)) return null;
+    return { x: minX, y: minY, width: Math.max(0, maxX - minX), height: Math.max(0, maxY - minY) };
+}
+
+function computeOffscreenLayout(frame, canvasWidth, canvasHeight, settings) {
+    const safeDataWidth = frame.width > 0 ? frame.width : canvasWidth;
+    const safeDataHeight = frame.height > 0 ? frame.height : canvasHeight;
+    const stretchScaleX = canvasWidth / safeDataWidth;
+    const stretchScaleY = canvasHeight / safeDataHeight;
+    const bounds = getCompositionBounds(frame.compositions) || {
+        x: 0, y: 0, width: safeDataWidth, height: safeDataHeight
+    };
+
+    const scale = settings.scale;
+    const aspectMode = settings.aspectMode;
+    const verticalOffset = settings.verticalOffset;
+    const horizontalOffset = settings.horizontalOffset;
+    const horizontalAlign = settings.horizontalAlign;
+    const bottomPadding = settings.bottomPadding;
+    const safeArea = settings.safeArea;
+    const opacity = settings.opacity;
+
+    let baseScaleX = stretchScaleX;
+    let baseScaleY = stretchScaleY;
+    let frameShiftX = 0;
+    let frameShiftY = 0;
+
+    if (aspectMode !== 'stretch') {
+        const uniformScale = aspectMode === 'cover'
+            ? Math.max(stretchScaleX, stretchScaleY)
+            : Math.min(stretchScaleX, stretchScaleY);
+        baseScaleX = uniformScale;
+        baseScaleY = uniformScale;
+        frameShiftX = (canvasWidth - safeDataWidth * uniformScale) / 2;
+        frameShiftY = (canvasHeight - safeDataHeight * uniformScale) / 2;
+    }
+
+    const anchorX = horizontalAlign === 'left'
+        ? bounds.x
+        : horizontalAlign === 'right'
+            ? bounds.x + bounds.width
+            : bounds.x + bounds.width / 2;
+    const anchorY = bounds.y + bounds.height;
+
+    const scaleX = baseScaleX * scale;
+    const scaleY = baseScaleY * scale;
+    const anchorShiftX = frameShiftX + anchorX * baseScaleX * (1 - scale);
+    const anchorShiftY = frameShiftY + anchorY * baseScaleY * (1 - scale);
+
+    let shiftX = anchorShiftX + (horizontalOffset / 100) * canvasWidth;
+    let shiftY = anchorShiftY + (verticalOffset / 100) * canvasHeight;
+    shiftY -= (bottomPadding / 100) * canvasHeight;
+
+    const safeX = (safeArea / 100) * canvasWidth;
+    const safeY = (safeArea / 100) * canvasHeight;
+    const finalMinX = bounds.x * scaleX + shiftX;
+    const finalMinY = bounds.y * scaleY + shiftY;
+    const finalMaxX = (bounds.x + bounds.width) * scaleX + shiftX;
+    const finalMaxY = (bounds.y + bounds.height) * scaleY + shiftY;
+
+    if (finalMinX < safeX) shiftX += safeX - finalMinX;
+    if (finalMaxX > canvasWidth - safeX) shiftX -= finalMaxX - (canvasWidth - safeX);
+    if (finalMinY < safeY) shiftY += safeY - finalMinY;
+    if (finalMaxY > canvasHeight - safeY) shiftY -= finalMaxY - (canvasHeight - safeY);
+
+    return { scaleX, scaleY, shiftX, shiftY, opacity };
+}
+
+function presentFrameToOffscreen(surface, frame, canvasWidth, canvasHeight, settings) {
+    const ctx = surface.ctx;
+    const canvas = surface.canvas;
+    if (canvas.width !== canvasWidth) canvas.width = canvasWidth;
+    if (canvas.height !== canvasHeight) canvas.height = canvasHeight;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    if (!frame || !frame.compositions || frame.compositions.length === 0) {
+        return { status: frame ? 'empty' : 'cleared', width: frame?.width || 0, height: frame?.height || 0, compositionCount: 0 };
+    }
+
+    const layout = computeOffscreenLayout(frame, canvas.width, canvas.height, settings);
+    ctx.save();
+    ctx.globalAlpha = layout.opacity;
+
+    for (const comp of frame.compositions) {
+        if (!comp.width || !comp.height || !comp.rgba) continue;
+        if (surface.buffer.width !== comp.width || surface.buffer.height !== comp.height) {
+            surface.buffer.width = comp.width;
+            surface.buffer.height = comp.height;
+        }
+        const pixels = comp.rgba instanceof Uint8ClampedArray
+            ? comp.rgba
+            : new Uint8ClampedArray(comp.rgba.buffer, comp.rgba.byteOffset, comp.rgba.byteLength);
+        surface.bufferCtx.putImageData(new ImageData(pixels, comp.width, comp.height), 0, 0);
+        const scaledWidth = comp.width * layout.scaleX;
+        const scaledHeight = comp.height * layout.scaleY;
+        const adjustedX = comp.x * layout.scaleX + layout.shiftX;
+        const adjustedY = comp.y * layout.scaleY + layout.shiftY;
+        ctx.drawImage(surface.buffer, adjustedX, adjustedY, scaledWidth, scaledHeight);
+    }
+
+    ctx.restore();
+    return {
+        status: 'rendered',
+        width: frame.width,
+        height: frame.height,
+        compositionCount: frame.compositions.length,
+        bounds: getCompositionBounds(frame.compositions)
+    };
 }
 
 async function initWasm(wasmUrl, glueUrl) {
@@ -338,6 +463,120 @@ self.onmessage = async function(event) {
                 postResponse({ type: 'debandSet' }, [], _id);
                 break;
             }
+            case 'attachOffscreenCanvas': {
+                const canvas = request.canvas;
+                if (!canvas || typeof canvas.getContext !== 'function') {
+                    throw new Error('OffscreenCanvas attach requires a transferable OffscreenCanvas');
+                }
+                if (offscreenSurfaces.has(request.sessionId)) {
+                    throw new Error('OffscreenCanvas already attached for this session');
+                }
+                const ctx = canvas.getContext('2d', { alpha: true, desynchronized: true });
+                if (!ctx) {
+                    throw new Error('OffscreenCanvas 2D context unavailable');
+                }
+                const buffer = new OffscreenCanvas(1, 1);
+                const bufferCtx = buffer.getContext('2d', { alpha: true, desynchronized: true });
+                if (!bufferCtx) {
+                    throw new Error('OffscreenCanvas buffer 2D context unavailable');
+                }
+                offscreenSurfaces.set(request.sessionId, { canvas, ctx, buffer, bufferCtx });
+                postResponse({ type: 'offscreenAttached' }, [], _id);
+                break;
+            }
+            case 'resizeOffscreenCanvas': {
+                const surface = offscreenSurfaces.get(request.sessionId);
+                if (surface) {
+                    const width = Math.max(1, request.width | 0);
+                    const height = Math.max(1, request.height | 0);
+                    if (surface.canvas.width !== width) surface.canvas.width = width;
+                    if (surface.canvas.height !== height) surface.canvas.height = height;
+                }
+                postResponse({ type: 'offscreenResized' }, [], _id);
+                break;
+            }
+            case 'detachOffscreenCanvas': {
+                detachOffscreenSurface(request.sessionId);
+                postResponse({ type: 'offscreenDetached' }, [], _id);
+                break;
+            }
+            case 'clearOffscreenCanvas': {
+                const surface = offscreenSurfaces.get(request.sessionId);
+                if (surface) {
+                    surface.ctx.clearRect(0, 0, surface.canvas.width, surface.canvas.height);
+                }
+                postResponse({ type: 'offscreenCleared' }, [], _id);
+                break;
+            }
+            case 'presentOffscreen': {
+                const surface = offscreenSurfaces.get(request.sessionId);
+                if (!surface) {
+                    postResponse({ type: 'offscreenPresented', status: 'failed', fatal: true, renderIssue: 'OFFSCREEN_SURFACE_MISSING' }, [], _id);
+                    break;
+                }
+
+                const canvasWidth = Math.max(1, request.canvasWidth | 0);
+                const canvasHeight = Math.max(1, request.canvasHeight | 0);
+                const settings = request.displaySettings || {
+                    scale: 1, aspectMode: 'stretch', verticalOffset: 0, horizontalOffset: 0,
+                    horizontalAlign: 'center', bottomPadding: 0, safeArea: 0, opacity: 1
+                };
+
+                if (request.index < 0) {
+                    if (surface.canvas.width !== canvasWidth) surface.canvas.width = canvasWidth;
+                    if (surface.canvas.height !== canvasHeight) surface.canvas.height = canvasHeight;
+                    surface.ctx.clearRect(0, 0, surface.canvas.width, surface.canvas.height);
+                    postResponse({ type: 'offscreenPresented', status: 'cleared', compositionCount: 0 }, [], _id);
+                    break;
+                }
+
+                let frame = null;
+                let renderIssue = '';
+                if (request.format === 'pgs') {
+                    const parser = pgsParsers.get(request.sessionId);
+                    if (!parser) {
+                        postResponse({ type: 'offscreenPresented', status: 'failed', fatal: true, renderIssue: 'PARSER_MISSING' }, [], _id);
+                        break;
+                    }
+                    const rendered = parser.renderAtIndex(request.index);
+                    renderIssue = parser.lastRenderIssue || '';
+                    frame = rendered ? convertFrame(rendered, false) : null;
+                } else {
+                    const parser = vobSubParsers.get(request.sessionId);
+                    if (!parser) {
+                        postResponse({ type: 'offscreenPresented', status: 'failed', fatal: true, renderIssue: 'PARSER_MISSING' }, [], _id);
+                        break;
+                    }
+                    const rendered = parser.renderAtIndex(request.index);
+                    renderIssue = parser.lastRenderIssue || '';
+                    frame = rendered ? convertFrame(rendered, true) : null;
+                }
+
+                if (!frame) {
+                    if (surface.canvas.width !== canvasWidth) surface.canvas.width = canvasWidth;
+                    if (surface.canvas.height !== canvasHeight) surface.canvas.height = canvasHeight;
+                    surface.ctx.clearRect(0, 0, surface.canvas.width, surface.canvas.height);
+                    postResponse({
+                        type: 'offscreenPresented',
+                        status: renderIssue ? 'failed' : 'empty',
+                        renderIssue,
+                        compositionCount: 0
+                    }, [], _id);
+                    break;
+                }
+
+                const presented = presentFrameToOffscreen(surface, frame, canvasWidth, canvasHeight, settings);
+                postResponse({
+                    type: 'offscreenPresented',
+                    status: presented.status,
+                    renderIssue,
+                    width: presented.width,
+                    height: presented.height,
+                    compositionCount: presented.compositionCount,
+                    bounds: presented.bounds || null
+                }, [], _id);
+                break;
+            }
         }
     } catch (error) {
         postResponse({ type: 'error', message: error instanceof Error ? error.message : String(error) }, [], _id);
@@ -487,6 +726,7 @@ function sendToWorkerInstance(
     const transfers: Transferable[] = []
     if ('data' in request && request.data instanceof ArrayBuffer) transfers.push(request.data)
     if ('subData' in request && request.subData instanceof ArrayBuffer) transfers.push(request.subData)
+    if ('canvas' in request && request.canvas) transfers.push(request.canvas)
 
     try {
       worker.postMessage({ ...request, _id: id }, transfers)

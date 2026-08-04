@@ -7,6 +7,7 @@ import type {
   AssetFetchStrategy,
   AutoVideoSubtitleOptions,
   SubtitleCacheStats,
+  SubtitleCueBounds,
   SubtitleCueMetadata,
   SubtitleData,
   SubtitleDiagnosticWarning,
@@ -30,6 +31,7 @@ import {
 import { fetchSubtitleAsset, fetchSubtitleText, type AssetFetchProgress } from './range-loader'
 import { initWasm } from './wasm'
 import { getOrCreateWorker, sendToWorker } from './worker'
+import { canUseWorkerOffscreenRender } from './capabilities'
 import {
   binarySearchTimestamp,
   convertFrameData,
@@ -69,6 +71,13 @@ interface RenderFrameOutcome {
   status: 'rendered' | 'cleared' | 'pending' | 'empty' | 'failed'
   data: SubtitleData | null
   warning: SubtitleDiagnosticWarning | null
+}
+
+interface OffscreenFrameMetadata {
+  width: number | null
+  height: number | null
+  bounds: SubtitleCueBounds | null
+  compositionCount: number
 }
 
 function createTransferableBuffer(data: Uint8Array, preserveSource: boolean): ArrayBuffer {
@@ -164,6 +173,16 @@ abstract class BaseVideoSubtitleRenderer {
   protected useWebGL2: boolean = false
   protected onWebGL2Fallback?: () => void
 
+  protected readonly offscreenRenderOption: boolean
+  protected pendingWorkerOffscreen = false
+  protected useWorkerOffscreen = false
+  protected canvasPixelWidth = 1
+  protected canvasPixelHeight = 1
+  private offscreenPresentToken = 0
+  private offscreenAttachPromise: Promise<void> | null = null
+  private offscreenTransferPending = false
+  private offscreenFrameMetadata = new Map<number, OffscreenFrameMetadata>()
+
   // Performance tracking
   protected perfStats = {
     framesRendered: 0,
@@ -181,6 +200,7 @@ abstract class BaseVideoSubtitleRenderer {
     this.subContent = options.subContent
     this.onWebGPUFallback = options.onWebGPUFallback
     this.onWebGL2Fallback = options.onWebGL2Fallback
+    this.offscreenRenderOption = options.offscreenRender !== false
     this.onEvent = options.onEvent
     this.onWarning = options.onWarning
     this.debug = Boolean(options.debug)
@@ -351,13 +371,20 @@ abstract class BaseVideoSubtitleRenderer {
     this.createCanvas()
     await new Promise((resolve) => setTimeout(resolve, 0))
     await this.loadSubtitles()
+    await this.ensureWorkerOffscreenAttached()
     this.startRenderLoop()
   }
 
-  /** Create the canvas overlay positioned over the video. */
-  protected createCanvas(): void {
-    this.canvas = document.createElement('canvas')
-    Object.assign(this.canvas.style, {
+  protected shouldPreferWorkerOffscreen(): boolean {
+    return this.offscreenRenderOption && canUseWorkerOffscreenRender()
+  }
+
+  protected isWorkerOffscreenPresent(): boolean {
+    return this.useWorkerOffscreen
+  }
+
+  private mountOverlayCanvas(canvas: HTMLCanvasElement): void {
+    Object.assign(canvas.style, {
       position: 'absolute',
       pointerEvents: 'none',
       zIndex: '10'
@@ -368,14 +395,21 @@ abstract class BaseVideoSubtitleRenderer {
       if (window.getComputedStyle(parent).position === 'static') {
         parent.style.position = 'relative'
       }
-      parent.appendChild(this.canvas)
+      parent.appendChild(canvas)
     }
+  }
 
-    // Try WebGPU first, then WebGL2, then Canvas2D
+  /** Create the canvas overlay positioned over the video. */
+  protected createCanvas(): void {
+    this.canvas = document.createElement('canvas')
+    this.mountOverlayCanvas(this.canvas)
+
     if (isWebGPUSupported()) {
       this.initWebGPU()
     } else if (isWebGL2Supported()) {
       this.initWebGL2()
+    } else if (this.shouldPreferWorkerOffscreen()) {
+      this.pendingWorkerOffscreen = true
     } else {
       this.initCanvas2D()
     }
@@ -388,10 +422,150 @@ abstract class BaseVideoSubtitleRenderer {
     this.seekedHandler = () => {
       this.lastRenderedIndex = -1
       this.lastRenderedTime = -1
+      this.offscreenFrameMetadata.clear()
       this.onSeek()
     }
     this.video.addEventListener('loadedmetadata', this.loadedMetadataHandler)
     this.video.addEventListener('seeked', this.seekedHandler)
+  }
+
+  private preferWorkerOffscreenOrCanvas2D(): void {
+    if (this.shouldPreferWorkerOffscreen()) {
+      this.pendingWorkerOffscreen = true
+      const state = this.getWorkerRendererState()
+      if (state.useWorker && state.workerReady && state.sessionId) {
+        void this.ensureWorkerOffscreenAttached()
+      }
+      return
+    }
+    this.initCanvas2D()
+  }
+
+  protected ensureWorkerOffscreenAttached(): Promise<void> {
+    if (this.disposed) return Promise.resolve()
+    if (this.offscreenAttachPromise) return this.offscreenAttachPromise
+    if (!this.pendingWorkerOffscreen || !this.canvas) return Promise.resolve()
+
+    const state = this.getWorkerRendererState()
+    if (!state.useWorker || !state.workerReady || !state.sessionId) {
+      this.pendingWorkerOffscreen = false
+      this.initCanvas2D()
+      this.updateCanvasSize()
+      return Promise.resolve()
+    }
+
+    const sessionId = state.sessionId
+    this.pendingWorkerOffscreen = false
+    this.offscreenTransferPending = true
+
+    let attachPromise: Promise<void>
+    attachPromise = this.attachWorkerOffscreen(sessionId).finally(() => {
+      this.offscreenTransferPending = false
+      if (this.offscreenAttachPromise === attachPromise) {
+        this.offscreenAttachPromise = null
+      }
+    })
+    this.offscreenAttachPromise = attachPromise
+    return attachPromise
+  }
+
+  private async attachWorkerOffscreen(sessionId: string): Promise<void> {
+    try {
+      const transferableCanvas = this.canvas as HTMLCanvasElement & {
+        transferControlToOffscreen: () => OffscreenCanvas
+      }
+      const offscreen = transferableCanvas.transferControlToOffscreen()
+      const attachResponse = await sendToWorker({
+        type: 'attachOffscreenCanvas',
+        sessionId,
+        canvas: offscreen
+      })
+      if (attachResponse.type === 'error') {
+        throw new Error(attachResponse.message)
+      }
+      if (attachResponse.type !== 'offscreenAttached') {
+        throw new Error('Worker OffscreenCanvas attach failed')
+      }
+      if (this.disposed) {
+        await sendToWorker({ type: 'detachOffscreenCanvas', sessionId })
+        return
+      }
+
+      this.useWorkerOffscreen = true
+      this.emitRendererBackend('worker-offscreen')
+      this.lastRenderedIndex = -1
+      this.lastRenderedTime = -1
+
+      await sendToWorker({
+        type: 'resizeOffscreenCanvas',
+        sessionId,
+        width: this.canvasPixelWidth,
+        height: this.canvasPixelHeight
+      })
+    } catch (error) {
+      this.offscreenTransferPending = false
+      this.useWorkerOffscreen = false
+      if (this.disposed) return
+      this.recreateCanvasForMainThreadFallback()
+      this.emitWarning(
+        createSubtitleWarning(
+          'WORKER_FALLBACK',
+          'Worker OffscreenCanvas present unavailable; falling back to main-thread Canvas2D.',
+          {
+            format: this.format,
+            details: { reason: error instanceof Error ? error.message : String(error) }
+          }
+        )
+      )
+    }
+  }
+
+  private recreateCanvasForMainThreadFallback(): void {
+    if (this.canvas?.parentElement) {
+      this.canvas.parentElement.removeChild(this.canvas)
+    }
+    this.canvas = document.createElement('canvas')
+    this.mountOverlayCanvas(this.canvas)
+    this.initCanvas2D()
+    this.updateCanvasSize()
+    if (!this.tempCanvas) {
+      this.tempCanvas = document.createElement('canvas')
+      this.tempCtx = this.tempCanvas.getContext('2d')
+    }
+  }
+
+  private fallbackFromWorkerOffscreen(reason: string): void {
+    if (!this.useWorkerOffscreen || this.disposed) return
+
+    const state = this.getWorkerRendererState()
+    this.offscreenPresentToken++
+    this.useWorkerOffscreen = false
+    this.pendingWorkerOffscreen = false
+    this.offscreenFrameMetadata.clear()
+    if (state.sessionId) {
+      sendToWorker({ type: 'detachOffscreenCanvas', sessionId: state.sessionId }).catch(() => {})
+    }
+    this.recreateCanvasForMainThreadFallback()
+    this.lastRenderedIndex = -2
+    this.lastRenderedTime = -1
+    this.emitWarning(
+      createSubtitleWarning(
+        'WORKER_FALLBACK',
+        'Worker OffscreenCanvas present failed; falling back to main-thread Canvas2D.',
+        {
+          format: this.format,
+          details: { reason }
+        }
+      )
+    )
+  }
+
+  protected getOffscreenFrameMetadata(index: number): OffscreenFrameMetadata | null {
+    return this.offscreenFrameMetadata.get(index) ?? null
+  }
+
+  protected clearOffscreenFrameMetadata(): void {
+    this.offscreenFrameMetadata.clear()
   }
 
   protected emitEvent(event: SubtitleRendererEvent): void {
@@ -464,11 +638,10 @@ abstract class BaseVideoSubtitleRenderer {
       this.webgpuRenderer = null
       this.useWebGPU = false
       this.onWebGPUFallback?.()
-      // Try WebGL2 before Canvas2D
       if (isWebGL2Supported()) {
         this.initWebGL2()
       } else {
-        this.initCanvas2D()
+        this.preferWorkerOffscreenOrCanvas2D()
       }
     }
   }
@@ -493,7 +666,7 @@ abstract class BaseVideoSubtitleRenderer {
       this.webgl2Renderer = null
       this.useWebGL2 = false
       this.onWebGL2Fallback?.()
-      this.initCanvas2D()
+      this.preferWorkerOffscreenOrCanvas2D()
     }
   }
 
@@ -557,9 +730,8 @@ abstract class BaseVideoSubtitleRenderer {
 
     const pixelWidth = Math.max(1, width * window.devicePixelRatio)
     const pixelHeight = Math.max(1, height * window.devicePixelRatio)
-
-    this.canvas.width = pixelWidth
-    this.canvas.height = pixelHeight
+    this.canvasPixelWidth = pixelWidth
+    this.canvasPixelHeight = pixelHeight
 
     // Position canvas to match video content area
     this.canvas.style.left = `${bounds.x}px`
@@ -567,11 +739,26 @@ abstract class BaseVideoSubtitleRenderer {
     this.canvas.style.width = `${bounds.width}px`
     this.canvas.style.height = `${bounds.height}px`
 
-    // Update GPU renderer size if active
-    if (this.useWebGPU && this.webgpuRenderer) {
-      this.webgpuRenderer.updateSize(pixelWidth, pixelHeight)
-    } else if (this.useWebGL2 && this.webgl2Renderer) {
-      this.webgl2Renderer.updateSize(pixelWidth, pixelHeight)
+    if (this.useWorkerOffscreen || this.pendingWorkerOffscreen || this.offscreenTransferPending) {
+      const state = this.getWorkerRendererState()
+      if (this.useWorkerOffscreen && state.sessionId && state.workerReady) {
+        sendToWorker({
+          type: 'resizeOffscreenCanvas',
+          sessionId: state.sessionId,
+          width: pixelWidth,
+          height: pixelHeight
+        }).catch(() => {})
+      }
+    } else {
+      this.canvas.width = pixelWidth
+      this.canvas.height = pixelHeight
+
+      // Update GPU renderer size if active
+      if (this.useWebGPU && this.webgpuRenderer) {
+        this.webgpuRenderer.updateSize(pixelWidth, pixelHeight)
+      } else if (this.useWebGL2 && this.webgl2Renderer) {
+        this.webgl2Renderer.updateSize(pixelWidth, pixelHeight)
+      }
     }
 
     this.lastRenderedIndex = -1
@@ -590,9 +777,10 @@ abstract class BaseVideoSubtitleRenderer {
 
   /** Start the render loop. */
   protected startRenderLoop(): void {
-    // Create reusable temp canvas for rendering
-    this.tempCanvas = document.createElement('canvas')
-    this.tempCtx = this.tempCanvas.getContext('2d')
+    if (!this.useWorkerOffscreen) {
+      this.tempCanvas = document.createElement('canvas')
+      this.tempCtx = this.tempCanvas.getContext('2d')
+    }
 
     const render = () => {
       if (this.disposed) return
@@ -603,56 +791,49 @@ abstract class BaseVideoSubtitleRenderer {
 
         // Only re-render if index changed
         if (currentIndex !== this.lastRenderedIndex) {
-          const cacheHit = currentIndex >= 0 && this.getWorkerRendererState().frameCache.has(currentIndex)
+          const cacheHit =
+            !this.useWorkerOffscreen && currentIndex >= 0 && this.getWorkerRendererState().frameCache.has(currentIndex)
+          const workerOffscreenPresent = this.useWorkerOffscreen
           const startTime = performance.now()
           const outcome = this.renderFrame(currentTime, currentIndex)
           const endTime = performance.now()
 
-          // Track performance
-          const renderTime = endTime - startTime
-          this.perfStats.lastRenderTime = renderTime
-          this.perfStats.renderTimes.push(renderTime)
-          // Keep only last 60 samples for rolling average
-          if (this.perfStats.renderTimes.length > 60) {
-            this.perfStats.renderTimes.shift()
-          }
-          this.perfStats.framesRendered++
-          this.perfStats.fpsTimestamps.push(endTime)
-
-          // Check for frame drop (if render took longer than frame budget ~16.67ms for 60fps)
-          const frameBudget = 16.67
-          if (renderTime > frameBudget) {
-            this.perfStats.framesDropped++
-          }
-
-          if (outcome.warning) {
-            this.emitWarning(outcome.warning)
-          }
-
           this.lastRenderedIndex = currentIndex
           this.lastRenderedTime = currentTime
-          const cue = currentIndex >= 0 ? this.buildCueMetadata(currentIndex) : null
-          this.emitCueChange(cue)
-          this.recordLastRenderInfo({
-            time: currentTime,
-            index: currentIndex,
-            status: outcome.status,
-            backend: this.currentRendererBackend,
-            usingWorker: this.getCacheStats().usingWorker,
-            cacheHit,
-            renderDuration: Math.round(renderTime * 100) / 100,
-            frameWidth: outcome.data?.width ?? null,
-            frameHeight: outcome.data?.height ?? null,
-            compositionCount: outcome.data?.compositionData.length ?? 0,
-            cue,
-            cache: this.getCacheStats(),
-            capturedAt: endTime
-          })
-          this.emitEvent({ type: 'stats', stats: this.getStats() })
-          if (currentIndex >= 0 && (this.prefetchBefore > 0 || this.prefetchAfter > 0)) {
-            const prefetch = (this as unknown as { prefetchAroundTime?: (time: number) => Promise<void> })
-              .prefetchAroundTime
-            prefetch?.call(this, currentTime).catch(() => {})
+
+          // Worker OffscreenCanvas presentation completes asynchronously. Its
+          // callback records the real status, metadata, and render duration.
+          if (!workerOffscreenPresent) {
+            const renderTime = endTime - startTime
+            this.recordRenderPerformance(renderTime, endTime)
+
+            if (outcome.warning) {
+              this.emitWarning(outcome.warning)
+            }
+
+            const cue = currentIndex >= 0 ? this.buildCueMetadata(currentIndex) : null
+            this.emitCueChange(cue)
+            this.recordLastRenderInfo({
+              time: currentTime,
+              index: currentIndex,
+              status: outcome.status,
+              backend: this.currentRendererBackend,
+              usingWorker: this.getCacheStats().usingWorker,
+              cacheHit,
+              renderDuration: Math.round(renderTime * 100) / 100,
+              frameWidth: outcome.data?.width ?? null,
+              frameHeight: outcome.data?.height ?? null,
+              compositionCount: outcome.data?.compositionData.length ?? 0,
+              cue,
+              cache: this.getCacheStats(),
+              capturedAt: endTime
+            })
+            this.emitEvent({ type: 'stats', stats: this.getStats() })
+            if (currentIndex >= 0 && (this.prefetchBefore > 0 || this.prefetchAfter > 0)) {
+              const prefetch = (this as unknown as { prefetchAroundTime?: (time: number) => Promise<void> })
+                .prefetchAroundTime
+              prefetch?.call(this, currentTime).catch(() => {})
+            }
           }
         }
       }
@@ -663,10 +844,59 @@ abstract class BaseVideoSubtitleRenderer {
     this.animationFrameId = requestAnimationFrame(render)
   }
 
+  private recordRenderPerformance(renderTime: number, capturedAt: number, countAsDropped = true): void {
+    this.perfStats.lastRenderTime = renderTime
+    this.perfStats.renderTimes.push(renderTime)
+    if (this.perfStats.renderTimes.length > 60) {
+      this.perfStats.renderTimes.shift()
+    }
+    this.perfStats.framesRendered++
+    this.perfStats.fpsTimestamps.push(capturedAt)
+    if (countAsDropped && renderTime > 16.67) {
+      this.perfStats.framesDropped++
+    }
+  }
+
+  private recordOffscreenRenderCompletion(
+    time: number,
+    index: number,
+    status: RenderFrameOutcome['status'],
+    width: number | null,
+    height: number | null,
+    compositionCount: number,
+    startedAt: number
+  ): void {
+    const completedAt = performance.now()
+    const renderTime = completedAt - startedAt
+    this.recordRenderPerformance(renderTime, completedAt, false)
+    const cue = index >= 0 ? this.buildCueMetadata(index) : null
+    this.emitCueChange(cue)
+    this.recordLastRenderInfo({
+      time,
+      index,
+      status,
+      backend: this.currentRendererBackend,
+      usingWorker: this.getCacheStats().usingWorker,
+      cacheHit: false,
+      renderDuration: Math.round(renderTime * 100) / 100,
+      frameWidth: width,
+      frameHeight: height,
+      compositionCount,
+      cue,
+      cache: this.getCacheStats(),
+      capturedAt: completedAt
+    })
+    this.emitEvent({ type: 'stats', stats: this.getStats() })
+  }
+
   /** Render a subtitle frame to the canvas. */
   protected renderFrame(time: number, index: number): RenderFrameOutcome {
     if (!this.canvas) {
       return { status: 'failed', data: null, warning: null }
+    }
+
+    if (this.useWorkerOffscreen) {
+      return this.renderFrameWorkerOffscreen(time, index)
     }
 
     // Get the data for this index
@@ -709,6 +939,106 @@ abstract class BaseVideoSubtitleRenderer {
     }
 
     return { status: 'rendered', data, warning: null }
+  }
+
+  private renderFrameWorkerOffscreen(time: number, index: number): RenderFrameOutcome {
+    const state = this.getWorkerRendererState()
+    if (!state.sessionId || !state.workerReady) {
+      queueMicrotask(() => this.fallbackFromWorkerOffscreen('Worker session is not ready.'))
+      return { status: 'pending', data: null, warning: null }
+    }
+
+    const token = ++this.offscreenPresentToken
+    const sessionId = state.sessionId
+    const startedAt = performance.now()
+
+    void sendToWorker({
+      type: 'presentOffscreen',
+      sessionId,
+      format: this.format,
+      index,
+      canvasWidth: this.canvasPixelWidth,
+      canvasHeight: this.canvasPixelHeight,
+      displaySettings: { ...this.displaySettings }
+    })
+      .then((response) => {
+        if (this.disposed || token !== this.offscreenPresentToken) return
+        if (response.type === 'error') {
+          this.recordOffscreenRenderCompletion(time, index, 'failed', null, null, 0, startedAt)
+          this.fallbackFromWorkerOffscreen(response.message)
+          return
+        }
+        if (response.type !== 'offscreenPresented') {
+          this.recordOffscreenRenderCompletion(time, index, 'failed', null, null, 0, startedAt)
+          this.fallbackFromWorkerOffscreen(`Unexpected worker response: ${response.type}`)
+          return
+        }
+        if (response.status === 'failed') {
+          const warning = warningFromRenderIssue(response.renderIssue?.trim() || null, {
+            format: this.format,
+            cueIndex: index
+          })
+          if (warning) {
+            this.emitWarning(warning)
+          }
+          this.recordOffscreenRenderCompletion(
+            time,
+            index,
+            'failed',
+            response.width ?? null,
+            response.height ?? null,
+            response.compositionCount ?? 0,
+            startedAt
+          )
+          if (response.fatal) {
+            this.fallbackFromWorkerOffscreen(response.renderIssue || 'Offscreen presentation failed.')
+          }
+          return
+        }
+
+        if (response.status === 'cleared' || response.status === 'empty' || response.compositionCount === 0) {
+          this.lastRenderedData = null
+        }
+
+        if (index >= 0) {
+          this.offscreenFrameMetadata.set(index, {
+            width: response.width ?? null,
+            height: response.height ?? null,
+            bounds: response.bounds ?? null,
+            compositionCount: response.compositionCount ?? 0
+          })
+        }
+
+        const warning = warningFromRenderIssue(response.renderIssue?.trim() || null, {
+          format: this.format,
+          cueIndex: index
+        })
+        if (warning) {
+          this.emitWarning(warning)
+        }
+
+        this.recordOffscreenRenderCompletion(
+          time,
+          index,
+          response.status,
+          response.width ?? null,
+          response.height ?? null,
+          response.compositionCount ?? 0,
+          startedAt
+        )
+      })
+      .catch((error) => {
+        if (this.disposed || token !== this.offscreenPresentToken) return
+        this.recordOffscreenRenderCompletion(time, index, 'failed', null, null, 0, startedAt)
+        this.fallbackFromWorkerOffscreen(error instanceof Error ? error.message : String(error))
+      })
+
+    if (index < 0) {
+      this.lastRenderedData = null
+      return { status: 'cleared', data: null, warning: null }
+    }
+
+    return { status: 'pending', data: null, warning: null }
   }
 
   protected computeLayout(data: SubtitleData): SubtitleRenderLayout {
@@ -887,6 +1217,7 @@ abstract class BaseVideoSubtitleRenderer {
   /** Dispose of all resources. */
   dispose(): void {
     this.disposed = true
+    this.offscreenPresentToken++
 
     if (this.animationFrameId !== null) {
       cancelAnimationFrame(this.animationFrameId)
@@ -914,6 +1245,11 @@ abstract class BaseVideoSubtitleRenderer {
       this.webgl2Renderer = null
     }
 
+    const state = this.getWorkerRendererState()
+    if (this.useWorkerOffscreen && state.sessionId) {
+      sendToWorker({ type: 'detachOffscreenCanvas', sessionId: state.sessionId }).catch(() => {})
+    }
+
     this.canvas?.parentElement?.removeChild(this.canvas)
     this.canvas = null
     this.ctx = null
@@ -923,8 +1259,13 @@ abstract class BaseVideoSubtitleRenderer {
     this.currentCueMetadata = null
     this.parserMetadata = null
     this.lastRenderInfo = null
+    this.offscreenFrameMetadata.clear()
     this.useWebGPU = false
     this.useWebGL2 = false
+    this.useWorkerOffscreen = false
+    this.pendingWorkerOffscreen = false
+    this.offscreenTransferPending = false
+    this.offscreenAttachPromise = null
   }
 }
 
@@ -1288,6 +1629,7 @@ export class PgsRenderer extends BaseVideoSubtitleRenderer {
     const startTime = this.state.timestamps[index]
     const endTime = this.state.timestamps[index + 1] ?? startTime + 5000
     const frame = this.state.frameCache.get(index) ?? null
+    const offscreenFrame = this.getOffscreenFrameMetadata(index)
 
     return {
       index,
@@ -1297,8 +1639,8 @@ export class PgsRenderer extends BaseVideoSubtitleRenderer {
       duration: Math.max(0, endTime - startTime),
       screenWidth: metadata.screenWidth,
       screenHeight: metadata.screenHeight,
-      bounds: frame ? getSubtitleBounds(frame) : null,
-      compositionCount: frame?.compositionData.length ?? 0
+      bounds: frame ? getSubtitleBounds(frame) : (offscreenFrame?.bounds ?? null),
+      compositionCount: frame?.compositionData.length ?? offscreenFrame?.compositionCount ?? 0
     }
   }
 
@@ -1326,6 +1668,7 @@ export class PgsRenderer extends BaseVideoSubtitleRenderer {
     this.state.frameCache.clear()
     this.state.renderIssues.clear()
     this.state.pendingRenders.clear()
+    this.clearOffscreenFrameMetadata()
     this.lastRenderedIndex = -1
     if (this.state.useWorker && this.state.workerReady) {
       sendToWorker({ type: 'clearPgsCache', sessionId: this.state.sessionId! }).catch(() => {})
@@ -1852,6 +2195,7 @@ export class VobSubRenderer extends BaseVideoSubtitleRenderer {
     const startTime = this.state.timestamps[index]
     const endTime = this.state.timestamps[index + 1] ?? startTime + 5000
     const frame = this.state.frameCache.get(index) ?? null
+    const offscreenFrame = this.getOffscreenFrameMetadata(index)
 
     return {
       index,
@@ -1861,8 +2205,8 @@ export class VobSubRenderer extends BaseVideoSubtitleRenderer {
       duration: Math.max(0, endTime - startTime),
       screenWidth: metadata.screenWidth,
       screenHeight: metadata.screenHeight,
-      bounds: frame ? getSubtitleBounds(frame) : null,
-      compositionCount: frame?.compositionData.length ?? 0,
+      bounds: frame ? getSubtitleBounds(frame) : (offscreenFrame?.bounds ?? null),
+      compositionCount: frame?.compositionData.length ?? offscreenFrame?.compositionCount ?? 0,
       language: metadata.language ?? null,
       trackId: metadata.trackId ?? null
     }
@@ -1896,6 +2240,7 @@ export class VobSubRenderer extends BaseVideoSubtitleRenderer {
     this.state.frameCache.clear()
     this.state.renderIssues.clear()
     this.state.pendingRenders.clear()
+    this.clearOffscreenFrameMetadata()
     this.cachedIndex = -1
     this.cachedIndexTime = -1
     this.pendingIndexLookup = null
@@ -1946,6 +2291,7 @@ export class VobSubRenderer extends BaseVideoSubtitleRenderer {
     this.vobsubParser?.setDebandEnabled(enabled)
     // Clear cache to force re-render with new settings
     this.state.frameCache.clear()
+    this.clearOffscreenFrameMetadata()
     this.lastRenderedIndex = -1
     this.emitCacheChange(this.state.frameCache.size, this.state.pendingRenders.size)
   }
@@ -1958,6 +2304,7 @@ export class VobSubRenderer extends BaseVideoSubtitleRenderer {
     this.vobsubParser?.setDebandThreshold(threshold)
     // Clear cache to force re-render with new settings
     this.state.frameCache.clear()
+    this.clearOffscreenFrameMetadata()
     this.lastRenderedIndex = -1
     this.emitCacheChange(this.state.frameCache.size, this.state.pendingRenders.size)
   }
@@ -1970,6 +2317,7 @@ export class VobSubRenderer extends BaseVideoSubtitleRenderer {
     this.vobsubParser?.setDebandRange(range)
     // Clear cache to force re-render with new settings
     this.state.frameCache.clear()
+    this.clearOffscreenFrameMetadata()
     this.lastRenderedIndex = -1
     this.emitCacheChange(this.state.frameCache.size, this.state.pendingRenders.size)
   }

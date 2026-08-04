@@ -34,6 +34,8 @@ export type {
   SubtitleRendererBackend,
   SubtitleRendererEvent,
   SubtitleRendererStatsSnapshot,
+  RuntimeCapabilities,
+  SubtitlePresentPath,
   VideoSubtitleOptions,
   VideoVobSubOptions,
   RenderResult,
@@ -50,6 +52,15 @@ export { warmup, ready, isWorkerAvailable, isWorkerReady } from './ts/worker'
 
 // Re-export WebGPU utilities
 export { isWebGPUSupported } from './ts/webgpu-renderer'
+
+export {
+  getRuntimeCapabilities,
+  canUseWorkerOffscreenRender,
+  isOffscreenCanvasSupported,
+  isOffscreenCanvas2DSupported,
+  isTransferControlToOffscreenSupported,
+  isCanvas2DSupported
+} from './ts/capabilities'
 
 // Re-export parsers
 export { PgsParser, VobSubParserLowLevel, UnifiedSubtitleParser, openSubtitles } from './ts/parsers'
