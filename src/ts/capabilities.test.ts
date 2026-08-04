@@ -90,6 +90,35 @@ test('Canvas2D detection falls back to an HTML canvas when OffscreenCanvas lacks
   }
 })
 
+test('getRuntimeCapabilities probes OffscreenCanvas 2D only once', () => {
+  const offscreenDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'OffscreenCanvas')
+  let constructorCalls = 0
+
+  Object.defineProperty(globalThis, 'OffscreenCanvas', {
+    configurable: true,
+    value: class {
+      constructor() {
+        constructorCalls++
+      }
+
+      getContext(): object {
+        return {}
+      }
+    }
+  })
+
+  try {
+    getRuntimeCapabilities()
+    expect(constructorCalls).toBe(1)
+  } finally {
+    if (offscreenDescriptor) {
+      Object.defineProperty(globalThis, 'OffscreenCanvas', offscreenDescriptor)
+    } else {
+      delete (globalThis as { OffscreenCanvas?: unknown }).OffscreenCanvas
+    }
+  }
+})
+
 test('reports a dedicated reason when Worker OffscreenCanvas lacks a 2D context', () => {
   const workerDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'Worker')
   const windowDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'window')

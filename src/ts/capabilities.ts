@@ -32,8 +32,8 @@ export function isOffscreenCanvas2DSupported(): boolean {
   return false
 }
 
-export function isCanvas2DSupported(): boolean {
-  if (isOffscreenCanvas2DSupported()) return true
+export function isCanvas2DSupported(offscreenCanvas2d = isOffscreenCanvas2DSupported()): boolean {
+  if (offscreenCanvas2d) return true
 
   if (typeof document === 'undefined') return false
   try {
@@ -112,7 +112,7 @@ export function getRuntimeCapabilities(): RuntimeCapabilities {
   const offscreenCanvas2d = isOffscreenCanvas2DSupported()
   const webgpu = isWebGPUSupported()
   const webgl2 = isWebGL2Supported()
-  const canvas2d = isCanvas2DSupported()
+  const canvas2d = isCanvas2DSupported(offscreenCanvas2d)
   const createImageBitmap = typeof globalThis.createImageBitmap === 'function'
   const workerOffscreenRender = worker && offscreenCanvas && transferControlToOffscreen && offscreenCanvas2d
 

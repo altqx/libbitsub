@@ -450,6 +450,7 @@ abstract class BaseVideoSubtitleRenderer {
     if (!state.useWorker || !state.workerReady || !state.sessionId) {
       this.pendingWorkerOffscreen = false
       this.initCanvas2D()
+      this.updateCanvasSize()
       return Promise.resolve()
     }
 
