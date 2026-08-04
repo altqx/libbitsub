@@ -102,11 +102,27 @@ to WebGL2, then Canvas2D.
 ### Automatic backend ladder
 
 ```
-WebGPU → WebGL2 → Canvas2D
+WebGPU → WebGL2 → Worker OffscreenCanvas → Canvas2D
 ```
+
+- **WebGPU / WebGL2** — main-thread GPU present; worker still preferred for parse/decode (transfer RGBA path).
+- **Worker OffscreenCanvas** — when GPU is unavailable but `Worker` + `OffscreenCanvas` +
+  `transferControlToOffscreen` exist, decode **and** Canvas2D present run in the shared worker
+  (no RGBA transfer back to the UI thread). Helps subtitle switching on constrained TVs.
+- **Canvas2D** — main-thread present fallback for older WebViews without OffscreenCanvas transfer.
 
 High-level renderers select the first available backend and emit
 `renderer-change` / fallback callbacks when stepping down.
+
+Use `getRuntimeCapabilities()` to explain why a device landed on the transfer or Canvas2D path:
+
+```ts
+import { getRuntimeCapabilities } from 'libbitsub'
+
+const caps = getRuntimeCapabilities()
+// caps.preferredPresentPath: 'main-webgpu' | 'main-webgl2' | 'worker-offscreen' | 'main-canvas2d' | 'main-thread'
+// caps.reasons: human-readable missing-feature notes
+```
 
 ## CI expectations
 

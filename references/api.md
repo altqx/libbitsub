@@ -11,6 +11,11 @@
 | `isWorkerAvailable`             | `() => boolean`                                                                                                                                                        |                                                                                                                                                                        |
 | `isWorkerReady`                 | `() => boolean`                                                                                                                                                        | `true` only after worker WASM initialization succeeds.                                                                                                                 |
 | `isWebGPUSupported`             | `() => boolean`                                                                                                                                                        |                                                                                                                                                                        |
+| `getRuntimeCapabilities`        | `() => RuntimeCapabilities`                                                                                                                                            | Snapshot of worker / OffscreenCanvas / GPU / Canvas2D support plus `preferredPresentPath` and human-readable `reasons` for fallback UI copy                            |
+| `canUseWorkerOffscreenRender`   | `() => boolean`                                                                                                                                                        | `true` when Worker + OffscreenCanvas + `transferControlToOffscreen` + Canvas2D are all available                                                                       |
+| `isOffscreenCanvasSupported`    | `() => boolean`                                                                                                                                                        |                                                                                                                                                                        |
+| `isTransferControlToOffscreenSupported` | `() => boolean`                                                                                                                                                |                                                                                                                                                                        |
+| `isCanvas2DSupported`           | `() => boolean`                                                                                                                                                        |                                                                                                                                                                        |
 | `detectSubtitleFormat`          | `(source: AutoSubtitleSource) => 'pgs' \| 'vobsub' \| null`                                                                                                            | Uses file hints and binary magic bytes, including `.mks` sources carrying embedded `S_VOBSUB`                                                                          |
 | `createAutoSubtitleRenderer`    | `(options: AutoVideoSubtitleOptions) => PgsRenderer \| VobSubRenderer`                                                                                                 | Throws if format cannot be determined                                                                                                                                  |
 | `openSubtitles`                 | `(source: AutoSubtitleSource, options?: SubtitleDiagnosticsOptions) => Promise<OpenedSubtitles>`                                                                       | Initializes WASM, auto-detects the format, and returns a normalized low-level handle                                                                                   |
@@ -118,6 +123,8 @@ interface VideoSubtitleOptions {
   onError?: (error: Error) => void // libbitsub emits SubtitleDiagnosticError instances here
   onWebGPUFallback?: () => void
   onWebGL2Fallback?: () => void
+  /** Prefer Worker OffscreenCanvas present on the Canvas2D tier (default true). */
+  offscreenRender?: boolean
   displaySettings?: Partial<SubtitleDisplaySettings>
   cacheLimit?: number // default 24
   prefetchWindow?: { before?: number; after?: number }
@@ -148,6 +155,36 @@ interface SubtitleDiagnosticsOptions {
 `AutoVideoSubtitleOptions` extends `VideoVobSubOptions` with:
 
 - `fileName?: string` — file name hint for format detection
+
+---
+
+## `RuntimeCapabilities`
+
+Returned by `getRuntimeCapabilities()`:
+
+```ts
+type SubtitlePresentPath =
+  | 'main-webgpu'
+  | 'main-webgl2'
+  | 'worker-offscreen'
+  | 'main-canvas2d'
+  | 'main-thread'
+
+interface RuntimeCapabilities {
+  worker: boolean
+  offscreenCanvas: boolean
+  transferControlToOffscreen: boolean
+  workerOffscreenRender: boolean
+  webgpu: boolean
+  webgl2: boolean
+  canvas2d: boolean
+  createImageBitmap: boolean
+  preferredPresentPath: SubtitlePresentPath
+  reasons: string[]
+}
+```
+
+Use `preferredPresentPath` and `reasons` to explain why a client is on the transfer or Canvas2D fallback path.
 
 ---
 
@@ -384,7 +421,7 @@ type SubtitleRendererEvent =
   | { type: 'loaded'; format: SubtitleFormatName; metadata: SubtitleParserMetadata }
   | { type: 'error'; format: SubtitleFormatName; error: SubtitleDiagnosticErrorLike }
   | { type: 'warning'; warning: SubtitleDiagnosticWarning }
-  | { type: 'renderer-change'; renderer: 'webgpu' | 'webgl2' | 'canvas2d' }
+  | { type: 'renderer-change'; renderer: 'webgpu' | 'webgl2' | 'worker-offscreen' | 'canvas2d' }
   | { type: 'worker-state'; enabled: boolean; ready: boolean; sessionId: string | null; fallback?: boolean }
   | { type: 'cache-change'; cachedFrames: number; pendingRenders: number; cacheLimit: number }
   | { type: 'cue-change'; cue: SubtitleCueMetadata | null }
@@ -440,7 +477,7 @@ interface SubtitleLastRenderInfo {
   time: number
   index: number
   status: 'rendered' | 'cleared' | 'pending' | 'empty' | 'failed'
-  backend: 'webgpu' | 'webgl2' | 'canvas2d' | null
+  backend: 'webgpu' | 'webgl2' | 'worker-offscreen' | 'canvas2d' | null
   usingWorker: boolean
   cacheHit: boolean
   renderDuration: number

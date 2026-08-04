@@ -608,7 +608,7 @@ Emitted events:
 | `loaded`          | subtitle format and parser metadata                                               |
 | `error`           | subtitle format and `SubtitleDiagnosticErrorLike`                                 |
 | `warning`         | `SubtitleDiagnosticWarning`                                                       |
-| `renderer-change` | active backend: `webgpu`, `webgl2`, or `canvas2d`                                 |
+| `renderer-change` | active backend: `webgpu`, `webgl2`, `worker-offscreen`, or `canvas2d`              |
 | `worker-state`    | whether worker mode is enabled, ready, fallback status, and the active session ID |
 | `cache-change`    | cached frame count, pending renders, and configured cache limit                   |
 | `cue-change`      | current cue metadata or `null` when nothing is displayed                          |
@@ -683,23 +683,31 @@ const parser = new UnifiedSubtitleParser({
 parser.loadAuto({ data: subtitleBytes, fileName: 'track.sup' })
 ```
 
-## GPU backends
+## GPU / present backends
 
 libbitsub prefers:
 
-1. WebGPU
-2. WebGL2
-3. Canvas2D
+1. WebGPU (main-thread present)
+2. WebGL2 (main-thread present)
+3. Worker OffscreenCanvas (decode + Canvas2D present off the UI thread)
+4. Canvas2D (main-thread fallback for older TVs)
 
 ```ts
-import { isWebGPUSupported } from 'libbitsub'
+import { getRuntimeCapabilities, isWebGPUSupported } from 'libbitsub'
 
 console.log({
-  webgpu: isWebGPUSupported()
+  webgpu: isWebGPUSupported(),
+  capabilities: getRuntimeCapabilities()
 })
 ```
 
-WebGL2 and Canvas2D fallback remain automatic. Use `onWebGPUFallback`, `onWebGL2Fallback`, `onEvent`, or `onWarning` if you need to observe backend changes.
+When Worker OffscreenCanvas is selected, composition/present moves into the shared worker —
+not only parsing — which reduces UI stalls during subtitle track switches on constrained devices.
+The existing transferable RGBA path remains for main-thread GPU/Canvas2D present.
+
+Use `onWebGPUFallback`, `onWebGL2Fallback`, `onEvent`, `onWarning`, or `getRuntimeCapabilities()`
+to observe or explain the active backend path. Set `offscreenRender: false` to force main-thread
+Canvas2D on the software tier.
 
 ## Compatibility & visual regression
 
@@ -829,6 +837,7 @@ interface VideoSubtitleOptions {
   onError?: (error: Error) => void
   onWebGPUFallback?: () => void
   onWebGL2Fallback?: () => void
+  offscreenRender?: boolean // default true — Worker OffscreenCanvas on Canvas2D tier
   displaySettings?: Partial<SubtitleDisplaySettings>
   cacheLimit?: number
   prefetchWindow?: {
@@ -883,7 +892,7 @@ type SubtitleRendererEvent =
   | { type: 'loaded'; format: SubtitleFormatName; metadata: SubtitleParserMetadata }
   | { type: 'error'; format: SubtitleFormatName; error: SubtitleDiagnosticErrorLike }
   | { type: 'warning'; warning: SubtitleDiagnosticWarning }
-  | { type: 'renderer-change'; renderer: 'webgpu' | 'webgl2' | 'canvas2d' }
+  | { type: 'renderer-change'; renderer: 'webgpu' | 'webgl2' | 'worker-offscreen' | 'canvas2d' }
   | { type: 'worker-state'; enabled: boolean; ready: boolean; sessionId: string | null; fallback?: boolean }
   | { type: 'cache-change'; cachedFrames: number; pendingRenders: number; cacheLimit: number }
   | { type: 'cue-change'; cue: SubtitleCueMetadata | null }

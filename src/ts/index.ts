@@ -33,6 +33,8 @@ export type {
   SubtitleRendererBackend,
   SubtitleRendererEvent,
   SubtitleRendererStatsSnapshot,
+  RuntimeCapabilities,
+  SubtitlePresentPath,
   VideoSubtitleOptions,
   VideoVobSubOptions,
   CompositionData,
@@ -86,3 +88,11 @@ export { PgsRenderer, VobSubRenderer, createAutoSubtitleRenderer } from './rende
 // GPU renderers (advanced use)
 export { WebGPURenderer, isWebGPUSupported } from './webgpu-renderer'
 export { WebGL2Renderer, isWebGL2Supported } from './webgl2-renderer'
+
+export {
+  getRuntimeCapabilities,
+  canUseWorkerOffscreenRender,
+  isOffscreenCanvasSupported,
+  isTransferControlToOffscreenSupported,
+  isCanvas2DSupported
+} from './capabilities'

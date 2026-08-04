@@ -204,6 +204,8 @@ export interface VideoSubtitleOptions {
   onWebGPUFallback?: () => void
   /** Callback when WebGL2 is unavailable and falling back to Canvas2D */
   onWebGL2Fallback?: () => void
+  /** Prefer Worker OffscreenCanvas present on the Canvas2D tier (default true) */
+  offscreenRender?: boolean
   /** Initial display settings for subtitle layout */
   displaySettings?: Partial<SubtitleDisplaySettings>
   /** Maximum number of rendered frames kept in cache */
@@ -255,7 +257,27 @@ export interface SubtitleDisplaySettings {
   opacity: number
 }
 
-export type SubtitleRendererBackend = 'webgpu' | 'webgl2' | 'canvas2d'
+export type SubtitleRendererBackend = 'webgpu' | 'webgl2' | 'worker-offscreen' | 'canvas2d'
+
+export type SubtitlePresentPath =
+  | 'main-webgpu'
+  | 'main-webgl2'
+  | 'worker-offscreen'
+  | 'main-canvas2d'
+  | 'main-thread'
+
+export interface RuntimeCapabilities {
+  worker: boolean
+  offscreenCanvas: boolean
+  transferControlToOffscreen: boolean
+  workerOffscreenRender: boolean
+  webgpu: boolean
+  webgl2: boolean
+  canvas2d: boolean
+  createImageBitmap: boolean
+  preferredPresentPath: SubtitlePresentPath
+  reasons: string[]
+}
 
 export type SubtitleRendererEvent =
   | { type: 'loading'; format: SubtitleFormatName }
@@ -350,6 +372,17 @@ export interface WorkerSessionMetadata {
   hasIdxMetadata?: boolean
 }
 
+export interface WorkerOffscreenDisplaySettings {
+  scale: number
+  aspectMode: SubtitleAspectMode
+  verticalOffset: number
+  horizontalOffset: number
+  horizontalAlign: SubtitleHorizontalAlign
+  bottomPadding: number
+  safeArea: number
+  opacity: number
+}
+
 export type WorkerRequest =
   | { type: 'init'; wasmUrl: string; glueUrl?: string }
   | { type: 'loadPgs'; sessionId: string; data: ArrayBuffer }
@@ -374,6 +407,21 @@ export type WorkerRequest =
   | { type: 'setVobSubDebandEnabled'; sessionId: string; enabled: boolean }
   | { type: 'setVobSubDebandThreshold'; sessionId: string; threshold: number }
   | { type: 'setVobSubDebandRange'; sessionId: string; range: number }
+  | { type: 'attachOffscreenCanvas'; sessionId: string; canvas: OffscreenCanvas }
+  | { type: 'resizeOffscreenCanvas'; sessionId: string; width: number; height: number }
+  | { type: 'detachOffscreenCanvas'; sessionId: string }
+  | { type: 'clearOffscreenCanvas'; sessionId: string }
+  | {
+      type: 'presentOffscreen'
+      sessionId: string
+      format: SubtitleFormatName
+      index: number
+      canvasWidth: number
+      canvasHeight: number
+      displaySettings: WorkerOffscreenDisplaySettings
+    }
+
+export type WorkerOffscreenPresentStatus = 'rendered' | 'cleared' | 'empty' | 'failed'
 
 export type WorkerResponse =
   | { type: 'initComplete'; success: boolean; error?: string }
@@ -404,6 +452,19 @@ export type WorkerResponse =
   | { type: 'cleared' }
   | { type: 'disposed' }
   | { type: 'debandSet' }
+  | { type: 'offscreenAttached' }
+  | { type: 'offscreenResized' }
+  | { type: 'offscreenDetached' }
+  | { type: 'offscreenCleared' }
+  | {
+      type: 'offscreenPresented'
+      status: WorkerOffscreenPresentStatus
+      renderIssue?: string
+      width?: number
+      height?: number
+      compositionCount?: number
+      bounds?: SubtitleCueBounds | null
+    }
   | { type: 'error'; message: string }
 
 /** Shared worker state for video renderers. */
