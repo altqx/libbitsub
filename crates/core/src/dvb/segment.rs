@@ -196,8 +196,8 @@ impl RegionComposition {
 
     pub fn bgcolor(&self) -> u8 {
         match self.depth {
-            2 => self.region_level_2,
-            4 => self.region_level_4,
+            1 => self.region_level_2,
+            2 => self.region_level_4,
             _ => self.region_level_8,
         }
     }
@@ -261,5 +261,15 @@ mod tests {
         assert_eq!(page.regions[0].region_id, 1);
         assert_eq!(page.regions[0].x, 16);
         assert_eq!(page.regions[0].y, 32);
+    }
+
+    #[test]
+    fn region_background_uses_raw_depth_code() {
+        for (depth_code, expected) in [(1, 2), (2, 10), (3, 225)] {
+            let data = [1, 0x08, 0, 4, 0, 2, depth_code << 2, 0, 225, 0xA8];
+            let region = RegionComposition::parse(&data).unwrap();
+
+            assert_eq!(region.bgcolor(), expected, "depth code {depth_code}");
+        }
     }
 }

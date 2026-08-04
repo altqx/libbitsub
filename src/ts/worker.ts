@@ -365,11 +365,14 @@ self.onmessage = async function(event) {
                     postResponse({ type: 'error', message: 'DVB session not found for finishDvb' }, [], _id);
                     break;
                 }
-                const count = parser.finishFeed();
+                const previousCount = parser.count;
+                parser.finishFeed();
+                const count = parser.count;
+                const added = count - previousCount;
                 const timestamps = parser.getTimestamps();
                 const endTimestamps = parser.getEndTimestamps();
                 postResponse(
-                    { type: 'dvbProgress', count, added: 0, partial: false, metadata: buildDvbMetadata(parser), timestamps, endTimestamps },
+                    { type: 'dvbProgress', count, added, partial: false, metadata: buildDvbMetadata(parser), timestamps, endTimestamps },
                     [timestamps.buffer, endTimestamps.buffer],
                     _id
                 );

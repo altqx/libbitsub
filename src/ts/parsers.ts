@@ -377,9 +377,11 @@ export class DvbParser {
   finishFeed(): number {
     try {
       if (!this.parser) throw new Error('Parser not initialized')
+      const previousCount = this.parser.count
       const count = this.parser.finishFeed()
       this.timestamps = this.parser.getTimestamps()
       this.endTimestamps = this.parser.getEndTimestamps()
+      if (count !== previousCount) this.cueMetadataCache.clear()
       return count
     } catch (error) {
       throw normalizeSubtitleError(error, { format: 'dvb' })
