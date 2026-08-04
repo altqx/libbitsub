@@ -3,7 +3,7 @@
   "version": "1.11.0",
   "author": "altqx",
   "license": "MIT",
-  "description": "High-performance WASM renderer for graphical subtitles (PGS and VobSub)",
+  "description": "High-performance WASM renderer for graphical subtitles (PGS, VobSub, and DVB)",
   "repository": {
     "type": "git",
     "url": "https://github.com/altqx/libbitsub"
@@ -12,6 +12,7 @@
     "libbitsub",
     "pgs",
     "vobsub",
+    "dvb",
     "subtitle",
     "wasm",
     "rust",

@@ -34,6 +34,108 @@ function looksLikePgsBinary(binary: Uint8Array): boolean {
   return binary.length >= 2 && binary[0] === 0x50 && binary[1] === 0x47
 }
 
+const DVB_SYNC_BYTE = 0x0f
+const DVB_PAGE_COMPOSITION = 0x10
+const DVB_REGION_COMPOSITION = 0x11
+const DVB_CLUT_DEFINITION = 0x12
+const DVB_OBJECT_DATA = 0x13
+const DVB_DISPLAY_DEFINITION = 0x14
+const DVB_END_OF_DISPLAY_SET = 0x80
+const DVB_STUFFING = 0xff
+
+function isKnownDvbSegmentType(segmentType: number): boolean {
+  return (
+    segmentType === DVB_PAGE_COMPOSITION ||
+    segmentType === DVB_REGION_COMPOSITION ||
+    segmentType === DVB_CLUT_DEFINITION ||
+    segmentType === DVB_OBJECT_DATA ||
+    segmentType === DVB_DISPLAY_DEFINITION ||
+    segmentType === DVB_END_OF_DISPLAY_SET ||
+    segmentType === DVB_STUFFING
+  )
+}
+
+function looksLikeDvbPayload(binary: Uint8Array, start = 0): boolean {
+  let offset = start
+
+  if (
+    binary.length - offset >= 3 &&
+    binary[offset] === 0x20 &&
+    binary[offset + 1] === 0x00 &&
+    binary[offset + 2] === DVB_SYNC_BYTE
+  ) {
+    offset += 2
+  }
+
+  if (offset >= binary.length || binary[offset] !== DVB_SYNC_BYTE) {
+    return false
+  }
+
+  let known = 0
+  while (offset + 6 <= binary.length) {
+    if (binary[offset] === DVB_STUFFING) break
+    if (binary[offset] !== DVB_SYNC_BYTE) break
+
+    const segmentType = binary[offset + 1]
+    const length = (binary[offset + 4] << 8) | binary[offset + 5]
+    const total = 6 + length
+    if (offset + total > binary.length) break
+
+    if (isKnownDvbSegmentType(segmentType)) {
+      known += 1
+      if (known >= 2 || segmentType === DVB_PAGE_COMPOSITION) {
+        return true
+      }
+    }
+
+    offset += total
+  }
+
+  return known > 0
+}
+
+function looksLikeMpegPesDvb(binary: Uint8Array): boolean {
+  const limit = Math.min(binary.length - 9, 65_536)
+
+  for (let index = 0; index <= limit; index += 1) {
+    if (
+      binary[index] !== 0x00 ||
+      binary[index + 1] !== 0x00 ||
+      binary[index + 2] !== 0x01 ||
+      binary[index + 3] !== 0xbd
+    ) {
+      continue
+    }
+
+    const packetLength = (binary[index + 4] << 8) | binary[index + 5]
+    const total = 6 + packetLength
+    if (index + total > binary.length || total < 9) continue
+
+    const headerDataLength = binary[index + 8]
+    const payloadStart = index + 9 + headerDataLength
+    if (payloadStart >= index + total) continue
+
+    if (looksLikeDvbPayload(binary.subarray(payloadStart, index + total))) {
+      return true
+    }
+  }
+
+  return false
+}
+
+function looksLikeDvbBinary(binary: Uint8Array): boolean {
+  if (binary.length >= 10 && binary[0] === 0x44 && binary[1] === 0x56) {
+    // "DV" framed dump
+    const payloadLen = ((binary[6] << 24) | (binary[7] << 16) | (binary[8] << 8) | binary[9]) >>> 0
+    if (payloadLen > 0 && binary.length >= 10 + Math.min(payloadLen, 64)) {
+      if (looksLikeDvbPayload(binary.subarray(10))) return true
+    }
+  }
+
+  if (looksLikeMpegPesDvb(binary)) return true
+  return looksLikeDvbPayload(binary)
+}
+
 const EBML_HEADER_ID = 0x1a45dfa3
 const EBML_DOC_TYPE_ID = 0x4282
 const EBML_SEGMENT_ID = 0x18538067
@@ -417,19 +519,27 @@ export function createWorkerSessionId(): string {
 
 /** Detect the subtitle format from binary content, filenames or URLs. */
 export function detectSubtitleFormat(source: AutoSubtitleSource): SubtitleFormatName | null {
+  // VobSub almost always ships with an .idx companion.
   if (source.idxContent || source.idxUrl) return 'vobsub'
 
   const fileHint = [source.fileName, source.subUrl].find(Boolean)?.toLowerCase()
-  if (fileHint?.endsWith('.sub') || fileHint?.endsWith('.idx')) return 'vobsub'
+  if (fileHint?.endsWith('.idx')) return 'vobsub'
   if (fileHint?.endsWith('.mks')) return 'vobsub'
   if (fileHint?.endsWith('.sup') || fileHint?.endsWith('.pgs')) return 'pgs'
+  if (fileHint?.endsWith('.dvb')) return 'dvb'
 
   const binary = toBinaryView(source.data ?? source.subData)
-  if (!binary) return null
+  if (!binary) {
+    // Bare .sub without bytes cannot be distinguished; prefer VobSub historically.
+    if (fileHint?.endsWith('.sub')) return 'vobsub'
+    return null
+  }
 
   if (looksLikePgsBinary(binary)) return 'pgs'
+  if (looksLikeDvbBinary(binary)) return 'dvb'
   if (looksLikeMksBinary(binary)) return 'vobsub'
   if (looksLikeVobSubBinary(binary)) return 'vobsub'
+  if (fileHint?.endsWith('.sub')) return 'vobsub'
 
   return null
 }

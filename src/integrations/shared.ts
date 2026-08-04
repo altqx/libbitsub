@@ -6,6 +6,7 @@
 import {
   createAutoSubtitleRenderer,
   type AutoVideoSubtitleOptions,
+  type DvbRenderer,
   type PgsRenderer,
   type SubtitleDisplaySettings,
   type SubtitleRendererStats,
@@ -13,7 +14,7 @@ import {
 } from '../wrapper'
 
 /** High-level renderer produced by integrations. */
-export type BitSubRenderer = PgsRenderer | VobSubRenderer
+export type BitSubRenderer = PgsRenderer | VobSubRenderer | DvbRenderer
 
 /** Subtitle source + renderer options without a bound video element. */
 export type BitSubSourceOptions = Omit<AutoVideoSubtitleOptions, 'video'>

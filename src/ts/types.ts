@@ -6,15 +6,24 @@ import type {
   SubtitleRenderer as WasmSubtitleRenderer,
   PgsParser as WasmPgsParser,
   VobSubParser as WasmVobSubParser,
+  DvbParser as WasmDvbParser,
   RenderResult,
   SubtitleFrame,
   VobSubFrame
 } from '../../pkg/libbitsub'
 
 // Re-export WASM types
-export type { WasmSubtitleRenderer, WasmPgsParser, WasmVobSubParser, RenderResult, SubtitleFrame, VobSubFrame }
+export type {
+  WasmSubtitleRenderer,
+  WasmPgsParser,
+  WasmVobSubParser,
+  WasmDvbParser,
+  RenderResult,
+  SubtitleFrame,
+  VobSubFrame
+}
 
-export type SubtitleFormatName = 'pgs' | 'vobsub'
+export type SubtitleFormatName = 'pgs' | 'vobsub' | 'dvb'
 
 export type SubtitleHorizontalAlign = 'left' | 'center' | 'right'
 
@@ -393,20 +402,29 @@ export type WorkerRequest =
   | { type: 'beginPgs'; sessionId: string }
   | { type: 'appendPgs'; sessionId: string; data: ArrayBuffer }
   | { type: 'finishPgs'; sessionId: string }
+  | { type: 'loadDvb'; sessionId: string; data: ArrayBuffer }
+  | { type: 'beginDvb'; sessionId: string }
+  | { type: 'appendDvb'; sessionId: string; data: ArrayBuffer }
+  | { type: 'finishDvb'; sessionId: string }
   | { type: 'loadVobSub'; sessionId: string; idxContent: string; subData: ArrayBuffer }
   | { type: 'loadVobSubIdx'; sessionId: string; idxContent: string }
   | { type: 'attachVobSubData'; sessionId: string; subData: ArrayBuffer }
   | { type: 'loadVobSubMks'; sessionId: string; subData: ArrayBuffer }
   | { type: 'loadVobSubOnly'; sessionId: string; subData: ArrayBuffer }
   | { type: 'renderPgsAtIndex'; sessionId: string; index: number }
+  | { type: 'renderDvbAtIndex'; sessionId: string; index: number }
   | { type: 'renderVobSubAtIndex'; sessionId: string; index: number }
   | { type: 'findPgsIndex'; sessionId: string; timeMs: number }
+  | { type: 'findDvbIndex'; sessionId: string; timeMs: number }
   | { type: 'findVobSubIndex'; sessionId: string; timeMs: number }
   | { type: 'getPgsTimestamps'; sessionId: string }
+  | { type: 'getDvbTimestamps'; sessionId: string }
   | { type: 'getVobSubTimestamps'; sessionId: string }
   | { type: 'clearPgsCache'; sessionId: string }
+  | { type: 'clearDvbCache'; sessionId: string }
   | { type: 'clearVobSubCache'; sessionId: string }
   | { type: 'disposePgs'; sessionId: string }
+  | { type: 'disposeDvb'; sessionId: string }
   | { type: 'disposeVobSub'; sessionId: string }
   | { type: 'setVobSubDebandEnabled'; sessionId: string; enabled: boolean }
   | { type: 'setVobSubDebandThreshold'; sessionId: string; threshold: number }
@@ -438,6 +456,23 @@ export type WorkerResponse =
       metadata: WorkerSessionMetadata
       timestamps: Float64Array
     }
+  | {
+      type: 'dvbLoaded'
+      count: number
+      byteLength: number
+      metadata: WorkerSessionMetadata
+      timestamps: Float64Array
+      endTimestamps: Float64Array
+    }
+  | {
+      type: 'dvbProgress'
+      count: number
+      added: number
+      partial: boolean
+      metadata: WorkerSessionMetadata
+      timestamps: Float64Array
+      endTimestamps: Float64Array
+    }
   | { type: 'vobSubLoaded'; count: number; metadata: WorkerSessionMetadata; timestamps: Float64Array }
   | {
       type: 'vobSubProgress'
@@ -448,10 +483,13 @@ export type WorkerResponse =
       timestamps: Float64Array
     }
   | { type: 'pgsFrame'; frame: FrameData | null; renderIssue?: string }
+  | { type: 'dvbFrame'; frame: FrameData | null; renderIssue?: string }
   | { type: 'vobSubFrame'; frame: FrameData | null; renderIssue?: string }
   | { type: 'pgsIndex'; index: number }
+  | { type: 'dvbIndex'; index: number }
   | { type: 'vobSubIndex'; index: number }
   | { type: 'pgsTimestamps'; timestamps: Float64Array }
+  | { type: 'dvbTimestamps'; timestamps: Float64Array }
   | { type: 'vobSubTimestamps'; timestamps: Float64Array }
   | { type: 'cleared' }
   | { type: 'disposed' }

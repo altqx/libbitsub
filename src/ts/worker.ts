@@ -30,12 +30,22 @@ function createWorkerScript(): string {
   return `
 let wasmModule = null;
 const pgsParsers = new Map();
+const dvbParsers = new Map();
 const vobSubParsers = new Map();
 const offscreenSurfaces = new Map();
 
 function buildPgsMetadata(parser) {
     return {
         format: 'pgs',
+        cueCount: parser.count,
+        screenWidth: parser.screenWidth || 0,
+        screenHeight: parser.screenHeight || 0
+    };
+}
+
+function buildDvbMetadata(parser) {
+    return {
+        format: 'dvb',
         cueCount: parser.count,
         screenWidth: parser.screenWidth || 0,
         screenHeight: parser.screenHeight || 0
@@ -63,6 +73,11 @@ function disposeSession(sessionId) {
     if (pgsParser) {
         pgsParser.free();
         pgsParsers.delete(sessionId);
+    }
+    const dvbParser = dvbParsers.get(sessionId);
+    if (dvbParser) {
+        dvbParser.free();
+        dvbParsers.delete(sessionId);
     }
     const vobSubParser = vobSubParsers.get(sessionId);
     if (vobSubParser) {
@@ -299,6 +314,70 @@ self.onmessage = async function(event) {
                 );
                 break;
             }
+            case 'loadDvb': {
+                disposeSession(request.sessionId);
+                const parser = new wasmModule.DvbParser();
+                const count = parser.parse(new Uint8Array(request.data));
+                const timestamps = parser.getTimestamps();
+                const endTimestamps = parser.getEndTimestamps();
+                dvbParsers.set(request.sessionId, parser);
+                postResponse(
+                    { type: 'dvbLoaded', count, byteLength: request.data.byteLength, metadata: buildDvbMetadata(parser), timestamps, endTimestamps },
+                    [timestamps.buffer, endTimestamps.buffer],
+                    _id
+                );
+                break;
+            }
+            case 'beginDvb': {
+                disposeSession(request.sessionId);
+                const parser = new wasmModule.DvbParser();
+                parser.reset();
+                dvbParsers.set(request.sessionId, parser);
+                const timestamps = parser.getTimestamps();
+                const endTimestamps = parser.getEndTimestamps();
+                postResponse(
+                    { type: 'dvbProgress', count: 0, added: 0, partial: true, metadata: buildDvbMetadata(parser), timestamps, endTimestamps },
+                    [timestamps.buffer, endTimestamps.buffer],
+                    _id
+                );
+                break;
+            }
+            case 'appendDvb': {
+                let parser = dvbParsers.get(request.sessionId);
+                if (!parser) {
+                    parser = new wasmModule.DvbParser();
+                    parser.reset();
+                    dvbParsers.set(request.sessionId, parser);
+                }
+                const added = parser.feed(new Uint8Array(request.data));
+                const timestamps = parser.getTimestamps();
+                const endTimestamps = parser.getEndTimestamps();
+                postResponse(
+                    { type: 'dvbProgress', count: parser.count, added, partial: true, metadata: buildDvbMetadata(parser), timestamps, endTimestamps },
+                    [timestamps.buffer, endTimestamps.buffer],
+                    _id
+                );
+                break;
+            }
+            case 'finishDvb': {
+                const parser = dvbParsers.get(request.sessionId);
+                if (!parser) {
+                    postResponse({ type: 'error', message: 'DVB session not found for finishDvb' }, [], _id);
+                    break;
+                }
+                const previousCount = parser.count;
+                parser.finishFeed();
+                const count = parser.count;
+                const added = count - previousCount;
+                const timestamps = parser.getTimestamps();
+                const endTimestamps = parser.getEndTimestamps();
+                postResponse(
+                    { type: 'dvbProgress', count, added, partial: false, metadata: buildDvbMetadata(parser), timestamps, endTimestamps },
+                    [timestamps.buffer, endTimestamps.buffer],
+                    _id
+                );
+                break;
+            }
             case 'loadVobSub': {
                 disposeSession(request.sessionId);
                 const parser = new wasmModule.VobSubParser();
@@ -390,6 +469,16 @@ self.onmessage = async function(event) {
                 postResponse({ type: 'pgsFrame', frame: frameData, renderIssue }, frameData.compositions.map((c) => c.rgba.buffer), _id);
                 break;
             }
+            case 'renderDvbAtIndex': {
+                const parser = dvbParsers.get(request.sessionId);
+                if (!parser) { postResponse({ type: 'dvbFrame', frame: null }, [], _id); break; }
+                const frame = parser.renderAtIndex(request.index);
+                const renderIssue = parser.lastRenderIssue || '';
+                if (!frame) { postResponse({ type: 'dvbFrame', frame: null, renderIssue }, [], _id); break; }
+                const frameData = convertFrame(frame, false);
+                postResponse({ type: 'dvbFrame', frame: frameData, renderIssue }, frameData.compositions.map((c) => c.rgba.buffer), _id);
+                break;
+            }
             case 'renderVobSubAtIndex': {
                 const parser = vobSubParsers.get(request.sessionId);
                 if (!parser) { postResponse({ type: 'vobSubFrame', frame: null }, [], _id); break; }
@@ -405,6 +494,11 @@ self.onmessage = async function(event) {
                 postResponse({ type: 'pgsIndex', index: parser ? parser.findIndexAtTimestamp(request.timeMs) : -1 }, [], _id);
                 break;
             }
+            case 'findDvbIndex': {
+                const parser = dvbParsers.get(request.sessionId);
+                postResponse({ type: 'dvbIndex', index: parser ? parser.findIndexAtTimestamp(request.timeMs) : -1 }, [], _id);
+                break;
+            }
             case 'findVobSubIndex': {
                 const parser = vobSubParsers.get(request.sessionId);
                 postResponse({ type: 'vobSubIndex', index: parser ? parser.findIndexAtTimestamp(request.timeMs) : -1 }, [], _id);
@@ -415,6 +509,11 @@ self.onmessage = async function(event) {
                 postResponse({ type: 'pgsTimestamps', timestamps: parser ? parser.getTimestamps() : new Float64Array(0) }, [], _id);
                 break;
             }
+            case 'getDvbTimestamps': {
+                const parser = dvbParsers.get(request.sessionId);
+                postResponse({ type: 'dvbTimestamps', timestamps: parser ? parser.getTimestamps() : new Float64Array(0) }, [], _id);
+                break;
+            }
             case 'getVobSubTimestamps': {
                 const parser = vobSubParsers.get(request.sessionId);
                 postResponse({ type: 'vobSubTimestamps', timestamps: parser ? parser.getTimestamps() : new Float64Array(0) }, [], _id);
@@ -422,6 +521,11 @@ self.onmessage = async function(event) {
             }
             case 'clearPgsCache': {
                 pgsParsers.get(request.sessionId)?.clearCache();
+                postResponse({ type: 'cleared' }, [], _id);
+                break;
+            }
+            case 'clearDvbCache': {
+                dvbParsers.get(request.sessionId)?.clearCache();
                 postResponse({ type: 'cleared' }, [], _id);
                 break;
             }
@@ -435,6 +539,15 @@ self.onmessage = async function(event) {
                 if (parser) {
                     parser.free();
                     pgsParsers.delete(request.sessionId);
+                }
+                postResponse({ type: 'disposed' }, [], _id);
+                break;
+            }
+            case 'disposeDvb': {
+                const parser = dvbParsers.get(request.sessionId);
+                if (parser) {
+                    parser.free();
+                    dvbParsers.delete(request.sessionId);
                 }
                 postResponse({ type: 'disposed' }, [], _id);
                 break;
@@ -534,6 +647,15 @@ self.onmessage = async function(event) {
                 let renderIssue = '';
                 if (request.format === 'pgs') {
                     const parser = pgsParsers.get(request.sessionId);
+                    if (!parser) {
+                        postResponse({ type: 'offscreenPresented', status: 'failed', fatal: true, renderIssue: 'PARSER_MISSING' }, [], _id);
+                        break;
+                    }
+                    const rendered = parser.renderAtIndex(request.index);
+                    renderIssue = parser.lastRenderIssue || '';
+                    frame = rendered ? convertFrame(rendered, false) : null;
+                } else if (request.format === 'dvb') {
+                    const parser = dvbParsers.get(request.sessionId);
                     if (!parser) {
                         postResponse({ type: 'offscreenPresented', status: 'failed', fatal: true, renderIssue: 'PARSER_MISSING' }, [], _id);
                         break;

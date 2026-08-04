@@ -17,8 +17,8 @@
 | `isOffscreenCanvas2DSupported`          | `() => boolean`                                                                                                                                                        |                                                                                                                                                                        |
 | `isTransferControlToOffscreenSupported` | `() => boolean`                                                                                                                                                        |                                                                                                                                                                        |
 | `isCanvas2DSupported`                   | `() => boolean`                                                                                                                                                        |                                                                                                                                                                        |
-| `detectSubtitleFormat`                  | `(source: AutoSubtitleSource) => 'pgs' \| 'vobsub' \| null`                                                                                                            | Uses file hints and binary magic bytes, including `.mks` sources carrying embedded `S_VOBSUB`                                                                          |
-| `createAutoSubtitleRenderer`            | `(options: AutoVideoSubtitleOptions) => PgsRenderer \| VobSubRenderer`                                                                                                 | Throws if format cannot be determined                                                                                                                                  |
+| `detectSubtitleFormat`                  | `(source: AutoSubtitleSource) => 'pgs' \| 'vobsub' \| 'dvb' \| null`                                                                                                   | Uses file hints and binary magic bytes; DVB before VobSub PES; `.idx` still forces VobSub; includes `.mks` `S_VOBSUB`                                                  |
+| `createAutoSubtitleRenderer`            | `(options: AutoVideoSubtitleOptions) => PgsRenderer \| VobSubRenderer \| DvbRenderer`                                                                                  | Throws if format cannot be determined                                                                                                                                  |
 | `openSubtitles`                         | `(source: AutoSubtitleSource, options?: SubtitleDiagnosticsOptions) => Promise<OpenedSubtitles>`                                                                       | Initializes WASM, auto-detects the format, and returns a normalized low-level handle                                                                                   |
 | `probeRangeSupport`                     | `(url: string, options?: AssetFetchOptions) => Promise<RangeProbeResult>`                                                                                              | Probe HTTP Range support and content length                                                                                                                            |
 | `fetchSubtitleAsset`                    | `(url: string, options?: AssetFetchOptions, onChunk?) => Promise<{ data, strategy, rangeSupported, total }>`                                                           | Range/stream-aware binary download with progressive chunk callbacks                                                                                                    |
@@ -53,10 +53,10 @@ Shared controller used by the player adapters:
 
 ```ts
 interface BitSubController {
-  readonly renderer: PgsRenderer | VobSubRenderer | null
+  readonly renderer: PgsRenderer | VobSubRenderer | DvbRenderer | null
   readonly video: HTMLVideoElement | null
   readonly disposed: boolean
-  load(source: BitSubSourceOptions): PgsRenderer | VobSubRenderer
+  load(source: BitSubSourceOptions): PgsRenderer | VobSubRenderer | DvbRenderer
   clear(): void
   dispose(): void
   getDisplaySettings(): SubtitleDisplaySettings | null
@@ -356,6 +356,30 @@ parser.getLastRenderIssue(): string | null
 
 ---
 
+## `DvbParser` (low-level)
+
+```ts
+const parser = new DvbParser({ debug: true, onWarning: (warning) => console.warn(warning.code) })
+parser.load(data: Uint8Array): number          // full-buffer path; returns cue count
+parser.reset(): void
+parser.feed(chunk: Uint8Array): number         // progressive indexing; returns newly added cues
+parser.finishFeed(): number
+parser.pendingLen: number
+parser.getTimestamps(): Float64Array           // cue starts in ms
+parser.getEndTimestamps(): Float64Array        // page-timeout-aware cue ends in ms
+parser.get count: number
+parser.findIndexAtTimestamp(seconds: number): number
+parser.renderAtIndex(index: number): SubtitleData | undefined
+parser.renderAtTimestamp(seconds: number): SubtitleData | undefined
+parser.getMetadata(): SubtitleParserMetadata
+parser.getCueMetadata(index: number): SubtitleCueMetadata | null
+parser.getLastRenderIssue(): string | null
+```
+
+The parser accepts libbitsub `"DV"` framing and concatenated MPEG private-stream PES packets with PTS. It renders DVB bitmap object coding method 0; character-string and reserved coding methods are ignored.
+
+---
+
 ## `VobSubParserLowLevel` (low-level)
 
 ```ts
@@ -502,7 +526,7 @@ interface SubtitleLastRenderInfo {
 ```ts
 interface SubtitleCueMetadata {
   index: number
-  format: 'pgs' | 'vobsub'
+  format: 'pgs' | 'vobsub' | 'dvb'
   startTime: number // ms
   endTime: number // ms
   duration: number // ms
@@ -511,7 +535,7 @@ interface SubtitleCueMetadata {
   bounds: { x: number; y: number; width: number; height: number } | null
   compositionCount: number
   paletteId?: number // PGS only
-  compositionState?: number // PGS only
+  compositionState?: number // PGS composition state / DVB page state
   language?: string | null // VobSub only
   trackId?: string | null // VobSub only
   filePosition?: number // VobSub only

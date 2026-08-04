@@ -5,10 +5,10 @@ edition = "2024"
 rust-version = "1.85"
 authors = ["altqx"]
 license = "MIT"
-description = "Pure Rust parser and renderer core for graphical subtitles (PGS and VobSub)"
+description = "Pure Rust parser and renderer core for graphical subtitles (PGS, VobSub, and DVB)"
 readme = "README.md"
 repository = "https://github.com/altqx/libbitsub"
-keywords = ["pgs", "vobsub", "subtitle", "rendering"]
+keywords = ["pgs", "vobsub", "dvb", "subtitle", "rendering"]
 categories = ["multimedia::video", "parser-implementations"]
 include = [
     "/Cargo.toml",
