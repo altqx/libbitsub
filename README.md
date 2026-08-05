@@ -271,6 +271,26 @@ const renderer = new PgsRenderer({
 renderer.dispose()
 ```
 
+Mount into a fullscreen shell or Shadow DOM root, reuse a player-owned canvas,
+cap high-DPI backing-store cost, or bypass automatic backend selection:
+
+```ts
+const renderer = new PgsRenderer({
+  video: videoElement,
+  subUrl: '/subtitles/movie.sup',
+  container: shadowRoot, // HTMLElement or ShadowRoot; defaults to video.parentElement
+  canvas: playerOverlayCanvas, // optional; remains mounted after dispose()
+  devicePixelRatioCap: 2,
+  backend: 'webgl2' // 'auto' | 'webgpu' | 'webgl2' | 'worker-offscreen' | 'canvas2d'
+})
+```
+
+An explicitly requested GPU or worker backend falls back to Canvas2D if it cannot
+initialize. A supplied `container` takes precedence over the canvas's current parent;
+without one, an already-mounted caller canvas stays in its existing host. Automatic
+selection does not transfer a caller-owned canvas to a worker; request
+`backend: 'worker-offscreen'` explicitly to allow that ownership transfer.
+
 Frame-aware synchronization is enabled by default. On browsers with
 `requestVideoFrameCallback()`, cue lookup uses the `mediaTime` of the frame sent
 to the compositor instead of polling `video.currentTime`. Older browsers fall
@@ -892,6 +912,10 @@ Browser/device support matrix (including webOS TV): [docs/COMPATIBILITY.md](./do
 ```ts
 interface VideoSubtitleOptions {
   video: HTMLVideoElement
+  container?: HTMLElement | ShadowRoot
+  canvas?: HTMLCanvasElement
+  devicePixelRatioCap?: number
+  backend?: 'auto' | 'webgpu' | 'webgl2' | 'worker-offscreen' | 'canvas2d'
   subUrl?: string
   subContent?: ArrayBuffer
   workerUrl?: string

@@ -49,6 +49,9 @@ function sourceKey(source: BitSubReactSource | null | undefined): string {
     cacheLimit: source.cacheLimit ?? null,
     timeOffset: source.timeOffset ?? null,
     frameAwareSync: source.frameAwareSync ?? null,
+    backend: source.backend ?? null,
+    devicePixelRatioCap: source.devicePixelRatioCap ?? null,
+    offscreenRender: source.offscreenRender ?? null,
     streamingLoad: source.streamingLoad ?? null,
     rangeRequests: source.rangeRequests ?? null,
     debug: source.debug ?? null,
@@ -84,6 +87,8 @@ export function useBitSub(
   const enabled = options?.enabled !== false
   const key = sourceKey(options)
   const displaySettings = options?.displaySettings
+  const container = options?.container
+  const canvas = options?.canvas
 
   useEffect(() => {
     setError(null)
@@ -136,7 +141,7 @@ export function useBitSub(
       setController(null)
     }
     // key captures source identity; callback props stay fresh via refs
-  }, [videoRef, key, enabled])
+  }, [videoRef, key, enabled, container, canvas])
 
   useEffect(() => {
     if (displaySettings) {

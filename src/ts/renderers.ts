@@ -137,6 +137,12 @@ abstract class BaseVideoSubtitleRenderer {
   protected subUrl?: string
   protected subContent?: ArrayBuffer
   protected canvas: HTMLCanvasElement | null = null
+  private readonly providedCanvas: HTMLCanvasElement | null
+  private readonly requestedContainer: HTMLElement | ShadowRoot | null
+  private overlayContainer: HTMLElement | ShadowRoot | null = null
+  private ownsCanvas = false
+  private readonly devicePixelRatioCap: number | null
+  private readonly backendOption: SubtitleRendererBackend | 'auto'
   protected ctx: CanvasRenderingContext2D | null = null
   private frameScheduler: VideoFrameScheduler | null = null
   protected isLoaded: boolean = false
@@ -207,6 +213,15 @@ abstract class BaseVideoSubtitleRenderer {
     this.format = format
     this.subUrl = options.subUrl
     this.subContent = options.subContent
+    this.providedCanvas = options.canvas ?? null
+    this.requestedContainer = options.container ?? null
+    this.devicePixelRatioCap =
+      options.devicePixelRatioCap !== undefined &&
+      Number.isFinite(options.devicePixelRatioCap) &&
+      options.devicePixelRatioCap > 0
+        ? options.devicePixelRatioCap
+        : null
+    this.backendOption = options.backend ?? 'auto'
     this.onWebGPUFallback = options.onWebGPUFallback
     this.onWebGL2Fallback = options.onWebGL2Fallback
     this.offscreenRenderOption = options.offscreenRender !== false
@@ -459,43 +474,98 @@ abstract class BaseVideoSubtitleRenderer {
   }
 
   protected shouldPreferWorkerOffscreen(): boolean {
-    return this.offscreenRenderOption && canUseWorkerOffscreenRender()
+    return !this.providedCanvas && this.offscreenRenderOption && canUseWorkerOffscreenRender()
   }
 
   protected isWorkerOffscreenPresent(): boolean {
     return this.useWorkerOffscreen
   }
 
-  private mountOverlayCanvas(canvas: HTMLCanvasElement): void {
-    Object.assign(canvas.style, {
-      position: 'absolute',
-      pointerEvents: 'none',
-      zIndex: '10'
-    })
+  private getDefaultContainer(): HTMLElement | ShadowRoot | null {
+    if (this.video.parentElement) return this.video.parentElement
 
-    const parent = this.video.parentElement
-    if (parent) {
-      if (window.getComputedStyle(parent).position === 'static') {
-        parent.style.position = 'relative'
-      }
-      parent.appendChild(canvas)
+    const parent = this.video.parentNode
+    if (parent && 'appendChild' in parent && 'host' in parent) {
+      return parent as ShadowRoot
+    }
+
+    return null
+  }
+
+  private getContainerElement(container: HTMLElement | ShadowRoot): HTMLElement {
+    return 'host' in container ? (container.host as HTMLElement) : container
+  }
+
+  private getCanvasParent(canvas: HTMLCanvasElement): ParentNode | null {
+    return canvas.parentNode ?? canvas.parentElement
+  }
+
+  private removeOwnedCanvas(): void {
+    if (!this.ownsCanvas || !this.canvas) return
+    this.getCanvasParent(this.canvas)?.removeChild(this.canvas)
+  }
+
+  private mountOverlayCanvas(canvas: HTMLCanvasElement): void {
+    if (!canvas.style.position) canvas.style.position = 'absolute'
+    if (!canvas.style.pointerEvents) canvas.style.pointerEvents = 'none'
+    if (!canvas.style.zIndex) canvas.style.zIndex = '10'
+
+    const existingContainer = this.getCanvasParent(canvas)
+    const container =
+      this.requestedContainer ??
+      (existingContainer &&
+      'appendChild' in existingContainer &&
+      ('style' in existingContainer || 'host' in existingContainer)
+        ? (existingContainer as HTMLElement | ShadowRoot)
+        : this.getDefaultContainer())
+
+    this.overlayContainer = container
+    if (!container) return
+
+    const containerElement = this.getContainerElement(container)
+    if (window.getComputedStyle(containerElement).position === 'static') {
+      containerElement.style.position = 'relative'
+    }
+    if (this.getCanvasParent(canvas) !== container) {
+      container.appendChild(canvas)
     }
   }
 
-  /** Create the canvas overlay positioned over the video. */
-  protected createCanvas(): void {
-    this.canvas = document.createElement('canvas')
-    this.mountOverlayCanvas(this.canvas)
+  private selectBackend(): void {
+    if (this.backendOption === 'webgpu') {
+      void this.initWebGPU(false)
+      return
+    }
+    if (this.backendOption === 'webgl2') {
+      void this.initWebGL2(false)
+      return
+    }
+    if (this.backendOption === 'worker-offscreen') {
+      this.pendingWorkerOffscreen = true
+      return
+    }
+    if (this.backendOption === 'canvas2d') {
+      this.initCanvas2D()
+      return
+    }
 
     if (isWebGPUSupported()) {
-      this.initWebGPU()
+      void this.initWebGPU()
     } else if (isWebGL2Supported()) {
-      this.initWebGL2()
+      void this.initWebGL2()
     } else if (this.shouldPreferWorkerOffscreen()) {
       this.pendingWorkerOffscreen = true
     } else {
       this.initCanvas2D()
     }
+  }
+
+  /** Create the canvas overlay positioned over the video. */
+  protected createCanvas(): void {
+    this.canvas = this.providedCanvas ?? document.createElement('canvas')
+    this.ownsCanvas = !this.providedCanvas
+    this.mountOverlayCanvas(this.canvas)
+    this.selectBackend()
 
     this.updateCanvasSize()
 
@@ -516,7 +586,7 @@ abstract class BaseVideoSubtitleRenderer {
   }
 
   private preferWorkerOffscreenOrCanvas2D(): void {
-    if (this.shouldPreferWorkerOffscreen()) {
+    if (this.backendOption === 'auto' && this.shouldPreferWorkerOffscreen()) {
       this.pendingWorkerOffscreen = true
       const state = this.getWorkerRendererState()
       if (state.useWorker && state.workerReady && state.sessionId) {
@@ -607,10 +677,9 @@ abstract class BaseVideoSubtitleRenderer {
   }
 
   private recreateCanvasForMainThreadFallback(): void {
-    if (this.canvas?.parentElement) {
-      this.canvas.parentElement.removeChild(this.canvas)
-    }
+    this.removeOwnedCanvas()
     this.canvas = document.createElement('canvas')
+    this.ownsCanvas = true
     this.mountOverlayCanvas(this.canvas)
     this.initCanvas2D()
     this.updateCanvasSize()
@@ -705,7 +774,7 @@ abstract class BaseVideoSubtitleRenderer {
   }
 
   /** Initialize WebGPU renderer. */
-  private async initWebGPU(): Promise<void> {
+  private async initWebGPU(allowBackendFallback = true): Promise<void> {
     try {
       this.webgpuRenderer = new WebGPURenderer()
       await this.webgpuRenderer.init()
@@ -713,8 +782,9 @@ abstract class BaseVideoSubtitleRenderer {
       if (!this.canvas) return
 
       const bounds = this.getVideoContentBounds()
-      const width = Math.max(1, bounds.width * window.devicePixelRatio)
-      const height = Math.max(1, bounds.height * window.devicePixelRatio)
+      const pixelRatio = this.getDevicePixelRatio()
+      const width = Math.max(1, bounds.width * pixelRatio)
+      const height = Math.max(1, bounds.height * pixelRatio)
 
       await this.webgpuRenderer.setCanvas(this.canvas, width, height)
       this.useWebGPU = true
@@ -724,8 +794,8 @@ abstract class BaseVideoSubtitleRenderer {
       this.webgpuRenderer = null
       this.useWebGPU = false
       this.onWebGPUFallback?.()
-      if (isWebGL2Supported()) {
-        this.initWebGL2()
+      if (allowBackendFallback && isWebGL2Supported()) {
+        void this.initWebGL2()
       } else {
         this.preferWorkerOffscreenOrCanvas2D()
       }
@@ -733,7 +803,7 @@ abstract class BaseVideoSubtitleRenderer {
   }
 
   /** Initialize WebGL2 renderer. */
-  private async initWebGL2(): Promise<void> {
+  private async initWebGL2(allowBackendFallback = true): Promise<void> {
     try {
       this.webgl2Renderer = new WebGL2Renderer()
       await this.webgl2Renderer.init()
@@ -741,8 +811,9 @@ abstract class BaseVideoSubtitleRenderer {
       if (!this.canvas) return
 
       const bounds = this.getVideoContentBounds()
-      const width = Math.max(1, bounds.width * window.devicePixelRatio)
-      const height = Math.max(1, bounds.height * window.devicePixelRatio)
+      const pixelRatio = this.getDevicePixelRatio()
+      const width = Math.max(1, bounds.width * pixelRatio)
+      const height = Math.max(1, bounds.height * pixelRatio)
 
       await this.webgl2Renderer.setCanvas(this.canvas, width, height)
       this.useWebGL2 = true
@@ -752,7 +823,11 @@ abstract class BaseVideoSubtitleRenderer {
       this.webgl2Renderer = null
       this.useWebGL2 = false
       this.onWebGL2Fallback?.()
-      this.preferWorkerOffscreenOrCanvas2D()
+      if (allowBackendFallback) {
+        this.preferWorkerOffscreenOrCanvas2D()
+      } else {
+        this.initCanvas2D()
+      }
     }
   }
 
@@ -767,6 +842,26 @@ abstract class BaseVideoSubtitleRenderer {
 
   /** Called when video seeks. */
   protected onSeek(): void {}
+
+  private getDevicePixelRatio(): number {
+    const devicePixelRatio =
+      Number.isFinite(window.devicePixelRatio) && window.devicePixelRatio > 0 ? window.devicePixelRatio : 1
+    return this.devicePixelRatioCap === null ? devicePixelRatio : Math.min(devicePixelRatio, this.devicePixelRatioCap)
+  }
+
+  private getCanvasMountOffset(): { x: number; y: number } {
+    if (!this.overlayContainer) return { x: 0, y: 0 }
+
+    const containerElement = this.getContainerElement(this.overlayContainer)
+    if (typeof containerElement.getBoundingClientRect !== 'function') return { x: 0, y: 0 }
+
+    const videoRect = this.video.getBoundingClientRect()
+    const containerRect = containerElement.getBoundingClientRect()
+    return {
+      x: (videoRect.left ?? videoRect.x) - (containerRect.left ?? containerRect.x),
+      y: (videoRect.top ?? videoRect.y) - (containerRect.top ?? containerRect.y)
+    }
+  }
 
   /** Calculate the actual video content bounds, accounting for letterboxing/pillarboxing */
   protected getVideoContentBounds(): { x: number; y: number; width: number; height: number } {
@@ -814,14 +909,16 @@ abstract class BaseVideoSubtitleRenderer {
     const width = bounds.width > 0 ? bounds.width : this.video.videoWidth || 1920
     const height = bounds.height > 0 ? bounds.height : this.video.videoHeight || 1080
 
-    const pixelWidth = Math.max(1, width * window.devicePixelRatio)
-    const pixelHeight = Math.max(1, height * window.devicePixelRatio)
+    const pixelRatio = this.getDevicePixelRatio()
+    const pixelWidth = Math.max(1, width * pixelRatio)
+    const pixelHeight = Math.max(1, height * pixelRatio)
     this.canvasPixelWidth = pixelWidth
     this.canvasPixelHeight = pixelHeight
 
     // Position canvas to match video content area
-    this.canvas.style.left = `${bounds.x}px`
-    this.canvas.style.top = `${bounds.y}px`
+    const mountOffset = this.getCanvasMountOffset()
+    this.canvas.style.left = `${mountOffset.x + bounds.x}px`
+    this.canvas.style.top = `${mountOffset.y + bounds.y}px`
     this.canvas.style.width = `${bounds.width}px`
     this.canvas.style.height = `${bounds.height}px`
 
@@ -1378,7 +1475,7 @@ abstract class BaseVideoSubtitleRenderer {
       sendToWorker({ type: 'detachOffscreenCanvas', sessionId: state.sessionId }).catch(() => {})
     }
 
-    this.canvas?.parentElement?.removeChild(this.canvas)
+    this.removeOwnedCanvas()
     this.canvas = null
     this.ctx = null
     this.tempCanvas = null

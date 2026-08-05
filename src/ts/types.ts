@@ -218,6 +218,14 @@ export interface OpenedSubtitles {
 export interface VideoSubtitleOptions {
   /** The video element to sync with */
   video: HTMLVideoElement
+  /** Element or shadow root that should host the overlay canvas (defaults to the video's parent). */
+  container?: HTMLElement | ShadowRoot
+  /** Existing canvas to render into. Never removed on dispose; Worker OffscreenCanvas requires an explicit backend. */
+  canvas?: HTMLCanvasElement
+  /** Cap the canvas backing-store pixel ratio while preserving its CSS size. */
+  devicePixelRatioCap?: number
+  /** Force a present backend instead of using the automatic backend ladder. */
+  backend?: SubtitleRendererBackend | 'auto'
   /** URL to the subtitle file. Omit both sources to create a live PGS/DVB push renderer. */
   subUrl?: string
   /** Direct subtitle content (ArrayBuffer). Omit both sources to create a live PGS/DVB push renderer. */
