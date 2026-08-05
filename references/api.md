@@ -126,6 +126,7 @@ interface VideoSubtitleOptions {
   onWebGL2Fallback?: () => void
   /** Prefer Worker OffscreenCanvas present on the Canvas2D tier (default true). */
   offscreenRender?: boolean
+  frameAwareSync?: boolean // default true; uses requestVideoFrameCallback when available
   displaySettings?: Partial<SubtitleDisplaySettings>
   cacheLimit?: number // default 24
   prefetchWindow?: { before?: number; after?: number }
@@ -313,14 +314,15 @@ Both extend `BaseVideoSubtitleRenderer` and expose the same API surface.
 
 ### Metadata and stats
 
-| Method                                                       | Description                                                     |
-| ------------------------------------------------------------ | --------------------------------------------------------------- |
-| `getMetadata(): SubtitleParserMetadata \| null`              | Track-level: format, cueCount, screenWidth/Height               |
-| `getCurrentCueMetadata(): SubtitleCueMetadata \| null`       | Most recently displayed cue                                     |
-| `getCueMetadata(index: number): SubtitleCueMetadata \| null` | Cue by index                                                    |
-| `getStats(): SubtitleRendererStats`                          | Performance statistics                                          |
-| `getCacheStats(): SubtitleCacheStats`                        | Cache occupancy, worker readiness, and session diagnostics      |
-| `getLastRenderInfo(): SubtitleLastRenderInfo \| null`        | Last render attempt snapshot, populated when `debug` is enabled |
+| Method                                                         | Description                                                     |
+| -------------------------------------------------------------- | --------------------------------------------------------------- |
+| `getMetadata(): SubtitleParserMetadata \| null`                | Track-level: format, cueCount, screenWidth/Height               |
+| `getCurrentCueMetadata(): SubtitleCueMetadata \| null`         | Most recently displayed cue                                     |
+| `getCueMetadata(index: number): SubtitleCueMetadata \| null`   | Cue by index                                                    |
+| `getStats(): SubtitleRendererStats`                            | Performance statistics                                          |
+| `getSynchronizationMode(): 'video-frame' \| 'animation-frame'` | Active presented-frame or compatibility clock                   |
+| `getCacheStats(): SubtitleCacheStats`                          | Cache occupancy, worker readiness, and session diagnostics      |
+| `getLastRenderInfo(): SubtitleLastRenderInfo \| null`          | Last render attempt snapshot, populated when `debug` is enabled |
 
 ### VobSubRenderer extras
 
@@ -560,6 +562,7 @@ interface SubtitleRendererStats {
   pendingRenders: number
   totalEntries: number
   currentIndex: number
+  syncMode: 'video-frame' | 'animation-frame'
 }
 ```
 

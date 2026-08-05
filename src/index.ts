@@ -77,7 +77,8 @@ export {
   type SubtitlePresentPath,
   type SubtitleRendererBackend,
   type SubtitleRendererEvent,
-  type SubtitleRendererStatsSnapshot
+  type SubtitleRendererStatsSnapshot,
+  type SubtitleSynchronizationMode
 } from './wrapper'
 
 // WASM types

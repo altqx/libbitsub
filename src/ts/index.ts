@@ -33,6 +33,7 @@ export type {
   SubtitleRendererBackend,
   SubtitleRendererEvent,
   SubtitleRendererStatsSnapshot,
+  SubtitleSynchronizationMode,
   RuntimeCapabilities,
   SubtitlePresentPath,
   VideoSubtitleOptions,

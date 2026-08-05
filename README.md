@@ -257,6 +257,7 @@ const renderer = new PgsRenderer({
   },
   cacheLimit: 32,
   prefetchWindow: { before: 1, after: 2 },
+  frameAwareSync: true,
   onWarning: (warning) => {
     console.warn(warning.code, warning.message, warning.details)
   },
@@ -269,6 +270,13 @@ const renderer = new PgsRenderer({
 
 renderer.dispose()
 ```
+
+Frame-aware synchronization is enabled by default. On browsers with
+`requestVideoFrameCallback()`, cue lookup uses the `mediaTime` of the frame sent
+to the compositor instead of polling `video.currentTime`. Older browsers fall
+back to `requestAnimationFrame()` automatically; set `frameAwareSync: false` to
+force that compatibility path. The active path is available as
+`renderer.getSynchronizationMode()` and as `getStats().syncMode`.
 
 ### VobSub renderer
 
@@ -656,6 +664,7 @@ const stats = renderer.getStats()
 - `pendingRenders`
 - `totalEntries`
 - `currentIndex`
+- `syncMode`
 
 `getCacheStats()` adds worker/session state for the current renderer cache, while `getLastRenderInfo()` exposes the most recent render outcome with a status of `rendered`, `cleared`, `pending`, `empty`, or `failed`.
 
@@ -871,6 +880,7 @@ interface VideoSubtitleOptions {
   onWebGPUFallback?: () => void
   onWebGL2Fallback?: () => void
   offscreenRender?: boolean // default true — Worker OffscreenCanvas on Canvas2D tier
+  frameAwareSync?: boolean // default true — sync to presented-frame mediaTime when available
   displaySettings?: Partial<SubtitleDisplaySettings>
   cacheLimit?: number
   prefetchWindow?: {

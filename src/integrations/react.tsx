@@ -48,6 +48,7 @@ function sourceKey(source: BitSubReactSource | null | undefined): string {
     hasIdxContent: Boolean(source.idxContent),
     cacheLimit: source.cacheLimit ?? null,
     timeOffset: source.timeOffset ?? null,
+    frameAwareSync: source.frameAwareSync ?? null,
     streamingLoad: source.streamingLoad ?? null,
     rangeRequests: source.rangeRequests ?? null,
     debug: source.debug ?? null,

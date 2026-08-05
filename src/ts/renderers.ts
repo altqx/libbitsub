@@ -16,6 +16,7 @@ import type {
   SubtitleParserMetadata,
   SubtitleRendererBackend,
   SubtitleRendererEvent,
+  SubtitleSynchronizationMode,
   VideoSubtitleOptions,
   VideoVobSubOptions,
   WorkerRendererState
@@ -46,6 +47,7 @@ import {
 import { PgsParser, DvbParser, VobSubParserLowLevel } from './parsers'
 import { WebGPURenderer, isWebGPUSupported } from './webgpu-renderer'
 import { WebGL2Renderer, isWebGL2Supported } from './webgl2-renderer'
+import { VideoFrameScheduler, supportsFrameAwareSync, type VideoFrameTick } from './video-frame-scheduler'
 
 /** Default display settings */
 const DEFAULT_DISPLAY_SETTINGS: SubtitleDisplaySettings = {
@@ -119,6 +121,8 @@ export interface SubtitleRendererStats {
   totalEntries: number
   /** Current subtitle index being displayed */
   currentIndex: number
+  /** Active video synchronization clock */
+  syncMode: SubtitleSynchronizationMode
 }
 
 /**
@@ -132,7 +136,7 @@ abstract class BaseVideoSubtitleRenderer {
   protected subContent?: ArrayBuffer
   protected canvas: HTMLCanvasElement | null = null
   protected ctx: CanvasRenderingContext2D | null = null
-  protected animationFrameId: number | null = null
+  private frameScheduler: VideoFrameScheduler | null = null
   protected isLoaded: boolean = false
   protected lastRenderedIndex: number = -1
   protected lastRenderedTime: number = -1
@@ -147,8 +151,7 @@ abstract class BaseVideoSubtitleRenderer {
 
   /** Display settings for subtitle rendering */
   protected displaySettings: SubtitleDisplaySettings = { ...DEFAULT_DISPLAY_SETTINGS }
-  /** Time offset in seconds added to video.currentTime for subtitle lookup */
-  public timeOffset: number = 0
+  private _timeOffset: number = 0
   protected cacheLimit: number = 24
   protected prefetchBefore: number = 0
   protected prefetchAfter: number = 0
@@ -174,14 +177,17 @@ abstract class BaseVideoSubtitleRenderer {
   protected onWebGL2Fallback?: () => void
 
   protected readonly offscreenRenderOption: boolean
+  protected readonly frameAwareSync: boolean
   protected pendingWorkerOffscreen = false
   protected useWorkerOffscreen = false
   protected canvasPixelWidth = 1
   protected canvasPixelHeight = 1
-  private offscreenPresentToken = 0
+  private presentationToken = 0
   private offscreenAttachPromise: Promise<void> | null = null
   private offscreenTransferPending = false
   private offscreenFrameMetadata = new Map<number, OffscreenFrameMetadata>()
+  private lastSynchronizedTime: number | null = null
+  private lastPresentedFrames: number | null = null
 
   // Performance tracking
   protected perfStats = {
@@ -201,6 +207,7 @@ abstract class BaseVideoSubtitleRenderer {
     this.onWebGPUFallback = options.onWebGPUFallback
     this.onWebGL2Fallback = options.onWebGL2Fallback
     this.offscreenRenderOption = options.offscreenRender !== false
+    this.frameAwareSync = options.frameAwareSync !== false
     this.onEvent = options.onEvent
     this.onWarning = options.onWarning
     this.debug = Boolean(options.debug)
@@ -247,6 +254,21 @@ abstract class BaseVideoSubtitleRenderer {
   /** Get current display settings */
   getDisplaySettings(): SubtitleDisplaySettings {
     return { ...this.displaySettings }
+  }
+
+  /** Time offset in seconds added to the active video clock for subtitle lookup. */
+  get timeOffset(): number {
+    return this._timeOffset
+  }
+
+  set timeOffset(value: number) {
+    if (value === this._timeOffset) return
+    this._timeOffset = value
+    this.invalidatePresentation()
+    this.lastSynchronizedTime = null
+    this.lastRenderedIndex = -1
+    this.lastRenderedTime = -1
+    this.renderPausedFrame()
   }
 
   /** Get performance statistics */
@@ -320,8 +342,15 @@ abstract class BaseVideoSubtitleRenderer {
       minRenderTime: Math.round(minRenderTime * 100) / 100,
       lastRenderTime: Math.round(this.perfStats.lastRenderTime * 100) / 100,
       renderFps: this.perfStats.fpsTimestamps.length,
-      currentIndex: this.lastRenderedIndex
+      currentIndex: this.lastRenderedIndex,
+      syncMode: this.getSynchronizationMode()
     }
+  }
+
+  /** Get the active video synchronization clock. */
+  getSynchronizationMode(): SubtitleSynchronizationMode {
+    if (this.frameScheduler) return this.frameScheduler.mode
+    return supportsFrameAwareSync(this.video, this.frameAwareSync) ? 'video-frame' : 'animation-frame'
   }
 
   /** Set display settings and force re-render */
@@ -346,16 +375,20 @@ abstract class BaseVideoSubtitleRenderer {
 
     // Force re-render if settings changed
     if (changed) {
+      this.invalidatePresentation()
       this.lastRenderedIndex = -1
       this.lastRenderedTime = -1
+      this.renderPausedFrame()
     }
   }
 
   /** Reset display settings to defaults */
   resetDisplaySettings(): void {
     this.displaySettings = { ...DEFAULT_DISPLAY_SETTINGS }
+    this.invalidatePresentation()
     this.lastRenderedIndex = -1
     this.lastRenderedTime = -1
+    this.renderPausedFrame()
   }
 
   /** Start initialization. */
@@ -424,10 +457,13 @@ abstract class BaseVideoSubtitleRenderer {
     this.resizeObserver.observe(this.video)
     this.loadedMetadataHandler = () => this.updateCanvasSize()
     this.seekedHandler = () => {
+      this.invalidatePresentation()
       this.lastRenderedIndex = -1
       this.lastRenderedTime = -1
+      this.lastSynchronizedTime = null
       this.offscreenFrameMetadata.clear()
       this.onSeek()
+      this.renderPausedFrame()
     }
     this.video.addEventListener('loadedmetadata', this.loadedMetadataHandler)
     this.video.addEventListener('seeked', this.seekedHandler)
@@ -542,7 +578,7 @@ abstract class BaseVideoSubtitleRenderer {
     if (!this.useWorkerOffscreen || this.disposed) return
 
     const state = this.getWorkerRendererState()
-    this.offscreenPresentToken++
+    this.invalidatePresentation()
     this.useWorkerOffscreen = false
     this.pendingWorkerOffscreen = false
     this.offscreenFrameMetadata.clear()
@@ -767,6 +803,10 @@ abstract class BaseVideoSubtitleRenderer {
 
     this.lastRenderedIndex = -1
     this.lastRenderedTime = -1
+    this.invalidatePresentation()
+    if (this.frameScheduler) {
+      this.renderPausedFrame()
+    }
   }
 
   protected abstract loadSubtitles(): Promise<void>
@@ -786,66 +826,106 @@ abstract class BaseVideoSubtitleRenderer {
       this.tempCtx = this.tempCanvas.getContext('2d')
     }
 
-    const render = () => {
-      if (this.disposed) return
+    this.frameScheduler = new VideoFrameScheduler(this.video, this.frameAwareSync, (tick) =>
+      this.renderSynchronizedFrame(tick)
+    )
+    this.renderPausedFrame()
+    this.frameScheduler.start()
+  }
 
-      if (this.isLoaded) {
-        const currentTime = this.video.currentTime + this.timeOffset
-        const currentIndex = this.findCurrentIndex(currentTime)
+  protected renderPausedFrame(): void {
+    if (!this.video.paused && !this.video.ended) return
+    this.renderSynchronizedFrame({ mediaTime: this.video.currentTime, presentedFrames: null })
+  }
 
-        // Only re-render if index changed
-        if (currentIndex !== this.lastRenderedIndex) {
-          const cacheHit =
-            !this.useWorkerOffscreen && currentIndex >= 0 && this.getWorkerRendererState().frameCache.has(currentIndex)
-          const workerOffscreenPresent = this.useWorkerOffscreen
-          const startTime = performance.now()
-          const outcome = this.renderFrame(currentTime, currentIndex)
-          const endTime = performance.now()
+  private renderSynchronizedFrame(tick: VideoFrameTick): void {
+    if (this.disposed || !this.isLoaded) return
 
-          this.lastRenderedIndex = currentIndex
-          this.lastRenderedTime = currentTime
-
-          // Worker OffscreenCanvas presentation completes asynchronously. Its
-          // callback records the real status, metadata, and render duration.
-          if (!workerOffscreenPresent) {
-            const renderTime = endTime - startTime
-            this.recordRenderPerformance(renderTime, endTime)
-
-            if (outcome.warning) {
-              this.emitWarning(outcome.warning)
-            }
-
-            const cue = currentIndex >= 0 ? this.buildCueMetadata(currentIndex) : null
-            this.emitCueChange(cue)
-            this.recordLastRenderInfo({
-              time: currentTime,
-              index: currentIndex,
-              status: outcome.status,
-              backend: this.currentRendererBackend,
-              usingWorker: this.getCacheStats().usingWorker,
-              cacheHit,
-              renderDuration: Math.round(renderTime * 100) / 100,
-              frameWidth: outcome.data?.width ?? null,
-              frameHeight: outcome.data?.height ?? null,
-              compositionCount: outcome.data?.compositionData.length ?? 0,
-              cue,
-              cache: this.getCacheStats(),
-              capturedAt: endTime
-            })
-            this.emitEvent({ type: 'stats', stats: this.getStats() })
-            if (currentIndex >= 0 && (this.prefetchBefore > 0 || this.prefetchAfter > 0)) {
-              const prefetch = (this as unknown as { prefetchAroundTime?: (time: number) => Promise<void> })
-                .prefetchAroundTime
-              prefetch?.call(this, currentTime).catch(() => {})
-            }
-          }
-        }
+    const currentTime = tick.mediaTime + this.timeOffset
+    this.lastSynchronizedTime = currentTime
+    if (tick.presentedFrames !== null) {
+      if (this.lastPresentedFrames !== null && tick.presentedFrames > this.lastPresentedFrames + 1) {
+        this.perfStats.framesDropped += tick.presentedFrames - this.lastPresentedFrames - 1
       }
-
-      this.animationFrameId = requestAnimationFrame(render)
+      this.lastPresentedFrames = tick.presentedFrames
     }
 
-    this.animationFrameId = requestAnimationFrame(render)
+    const currentIndex = this.findCurrentIndex(currentTime)
+    if (currentIndex === this.lastRenderedIndex) return
+
+    const cacheHit =
+      !this.useWorkerOffscreen && currentIndex >= 0 && this.getWorkerRendererState().frameCache.has(currentIndex)
+    const workerOffscreenPresent = this.useWorkerOffscreen
+    const startTime = performance.now()
+    this.presentationToken++
+    const outcome = this.renderFrame(currentTime, currentIndex)
+    const endTime = performance.now()
+
+    this.lastRenderedIndex = currentIndex
+    this.lastRenderedTime = currentTime
+
+    // Worker OffscreenCanvas presentation completes asynchronously. Its
+    // callback records the real status, metadata, and render duration.
+    if (workerOffscreenPresent) return
+
+    const renderTime = endTime - startTime
+    this.recordRenderPerformance(renderTime, endTime)
+
+    if (outcome.warning) {
+      this.emitWarning(outcome.warning)
+    }
+
+    const cue = currentIndex >= 0 ? this.buildCueMetadata(currentIndex) : null
+    this.emitCueChange(cue)
+    this.recordLastRenderInfo({
+      time: currentTime,
+      index: currentIndex,
+      status: outcome.status,
+      backend: this.currentRendererBackend,
+      usingWorker: this.getCacheStats().usingWorker,
+      cacheHit,
+      renderDuration: Math.round(renderTime * 100) / 100,
+      frameWidth: outcome.data?.width ?? null,
+      frameHeight: outcome.data?.height ?? null,
+      compositionCount: outcome.data?.compositionData.length ?? 0,
+      cue,
+      cache: this.getCacheStats(),
+      capturedAt: endTime
+    })
+    this.emitEvent({ type: 'stats', stats: this.getStats() })
+    if (currentIndex >= 0 && (this.prefetchBefore > 0 || this.prefetchAfter > 0)) {
+      const prefetch = (this as unknown as { prefetchAroundTime?: (time: number) => Promise<void> }).prefetchAroundTime
+      prefetch?.call(this, currentTime).catch(() => {})
+    }
+  }
+
+  protected getCurrentSynchronizationTime(): number {
+    return this.lastSynchronizedTime ?? this.video.currentTime + this.timeOffset
+  }
+
+  protected getPresentationToken(): number {
+    return this.presentationToken
+  }
+
+  protected isCurrentPresentation(token: number): boolean {
+    return !this.disposed && token === this.presentationToken
+  }
+
+  protected invalidatePresentation(): void {
+    this.presentationToken++
+  }
+
+  protected watchPendingRender(index: number, pending: Promise<SubtitleData | null>): void {
+    const token = this.getPresentationToken()
+    void pending.then(
+      () => {
+        if (!this.isCurrentPresentation(token)) return
+        if (this.findCurrentIndex(this.getCurrentSynchronizationTime()) !== index) return
+        this.lastRenderedIndex = -1
+        this.renderPausedFrame()
+      },
+      () => {}
+    )
   }
 
   private recordRenderPerformance(renderTime: number, capturedAt: number, countAsDropped = true): void {
@@ -952,7 +1032,7 @@ abstract class BaseVideoSubtitleRenderer {
       return { status: 'pending', data: null, warning: null }
     }
 
-    const token = ++this.offscreenPresentToken
+    const token = this.getPresentationToken()
     const sessionId = state.sessionId
     const startedAt = performance.now()
 
@@ -966,7 +1046,7 @@ abstract class BaseVideoSubtitleRenderer {
       displaySettings: { ...this.displaySettings }
     })
       .then((response) => {
-        if (this.disposed || token !== this.offscreenPresentToken) return
+        if (!this.isCurrentPresentation(token)) return
         if (response.type === 'error') {
           this.recordOffscreenRenderCompletion(time, index, 'failed', null, null, 0, startedAt)
           this.fallbackFromWorkerOffscreen(response.message)
@@ -1032,7 +1112,7 @@ abstract class BaseVideoSubtitleRenderer {
         )
       })
       .catch((error) => {
-        if (this.disposed || token !== this.offscreenPresentToken) return
+        if (!this.isCurrentPresentation(token)) return
         this.recordOffscreenRenderCompletion(time, index, 'failed', null, null, 0, startedAt)
         this.fallbackFromWorkerOffscreen(error instanceof Error ? error.message : String(error))
       })
@@ -1221,12 +1301,10 @@ abstract class BaseVideoSubtitleRenderer {
   /** Dispose of all resources. */
   dispose(): void {
     this.disposed = true
-    this.offscreenPresentToken++
+    this.invalidatePresentation()
 
-    if (this.animationFrameId !== null) {
-      cancelAnimationFrame(this.animationFrameId)
-      this.animationFrameId = null
-    }
+    this.frameScheduler?.stop()
+    this.frameScheduler = null
 
     this.resizeObserver?.disconnect()
     this.resizeObserver = null
@@ -1606,12 +1684,9 @@ export class PgsRenderer extends BaseVideoSubtitleRenderer {
           setCachedFrame(this.state, index, frame, renderIssue)
           this.state.pendingRenders.delete(index)
           this.emitCacheChange(this.state.frameCache.size, this.state.pendingRenders.size)
-          // Force re-render on next frame by resetting lastRenderedIndex
-          if (this.findCurrentIndex(this.video.currentTime + this.timeOffset) === index) {
-            this.lastRenderedIndex = -1
-          }
         })
       }
+      this.watchPendingRender(index, this.state.pendingRenders.get(index)!)
       // Return undefined to indicate async loading in progress
       return undefined
     }
@@ -1669,6 +1744,7 @@ export class PgsRenderer extends BaseVideoSubtitleRenderer {
   }
 
   clearFrameCache(): void {
+    this.invalidatePresentation()
     this.state.frameCache.clear()
     this.state.renderIssues.clear()
     this.state.pendingRenders.clear()
@@ -1679,6 +1755,7 @@ export class PgsRenderer extends BaseVideoSubtitleRenderer {
     }
     this.pgsParser?.clearCache()
     this.emitCacheChange(this.state.frameCache.size, this.state.pendingRenders.size)
+    this.renderPausedFrame()
   }
 
   async prefetchRange(startIndex: number, endIndex: number): Promise<void> {
@@ -2115,11 +2192,13 @@ export class VobSubRenderer extends BaseVideoSubtitleRenderer {
 
       // Start async lookup if not already pending
       if (!this.pendingIndexLookup) {
-        this.pendingIndexLookup = sendToWorker({
+        const presentationToken = this.getPresentationToken()
+        const lookup = sendToWorker({
           type: 'findVobSubIndex',
           sessionId: this.state.sessionId!,
           timeMs
         }).then((response) => {
+          if (!this.isCurrentPresentation(presentationToken)) return this.cachedIndex
           if (response.type === 'vobSubIndex') {
             const newIndex = response.index
             const oldIndex = this.cachedIndex
@@ -2131,9 +2210,19 @@ export class VobSubRenderer extends BaseVideoSubtitleRenderer {
               this.lastRenderedIndex = -2 // Use -2 to force update even when new index is -1
             }
           }
-          this.pendingIndexLookup = null
           return this.cachedIndex
         })
+        this.pendingIndexLookup = lookup
+        void lookup.then(
+          () => {
+            if (this.pendingIndexLookup !== lookup) return
+            this.pendingIndexLookup = null
+            this.renderPausedFrame()
+          },
+          () => {
+            if (this.pendingIndexLookup === lookup) this.pendingIndexLookup = null
+          }
+        )
       }
 
       return this.cachedIndex
@@ -2172,12 +2261,9 @@ export class VobSubRenderer extends BaseVideoSubtitleRenderer {
           setCachedFrame(this.state, index, frame, renderIssue)
           this.state.pendingRenders.delete(index)
           this.emitCacheChange(this.state.frameCache.size, this.state.pendingRenders.size)
-          // Force re-render on next frame by resetting lastRenderedIndex
-          if (this.findCurrentIndex(this.video.currentTime + this.timeOffset) === index) {
-            this.lastRenderedIndex = -1
-          }
         })
       }
+      this.watchPendingRender(index, this.state.pendingRenders.get(index)!)
       // Return undefined to indicate async loading in progress
       return undefined
     }
@@ -2241,6 +2327,7 @@ export class VobSubRenderer extends BaseVideoSubtitleRenderer {
   }
 
   clearFrameCache(): void {
+    this.invalidatePresentation()
     this.state.frameCache.clear()
     this.state.renderIssues.clear()
     this.state.pendingRenders.clear()
@@ -2254,6 +2341,7 @@ export class VobSubRenderer extends BaseVideoSubtitleRenderer {
     }
     this.vobsubParser?.clearCache()
     this.emitCacheChange(this.state.frameCache.size, this.state.pendingRenders.size)
+    this.renderPausedFrame()
   }
 
   async prefetchRange(startIndex: number, endIndex: number): Promise<void> {
@@ -2293,11 +2381,13 @@ export class VobSubRenderer extends BaseVideoSubtitleRenderer {
       sendToWorker({ type: 'setVobSubDebandEnabled', sessionId: this.state.sessionId!, enabled }).catch(() => {})
     }
     this.vobsubParser?.setDebandEnabled(enabled)
+    this.invalidatePresentation()
     // Clear cache to force re-render with new settings
     this.state.frameCache.clear()
     this.clearOffscreenFrameMetadata()
     this.lastRenderedIndex = -1
     this.emitCacheChange(this.state.frameCache.size, this.state.pendingRenders.size)
+    this.renderPausedFrame()
   }
 
   /** Set debanding threshold (0-255, default: 64) */
@@ -2306,11 +2396,13 @@ export class VobSubRenderer extends BaseVideoSubtitleRenderer {
       sendToWorker({ type: 'setVobSubDebandThreshold', sessionId: this.state.sessionId!, threshold }).catch(() => {})
     }
     this.vobsubParser?.setDebandThreshold(threshold)
+    this.invalidatePresentation()
     // Clear cache to force re-render with new settings
     this.state.frameCache.clear()
     this.clearOffscreenFrameMetadata()
     this.lastRenderedIndex = -1
     this.emitCacheChange(this.state.frameCache.size, this.state.pendingRenders.size)
+    this.renderPausedFrame()
   }
 
   /** Set debanding sample range in pixels (1-64, default: 15) */
@@ -2319,11 +2411,13 @@ export class VobSubRenderer extends BaseVideoSubtitleRenderer {
       sendToWorker({ type: 'setVobSubDebandRange', sessionId: this.state.sessionId!, range }).catch(() => {})
     }
     this.vobsubParser?.setDebandRange(range)
+    this.invalidatePresentation()
     // Clear cache to force re-render with new settings
     this.state.frameCache.clear()
     this.clearOffscreenFrameMetadata()
     this.lastRenderedIndex = -1
     this.emitCacheChange(this.state.frameCache.size, this.state.pendingRenders.size)
+    this.renderPausedFrame()
   }
 
   /** Check if debanding is enabled */
@@ -2689,12 +2783,9 @@ export class DvbRenderer extends BaseVideoSubtitleRenderer {
           setCachedFrame(this.state, index, frame, renderIssue)
           this.state.pendingRenders.delete(index)
           this.emitCacheChange(this.state.frameCache.size, this.state.pendingRenders.size)
-          // Force re-render on next frame by resetting lastRenderedIndex
-          if (this.findCurrentIndex(this.video.currentTime + this.timeOffset) === index) {
-            this.lastRenderedIndex = -1
-          }
         })
       }
+      this.watchPendingRender(index, this.state.pendingRenders.get(index)!)
       // Return undefined to indicate async loading in progress
       return undefined
     }
@@ -2752,6 +2843,7 @@ export class DvbRenderer extends BaseVideoSubtitleRenderer {
   }
 
   clearFrameCache(): void {
+    this.invalidatePresentation()
     this.state.frameCache.clear()
     this.state.renderIssues.clear()
     this.state.pendingRenders.clear()
@@ -2762,6 +2854,7 @@ export class DvbRenderer extends BaseVideoSubtitleRenderer {
     }
     this.dvbParser?.clearCache()
     this.emitCacheChange(this.state.frameCache.size, this.state.pendingRenders.size)
+    this.renderPausedFrame()
   }
 
   async prefetchRange(startIndex: number, endIndex: number): Promise<void> {

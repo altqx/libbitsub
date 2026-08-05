@@ -223,6 +223,8 @@ export interface VideoSubtitleOptions {
   onWebGL2Fallback?: () => void
   /** Prefer Worker OffscreenCanvas present on the Canvas2D tier (default true) */
   offscreenRender?: boolean
+  /** Sync cue selection to presented video-frame mediaTime when supported (default true) */
+  frameAwareSync?: boolean
   /** Initial display settings for subtitle layout */
   displaySettings?: Partial<SubtitleDisplaySettings>
   /** Maximum number of rendered frames kept in cache */
@@ -275,6 +277,8 @@ export interface SubtitleDisplaySettings {
 }
 
 export type SubtitleRendererBackend = 'webgpu' | 'webgl2' | 'worker-offscreen' | 'canvas2d'
+
+export type SubtitleSynchronizationMode = 'video-frame' | 'animation-frame'
 
 export type SubtitlePresentPath = 'main-webgpu' | 'main-webgl2' | 'worker-offscreen' | 'main-canvas2d' | 'main-thread'
 
@@ -355,6 +359,7 @@ export interface SubtitleRendererStatsSnapshot {
   pendingRenders: number
   totalEntries: number
   currentIndex: number
+  syncMode: SubtitleSynchronizationMode
 }
 
 // =============================================================================
