@@ -1,0 +1,284 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light" />
+    <meta
+      name="description"
+      content="A working feature demo for libbitsub graphical subtitle parsing and rendering."
+    />
+    <title>libbitsub / demo</title>
+    <link rel="icon" href="https://altqx.com/favicon.png" type="image/png" />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <a class="brand" href="https://github.com/altqx/libbitsub" target="_blank" rel="noreferrer">
+          <span class="brand-mark" aria-hidden="true">LB</span>
+          <span>libbitsub</span>
+          <span class="brand-divider">/</span>
+          <span class="brand-muted">demo</span>
+        </a>
+        <div class="topbar-meta">
+          <span>v1.12.0</span>
+          <a href="https://github.com/altqx/libbitsub#readme" target="_blank" rel="noreferrer">README</a>
+          <span class="status-label"><span class="status-dot" id="page-status-dot"></span><span id="page-status">starting</span></span>
+        </div>
+      </header>
+
+      <main>
+        <section class="workbench" aria-label="libbitsub workbench">
+          <aside class="panel control-panel">
+            <div class="panel-heading">
+              <span class="eyebrow">INPUT</span>
+              <h1>Subtitle source</h1>
+              <p>Load a format, attach it to the video, then inspect the renderer as it works.</p>
+            </div>
+
+            <div class="field-stack">
+              <label class="field-label" for="track-select">Track format</label>
+              <select id="track-select">
+                <option value="pgs">PGS / .sup — generated sample</option>
+                <option value="vobsub">VobSub / .idx + .sub — public-domain sample</option>
+                <option value="mks">MKS / embedded VobSub — public-domain sample</option>
+                <option value="dvb">DVB-SUB / .dv — generated sample</option>
+                <option value="dvb-live">DVB-SUB / live push session</option>
+              </select>
+              <p class="field-note" id="track-note">Synthetic PGS display sets with multiple timed bitmap cues.</p>
+            </div>
+
+            <div class="field-stack">
+              <label class="field-label" for="media-select">Video source</label>
+              <select id="media-select">
+                <option value="flower">CC0 flower clip — public-domain test media</option>
+                <option value="live">DVB Live-Linear — AVC DASH stream</option>
+              </select>
+              <p class="field-note" id="media-note">Short CC0 clip from MDN's media examples.</p>
+            </div>
+
+            <button class="button button-primary" id="load-track" type="button">Load track</button>
+            <p class="inline-status" id="load-status" role="status">Waiting for a source.</p>
+
+            <div class="rule"></div>
+
+            <div class="panel-heading compact-heading">
+              <span class="eyebrow">PRESENT</span>
+              <h2>Renderer options</h2>
+            </div>
+
+            <div class="field-stack">
+              <label class="field-label" for="backend-select">Present backend</label>
+              <select id="backend-select">
+                <option value="auto">auto</option>
+                <option value="canvas2d">canvas2d</option>
+                <option value="webgl2">webgl2</option>
+                <option value="webgpu">webgpu</option>
+                <option value="worker-offscreen">worker-offscreen</option>
+              </select>
+              <p class="field-note">Backend changes apply on the next track load.</p>
+            </div>
+
+            <div class="check-row">
+              <input id="offscreen-select" type="checkbox" checked />
+              <label for="offscreen-select">Allow worker OffscreenCanvas</label>
+            </div>
+            <div class="check-row">
+              <input id="frame-sync-select" type="checkbox" checked />
+              <label for="frame-sync-select">Use presented-frame sync</label>
+            </div>
+
+            <div class="field-grid">
+              <div class="field-stack">
+                <label class="field-label" for="cache-select">Cache entries</label>
+                <input id="cache-select" type="number" min="0" max="128" step="1" value="24" />
+              </div>
+              <div class="field-stack">
+                <label class="field-label" for="prefetch-select">Prefetch after</label>
+                <input id="prefetch-select" type="number" min="0" max="8" step="1" value="1" />
+              </div>
+            </div>
+
+            <div class="rule"></div>
+
+            <div class="panel-heading compact-heading">
+              <span class="eyebrow">LAYOUT</span>
+              <h2>Display settings</h2>
+            </div>
+
+            <div class="range-field">
+              <div class="range-label"><label for="scale-range">Scale</label><output id="scale-value">1.00×</output></div>
+              <input id="scale-range" type="range" min="0.1" max="3" step="0.05" value="1" />
+            </div>
+            <div class="range-field">
+              <div class="range-label"><label for="opacity-range">Opacity</label><output id="opacity-value">100%</output></div>
+              <input id="opacity-range" type="range" min="0" max="1" step="0.05" value="1" />
+            </div>
+            <div class="range-field">
+              <div class="range-label"><label for="bottom-range">Bottom padding</label><output id="bottom-value">0%</output></div>
+              <input id="bottom-range" type="range" min="0" max="50" step="1" value="0" />
+            </div>
+            <div class="field-grid">
+              <div class="range-field">
+                <div class="range-label"><label for="horizontal-range">X offset</label><output id="horizontal-value">0%</output></div>
+                <input id="horizontal-range" type="range" min="-50" max="50" step="1" value="0" />
+              </div>
+              <div class="range-field">
+                <div class="range-label"><label for="vertical-range">Y offset</label><output id="vertical-value">0%</output></div>
+                <input id="vertical-range" type="range" min="-50" max="50" step="1" value="0" />
+              </div>
+            </div>
+            <div class="field-grid">
+              <div class="field-stack">
+                <label class="field-label" for="aspect-select">Aspect</label>
+                <select id="aspect-select">
+                  <option value="stretch">stretch</option>
+                  <option value="contain">contain</option>
+                  <option value="cover">cover</option>
+                </select>
+              </div>
+              <div class="field-stack">
+                <label class="field-label" for="align-select">Align</label>
+                <select id="align-select">
+                  <option value="center">center</option>
+                  <option value="left">left</option>
+                  <option value="right">right</option>
+                </select>
+              </div>
+            </div>
+            <button class="button button-secondary" id="reset-display" type="button">Reset display settings</button>
+          </aside>
+
+          <section class="panel preview-panel" aria-label="video preview">
+            <div class="panel-heading preview-heading">
+              <div>
+                <span class="eyebrow">PREVIEW</span>
+                <h2>Video + bitmap overlay</h2>
+              </div>
+              <div class="preview-badges">
+                <span class="badge" id="media-badge">CC0 media</span>
+                <span class="badge badge-signal" id="renderer-badge">no renderer</span>
+              </div>
+            </div>
+
+            <div class="stage" id="stage">
+              <div class="stage-grid" aria-hidden="true"></div>
+              <div class="stage-note" id="stage-note">
+                <span class="stage-note-code">00</span>
+                <span>load a subtitle source to begin</span>
+              </div>
+              <video id="player" playsinline controls preload="metadata"></video>
+              <div id="ttml-rendering" class="ttml-rendering" aria-hidden="true"></div>
+              <div class="stage-readout"><span id="cue-badge">no active cue</span><span id="time-badge">00:00.000</span></div>
+            </div>
+
+            <div class="transport">
+              <button class="transport-button" id="play-toggle" type="button">Play</button>
+              <button class="transport-button" id="restart-button" type="button">Restart</button>
+              <input id="scrubber" type="range" min="0" max="1" step="0.001" value="0" aria-label="Video position" />
+              <span class="transport-time" id="transport-time">00:00 / 00:00</span>
+            </div>
+
+            <div class="preview-footer">
+              <div>
+                <span class="eyebrow">EXPORT</span>
+                <p>Flatten the active cue to a PNG with <code>renderFrameData()</code> + <code>toBlob()</code>.</p>
+              </div>
+              <div class="export-actions">
+                <button class="button button-secondary" id="export-frame" type="button">Export current frame</button>
+                <span class="inline-status" id="export-status" role="status"></span>
+              </div>
+            </div>
+          </section>
+
+          <aside class="panel inspector-panel" aria-label="renderer inspector">
+            <div class="panel-heading">
+              <span class="eyebrow">INSPECT</span>
+              <h2>Renderer session</h2>
+              <p id="session-summary">No subtitle session loaded.</p>
+            </div>
+
+            <div class="inspect-block">
+              <div class="inspect-title"><span>Detected format</span><span class="value-accent" id="detected-format">—</span></div>
+              <div class="inspect-title"><span>Active backend</span><span class="value-accent" id="active-backend">—</span></div>
+              <div class="inspect-title"><span>Sync clock</span><span class="value-accent" id="sync-mode">—</span></div>
+              <div class="inspect-title"><span>Source transfer</span><span class="value-accent" id="source-transfer">—</span></div>
+            </div>
+
+            <div class="rule"></div>
+
+            <div class="inspect-block">
+              <div class="subheading-row"><span class="eyebrow">CAPABILITIES</span><button class="text-button" id="refresh-capabilities" type="button">refresh</button></div>
+              <div class="capability-list" id="capability-list"></div>
+            </div>
+
+            <div class="rule"></div>
+
+            <div class="inspect-block">
+              <div class="subheading-row"><span class="eyebrow">DIAGNOSTICS</span><span id="warning-count">0 warnings</span></div>
+              <pre class="code-output short-output" id="diagnostics-output">No diagnostics.</pre>
+            </div>
+          </aside>
+        </section>
+
+        <section class="detail-grid">
+          <section class="panel data-panel">
+            <div class="panel-heading data-heading">
+              <div><span class="eyebrow">METADATA</span><h2>Parser output</h2></div>
+              <span class="data-heading-label" id="metadata-format">—</span>
+            </div>
+            <pre class="code-output" id="metadata-output">Load a source to inspect parser metadata.</pre>
+          </section>
+
+          <section class="panel data-panel">
+            <div class="panel-heading data-heading">
+              <div><span class="eyebrow">STATS</span><h2>Live renderer state</h2></div>
+              <span class="data-heading-label" id="stats-entry-count">0 entries</span>
+            </div>
+            <pre class="code-output" id="stats-output">No renderer statistics yet.</pre>
+          </section>
+
+          <section class="panel data-panel event-panel">
+            <div class="panel-heading data-heading">
+              <div><span class="eyebrow">EVENTS</span><h2>Event stream</h2></div>
+              <button class="text-button" id="clear-events" type="button">clear</button>
+            </div>
+            <ol class="event-list" id="event-list"><li class="empty-event">Events from the active renderer appear here.</li></ol>
+          </section>
+        </section>
+
+        <section class="panel feature-panel">
+          <div class="panel-heading feature-heading">
+            <div><span class="eyebrow">SURFACE AREA</span><h2>What this page exercises</h2></div>
+            <span class="feature-note">same package, different entry points</span>
+          </div>
+          <div class="feature-table-wrap">
+            <table class="feature-table">
+              <thead>
+                <tr><th>Area</th><th>Demo path</th><th>API surface</th><th>State</th></tr>
+              </thead>
+              <tbody>
+                <tr><th>Formats</th><td>PGS, VobSub, MKS, DVB-SUB</td><td><code>detectSubtitleFormat</code>, <code>createAutoSubtitleRenderer</code></td><td><span class="table-state">ready</span></td></tr>
+                <tr><th>Live input</th><td>Generated DVB frames + live push session</td><td><code>append()</code>, <code>flush()</code>, <code>reset()</code></td><td><span class="table-state">ready</span></td></tr>
+                <tr><th>Loading</th><td>VobSub files use URL / range-aware loading</td><td><code>fetchSubtitleAsset</code>, <code>fetchSubtitleText</code></td><td><span class="table-state">ready</span></td></tr>
+                <tr><th>Presentation</th><td>Canvas2D, WebGL2, WebGPU, worker path</td><td><code>getRuntimeCapabilities</code>, renderer <code>backend</code></td><td><span class="table-state">browser-dependent</span></td></tr>
+                <tr><th>Integration</th><td>HTMLVideoElement sync; adapter surface listed</td><td>Video.js · Shaka · hls.js · React</td><td><span class="table-state">package surface</span></td></tr>
+                <tr><th>Export</th><td>Current cue to a downloadable PNG</td><td><code>renderFrameData</code>, <code>toCanvas</code>, <code>toImageBitmap</code>, <code>toBlob</code></td><td><span class="table-state">ready</span></td></tr>
+                <tr><th>Debugging</th><td>Warnings, errors, cache, cue and timing state</td><td><code>onEvent</code>, <code>onWarning</code>, <code>getStats</code></td><td><span class="table-state">ready</span></td></tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </main>
+
+      <footer class="footer">
+        <span>libbitsub demo · MIT library</span>
+        <span><a href="https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4" target="_blank" rel="noreferrer">CC0 media</a> · <a href="https://live-linear.dvb.org/" target="_blank" rel="noreferrer">DVB Live-Linear</a></span>
+      </footer>
+    </div>
+
+    <script src="https://cdn.dashjs.org/latest/modern/umd/dash.all.min.js" crossorigin="anonymous"></script>
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>

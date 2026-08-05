@@ -78,6 +78,9 @@
     "build:wasm:bundler": "wasm-pack build --target bundler --out-dir pkg-bundler",
     "build:ts": "tsc",
     "build": "bun run build:wasm:release && bun run build:ts",
+    "demo:build": "bun demo/build.ts",
+    "demo:dev": "bun run demo:build && wrangler dev --config demo/wrangler.jsonc",
+    "demo:deploy": "bun run demo:build && wrangler deploy --config demo/wrangler.jsonc",
     "clean": "rm -rf pkg pkg-bundler dist target",
     "test": "cargo test --workspace",
     "test:ts": "bun test src/ts",
@@ -90,6 +93,7 @@
     "@types/react": "^19.2.17",
     "prettier": "^3.9.6",
     "react": "^19.2.8",
+    "libbitsub-registry": "npm:libbitsub@1.12.0",
     "typescript": "^7.0.2"
   },
   "peerDependencies": {

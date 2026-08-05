@@ -34,7 +34,7 @@ https://gist.github.com/user-attachments/assets/a89ae9fe-23e4-4bc3-8cad-16a3f0fe
 
 ### Live demo
 
-https://a.rafasu.com/v
+https://libbitsub.altqx.com
 
 ## Installation
 

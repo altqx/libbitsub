@@ -9,6 +9,7 @@
       },
       "devDependencies": {
         "@types/react": "^19.2.17",
+        "libbitsub-registry": "npm:libbitsub@1.12.0",
         "prettier": "^3.9.6",
         "react": "^19.2.8",
         "typescript": "^7.0.2",
@@ -73,6 +74,8 @@
     "@webgpu/types": ["@webgpu/types@0.1.71", "", {}, "sha512-mMy8/ODcKhab808co15eW+yN+HgXoQxRQHTiBV9Mrvl1r0ufnid7YOcI+gi4eUWSWl9ezD6TW2KXccrL8HCh2A=="],
 
     "csstype": ["csstype@3.2.3", "", {}, "sha512-z1HGKcYy2xA8AGQfwrn0PAy+PB7X/GSj3UVJW9qKyn43xWa+gl5nXmU4qqLMRzWVLFC8KusUX8T/0kCiOYpAIQ=="],
+
+    "libbitsub-registry": ["libbitsub@1.12.0", "", { "dependencies": { "@webgpu/types": "^0.1.71" }, "peerDependencies": { "hls.js": ">=1.0.0", "react": ">=18.0.0", "shaka-player": ">=4.0.0", "video.js": ">=7.0.0" }, "optionalPeers": ["hls.js", "react", "shaka-player", "video.js"] }, "sha512-WsulgzwbwEqcZaz+1flomrnEmpy5VtC3N6A+ZtGRUs2ntayAdegN5M64dgPyzYvw2BkT/ix0d3JGLtF1j3gTeQ=="],
 
     "prettier": ["prettier@3.9.6", "", { "bin": { "prettier": "bin/prettier.cjs" } }, "sha512-OpN0zzVdiaiAhxpuuj5efpIS4sY9j7bY6uR5mnj5yPzGkdkjNKSJeUThPb60Jw29QuAZgA4o+/iB49kFiaBX6g=="],
 

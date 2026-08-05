@@ -1,0 +1,17 @@
+{
+  "$schema": "../node_modules/wrangler/config-schema.json",
+  "name": "libbitsub-demo",
+  "account_id": "f0679ee32e8a12d2771bbbea2c2a9cc2",
+  "compatibility_date": "2026-06-10",
+  "workers_dev": false,
+  "assets": {
+    "directory": "./dist",
+    "not_found_handling": "404-page"
+  },
+  "routes": [
+    {
+      "pattern": "libbitsub.altqx.com",
+      "custom_domain": true
+    }
+  ]
+}
