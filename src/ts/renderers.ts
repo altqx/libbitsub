@@ -6,6 +6,7 @@
 import type {
   AssetFetchStrategy,
   AutoVideoSubtitleOptions,
+  LiveSubtitleRenderer,
   SubtitleCacheStats,
   SubtitleCueBounds,
   SubtitleCueMetadata,
@@ -16,6 +17,7 @@ import type {
   SubtitleParserMetadata,
   SubtitleRendererBackend,
   SubtitleRendererEvent,
+  SubtitleStreamChunk,
   SubtitleSynchronizationMode,
   VideoSubtitleOptions,
   VideoVobSubOptions,
@@ -165,6 +167,7 @@ abstract class BaseVideoSubtitleRenderer {
 
   private loadedMetadataHandler: (() => void) | null = null
   private seekedHandler: (() => void) | null = null
+  private initPromise: Promise<void> | null = null
 
   // WebGPU renderer (optional, falls back to WebGL2 then Canvas2D)
   protected webgpuRenderer: WebGPURenderer | null = null
@@ -393,13 +396,56 @@ abstract class BaseVideoSubtitleRenderer {
 
   /** Start initialization. */
   protected startInit(): void {
-    this.init().catch((error) => {
+    this.initPromise = this.init()
+    this.initPromise.catch((error) => {
       this.emitEvent({
         type: 'error',
         format: this.format,
         error: normalizeSubtitleError(error, { format: this.format })
       })
     })
+  }
+
+  /** Wait for canvas, parser, and worker initialization before accepting pushed data. */
+  protected async waitUntilInitialized(): Promise<void> {
+    await this.initPromise
+    if (this.disposed) {
+      throw new Error(`${this.format.toUpperCase()} renderer has been disposed`)
+    }
+  }
+
+  /** Re-run cue selection after a live stream mutation. */
+  protected refreshStreamPresentation(): void {
+    this.invalidatePresentation()
+    this.lastRenderedIndex = -1
+    this.lastRenderedTime = -1
+    this.renderPausedFrame()
+  }
+
+  /** Clear the currently presented cue after a live stream reset. */
+  protected clearStreamPresentation(): void {
+    this.invalidatePresentation()
+    this.lastSynchronizedTime = null
+    this.lastRenderedIndex = -1
+    this.lastRenderedTime = -1
+    this.lastRenderedData = null
+    this.lastCueIndex = null
+    this.currentCueMetadata = null
+    this.lastRenderInfo = null
+    this.offscreenFrameMetadata.clear()
+
+    const state = this.getWorkerRendererState()
+    if (this.useWorkerOffscreen && state.workerReady && state.sessionId) {
+      sendToWorker({ type: 'clearOffscreenCanvas', sessionId: state.sessionId }).catch(() => {})
+    } else if (this.useWebGPU && this.webgpuRenderer) {
+      this.webgpuRenderer.clear()
+    } else if (this.useWebGL2 && this.webgl2Renderer) {
+      this.webgl2Renderer.clear()
+    } else if (this.ctx && this.canvas) {
+      this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height)
+    }
+
+    this.emitEvent({ type: 'cue-change', cue: null })
   }
 
   /** Initialize the renderer. */
@@ -1355,9 +1401,11 @@ abstract class BaseVideoSubtitleRenderer {
  * High-level PGS subtitle renderer with Web Worker support.
  * Compatible with the old libpgs-js API.
  */
-export class PgsRenderer extends BaseVideoSubtitleRenderer {
+export class PgsRenderer extends BaseVideoSubtitleRenderer implements LiveSubtitleRenderer {
   private pgsParser: PgsParser | null = null
   private state = createWorkerState()
+  private streamOperationQueue: Promise<void> = Promise.resolve()
+  private streamGeneration = 0
   private onLoading?: () => void
   private onLoaded?: () => void
   private onError?: (error: Error) => void
@@ -1385,7 +1433,9 @@ export class PgsRenderer extends BaseVideoSubtitleRenderer {
       }
 
       if (!this.subUrl) {
-        throw new Error('No subtitle content or URL provided')
+        await this.beginPgsPushSession()
+        this.onLoaded?.()
+        return
       }
 
       if (!this.streamingLoad) {
@@ -1429,6 +1479,150 @@ export class PgsRenderer extends BaseVideoSubtitleRenderer {
         this.emitWorkerState(true, true, this.state.sessionId)
       }
     }
+  }
+
+  private async beginPgsPushSession(): Promise<void> {
+    if (this.state.useWorker) {
+      try {
+        this.state.sessionId = createWorkerSessionId()
+        await getOrCreateWorker()
+        this.emitWorkerState(true, false, this.state.sessionId)
+        const response = await sendToWorker({ type: 'beginPgs', sessionId: this.state.sessionId })
+        if (response.type === 'error') throw new Error(response.message)
+        if (response.type !== 'pgsProgress') throw new Error('Unexpected PGS worker response')
+
+        this.applyPgsIndexState(response.metadata, response.timestamps, true, true)
+        this.state.workerReady = true
+        this.isLoaded = true
+        this.emitWorkerState(true, true, this.state.sessionId)
+        return
+      } catch (workerError) {
+        this.state.useWorker = false
+        this.state.workerReady = false
+        this.state.sessionId = null
+        this.emitWorkerState(false, false, null, true)
+        this.emitWarning(
+          createSubtitleWarning(
+            'WORKER_FALLBACK',
+            'PGS worker initialization failed, falling back to main-thread rendering.',
+            {
+              format: 'pgs',
+              details: { reason: workerError instanceof Error ? workerError.message : String(workerError) }
+            }
+          )
+        )
+      }
+    }
+
+    await this.yieldToMain()
+    this.pgsParser = new PgsParser({ debug: this.debug, onWarning: (warning) => this.emitWarning(warning) })
+    this.pgsParser.reset()
+    const metadata = this.pgsParser.getMetadata()
+    this.applyPgsIndexState(metadata, this.pgsParser.getTimestamps(), true, false)
+    this.isLoaded = true
+  }
+
+  private enqueueStreamOperation<T>(operation: () => Promise<T>): Promise<T> {
+    const run = async (): Promise<T> => {
+      try {
+        await this.waitUntilInitialized()
+        return await operation()
+      } catch (error) {
+        const resolvedError = normalizeSubtitleError(error, { format: 'pgs' })
+        this.emitEvent({ type: 'error', format: 'pgs', error: resolvedError })
+        this.onError?.(resolvedError)
+        throw resolvedError
+      }
+    }
+    const result = this.streamOperationQueue.then(run, run)
+    this.streamOperationQueue = result.then(
+      () => undefined,
+      () => undefined
+    )
+    return result
+  }
+
+  /** Append a chunk to the active PGS stream and return the number of newly indexed cues. */
+  append(data: SubtitleStreamChunk): Promise<number> {
+    return this.enqueueStreamOperation(async () => {
+      const chunk = data instanceof Uint8Array ? data : new Uint8Array(data)
+      if (chunk.byteLength === 0) return 0
+
+      let added: number
+      if (this.state.useWorker && this.state.workerReady && this.state.sessionId) {
+        const response = await sendToWorker({
+          type: 'appendPgs',
+          sessionId: this.state.sessionId,
+          data: createTransferableBuffer(chunk, true)
+        })
+        if (response.type === 'error') throw new Error(response.message)
+        if (response.type !== 'pgsProgress') throw new Error('Unexpected PGS worker response')
+        added = response.added
+        if (added > 0) {
+          this.applyPgsIndexState(response.metadata, response.timestamps, true, true)
+        } else {
+          this.state.metadata = response.metadata
+          this.state.timestamps = response.timestamps
+        }
+      } else {
+        if (!this.pgsParser) throw new Error('PGS parser is not initialized')
+        added = this.pgsParser.feed(chunk)
+        if (added > 0) {
+          this.applyPgsIndexState(this.pgsParser.getMetadata(), this.pgsParser.getTimestamps(), true, false)
+        }
+      }
+
+      if (added > 0) this.refreshStreamPresentation()
+      return added
+    })
+  }
+
+  /** Flush incomplete trailing PGS input and return the total indexed cue count. */
+  flush(): Promise<number> {
+    return this.enqueueStreamOperation(async () => {
+      let count: number
+      if (this.state.useWorker && this.state.workerReady && this.state.sessionId) {
+        const response = await sendToWorker({ type: 'finishPgs', sessionId: this.state.sessionId })
+        if (response.type === 'error') throw new Error(response.message)
+        if (response.type !== 'pgsProgress') throw new Error('Unexpected PGS worker response')
+        count = response.count
+        this.applyPgsIndexState(response.metadata, response.timestamps, false, true)
+      } else {
+        if (!this.pgsParser) throw new Error('PGS parser is not initialized')
+        count = this.pgsParser.finishFeed()
+        this.applyPgsIndexState(this.pgsParser.getMetadata(), this.pgsParser.getTimestamps(), false, false)
+      }
+
+      this.refreshStreamPresentation()
+      return count
+    })
+  }
+
+  /** Reset the PGS stream while keeping the renderer and canvas ready for more chunks. */
+  reset(): Promise<void> {
+    return this.enqueueStreamOperation(async () => {
+      this.streamGeneration++
+      try {
+        if (this.state.useWorker && this.state.workerReady && this.state.sessionId) {
+          const response = await sendToWorker({ type: 'resetPgs', sessionId: this.state.sessionId })
+          if (response.type === 'error') throw new Error(response.message)
+          if (response.type !== 'pgsProgress') throw new Error('Unexpected PGS worker response')
+          this.applyPgsIndexState(response.metadata, response.timestamps, true, true)
+        } else {
+          if (!this.pgsParser) throw new Error('PGS parser is not initialized')
+          this.pgsParser.reset()
+          this.applyPgsIndexState(this.pgsParser.getMetadata(), this.pgsParser.getTimestamps(), true, false)
+        }
+
+        this.state.frameCache.clear()
+        this.state.renderIssues.clear()
+        this.state.pendingRenders.clear()
+        this.clearStreamPresentation()
+        this.emitCacheChange(0, 0)
+      } finally {
+        this.streamGeneration++
+      }
+    })
   }
 
   private async loadPgsBuffer(data: Uint8Array, preserveSource: boolean): Promise<void> {
@@ -1661,6 +1855,7 @@ export class PgsRenderer extends BaseVideoSubtitleRenderer {
 
     if (this.state.useWorker && this.state.workerReady) {
       if (!this.state.pendingRenders.has(index)) {
+        const generation = this.streamGeneration
         const renderTask = sendToWorker({
           type: 'renderPgsAtIndex',
           sessionId: this.state.sessionId!,
@@ -1681,6 +1876,7 @@ export class PgsRenderer extends BaseVideoSubtitleRenderer {
         this.state.pendingRenders.set(index, renderPromise)
         this.emitCacheChange(this.state.frameCache.size, this.state.pendingRenders.size)
         renderTask.then(({ frame, renderIssue }) => {
+          if (generation !== this.streamGeneration || this.disposed) return
           setCachedFrame(this.state, index, frame, renderIssue)
           this.state.pendingRenders.delete(index)
           this.emitCacheChange(this.state.frameCache.size, this.state.pendingRenders.size)
@@ -1790,6 +1986,7 @@ export class PgsRenderer extends BaseVideoSubtitleRenderer {
   }
 
   dispose(): void {
+    this.streamGeneration++
     super.dispose()
     this.state.frameCache.clear()
     this.state.renderIssues.clear()
@@ -2439,10 +2636,12 @@ export class VobSubRenderer extends BaseVideoSubtitleRenderer {
   }
 }
 
-export class DvbRenderer extends BaseVideoSubtitleRenderer {
+export class DvbRenderer extends BaseVideoSubtitleRenderer implements LiveSubtitleRenderer {
   private dvbParser: DvbParser | null = null
   private endTimestamps: Float64Array = new Float64Array(0)
   private state = createWorkerState()
+  private streamOperationQueue: Promise<void> = Promise.resolve()
+  private streamGeneration = 0
   private onLoading?: () => void
   private onLoaded?: () => void
   private onError?: (error: Error) => void
@@ -2470,7 +2669,9 @@ export class DvbRenderer extends BaseVideoSubtitleRenderer {
       }
 
       if (!this.subUrl) {
-        throw new Error('No subtitle content or URL provided')
+        await this.beginDvbPushSession()
+        this.onLoaded?.()
+        return
       }
 
       if (!this.streamingLoad) {
@@ -2516,6 +2717,169 @@ export class DvbRenderer extends BaseVideoSubtitleRenderer {
         this.emitWorkerState(true, true, this.state.sessionId)
       }
     }
+  }
+
+  private async beginDvbPushSession(): Promise<void> {
+    if (this.state.useWorker) {
+      try {
+        this.state.sessionId = createWorkerSessionId()
+        await getOrCreateWorker()
+        this.emitWorkerState(true, false, this.state.sessionId)
+        const response = await sendToWorker({ type: 'beginDvb', sessionId: this.state.sessionId })
+        if (response.type === 'error') throw new Error(response.message)
+        if (response.type !== 'dvbProgress') throw new Error('Unexpected DVB worker response')
+
+        this.applyDvbIndexState(response.metadata, response.timestamps, response.endTimestamps, true, true)
+        this.state.workerReady = true
+        this.isLoaded = true
+        this.emitWorkerState(true, true, this.state.sessionId)
+        return
+      } catch (workerError) {
+        this.state.useWorker = false
+        this.state.workerReady = false
+        this.state.sessionId = null
+        this.emitWorkerState(false, false, null, true)
+        this.emitWarning(
+          createSubtitleWarning(
+            'WORKER_FALLBACK',
+            'DVB worker initialization failed, falling back to main-thread rendering.',
+            {
+              format: 'dvb',
+              details: { reason: workerError instanceof Error ? workerError.message : String(workerError) }
+            }
+          )
+        )
+      }
+    }
+
+    await this.yieldToMain()
+    this.dvbParser = new DvbParser({ debug: this.debug, onWarning: (warning) => this.emitWarning(warning) })
+    this.dvbParser.reset()
+    const metadata = this.dvbParser.getMetadata()
+    this.applyDvbIndexState(metadata, this.dvbParser.getTimestamps(), this.dvbParser.getEndTimestamps(), true, false)
+    this.isLoaded = true
+  }
+
+  private enqueueStreamOperation<T>(operation: () => Promise<T>): Promise<T> {
+    const run = async (): Promise<T> => {
+      try {
+        await this.waitUntilInitialized()
+        return await operation()
+      } catch (error) {
+        const resolvedError = normalizeSubtitleError(error, { format: 'dvb' })
+        this.emitEvent({ type: 'error', format: 'dvb', error: resolvedError })
+        this.onError?.(resolvedError)
+        throw resolvedError
+      }
+    }
+    const result = this.streamOperationQueue.then(run, run)
+    this.streamOperationQueue = result.then(
+      () => undefined,
+      () => undefined
+    )
+    return result
+  }
+
+  /** Append a chunk to the active DVB stream and return the number of newly indexed cues. */
+  append(data: SubtitleStreamChunk): Promise<number> {
+    return this.enqueueStreamOperation(async () => {
+      const chunk = data instanceof Uint8Array ? data : new Uint8Array(data)
+      if (chunk.byteLength === 0) return 0
+
+      let added: number
+      if (this.state.useWorker && this.state.workerReady && this.state.sessionId) {
+        const response = await sendToWorker({
+          type: 'appendDvb',
+          sessionId: this.state.sessionId,
+          data: createTransferableBuffer(chunk, true)
+        })
+        if (response.type === 'error') throw new Error(response.message)
+        if (response.type !== 'dvbProgress') throw new Error('Unexpected DVB worker response')
+        added = response.added
+        if (added > 0) {
+          this.applyDvbIndexState(response.metadata, response.timestamps, response.endTimestamps, true, true)
+        } else {
+          this.state.metadata = response.metadata
+          this.state.timestamps = response.timestamps
+          this.endTimestamps = response.endTimestamps
+        }
+      } else {
+        if (!this.dvbParser) throw new Error('DVB parser is not initialized')
+        added = this.dvbParser.feed(chunk)
+        if (added > 0) {
+          this.applyDvbIndexState(
+            this.dvbParser.getMetadata(),
+            this.dvbParser.getTimestamps(),
+            this.dvbParser.getEndTimestamps(),
+            true,
+            false
+          )
+        }
+      }
+
+      if (added > 0) this.refreshStreamPresentation()
+      return added
+    })
+  }
+
+  /** Flush incomplete trailing DVB input and return the total indexed cue count. */
+  flush(): Promise<number> {
+    return this.enqueueStreamOperation(async () => {
+      let count: number
+      if (this.state.useWorker && this.state.workerReady && this.state.sessionId) {
+        const response = await sendToWorker({ type: 'finishDvb', sessionId: this.state.sessionId })
+        if (response.type === 'error') throw new Error(response.message)
+        if (response.type !== 'dvbProgress') throw new Error('Unexpected DVB worker response')
+        count = response.count
+        this.applyDvbIndexState(response.metadata, response.timestamps, response.endTimestamps, false, true)
+      } else {
+        if (!this.dvbParser) throw new Error('DVB parser is not initialized')
+        count = this.dvbParser.finishFeed()
+        this.applyDvbIndexState(
+          this.dvbParser.getMetadata(),
+          this.dvbParser.getTimestamps(),
+          this.dvbParser.getEndTimestamps(),
+          false,
+          false
+        )
+      }
+
+      this.refreshStreamPresentation()
+      return count
+    })
+  }
+
+  /** Reset the DVB stream while keeping the renderer and canvas ready for more chunks. */
+  reset(): Promise<void> {
+    return this.enqueueStreamOperation(async () => {
+      this.streamGeneration++
+      try {
+        if (this.state.useWorker && this.state.workerReady && this.state.sessionId) {
+          const response = await sendToWorker({ type: 'resetDvb', sessionId: this.state.sessionId })
+          if (response.type === 'error') throw new Error(response.message)
+          if (response.type !== 'dvbProgress') throw new Error('Unexpected DVB worker response')
+          this.applyDvbIndexState(response.metadata, response.timestamps, response.endTimestamps, true, true)
+        } else {
+          if (!this.dvbParser) throw new Error('DVB parser is not initialized')
+          this.dvbParser.reset()
+          this.applyDvbIndexState(
+            this.dvbParser.getMetadata(),
+            this.dvbParser.getTimestamps(),
+            this.dvbParser.getEndTimestamps(),
+            true,
+            false
+          )
+        }
+
+        this.state.frameCache.clear()
+        this.state.renderIssues.clear()
+        this.state.pendingRenders.clear()
+        this.clearStreamPresentation()
+        this.emitCacheChange(0, 0)
+      } finally {
+        this.streamGeneration++
+      }
+    })
   }
 
   private async loadDvbBuffer(data: Uint8Array, preserveSource: boolean): Promise<void> {
@@ -2760,6 +3124,7 @@ export class DvbRenderer extends BaseVideoSubtitleRenderer {
 
     if (this.state.useWorker && this.state.workerReady) {
       if (!this.state.pendingRenders.has(index)) {
+        const generation = this.streamGeneration
         const renderTask = sendToWorker({
           type: 'renderDvbAtIndex',
           sessionId: this.state.sessionId!,
@@ -2780,6 +3145,7 @@ export class DvbRenderer extends BaseVideoSubtitleRenderer {
         this.state.pendingRenders.set(index, renderPromise)
         this.emitCacheChange(this.state.frameCache.size, this.state.pendingRenders.size)
         renderTask.then(({ frame, renderIssue }) => {
+          if (generation !== this.streamGeneration || this.disposed) return
           setCachedFrame(this.state, index, frame, renderIssue)
           this.state.pendingRenders.delete(index)
           this.emitCacheChange(this.state.frameCache.size, this.state.pendingRenders.size)
@@ -2889,6 +3255,7 @@ export class DvbRenderer extends BaseVideoSubtitleRenderer {
   }
 
   dispose(): void {
+    this.streamGeneration++
     super.dispose()
     this.state.frameCache.clear()
     this.state.renderIssues.clear()

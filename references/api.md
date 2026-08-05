@@ -284,15 +284,27 @@ Notes:
 
 ---
 
-## `PgsRenderer` / `VobSubRenderer`
+## High-level renderers
 
-Both extend `BaseVideoSubtitleRenderer` and expose the same API surface.
+`PgsRenderer`, `VobSubRenderer`, and `DvbRenderer` share the layout, cache, metadata, statistics, and lifecycle surface below.
 
 ### Lifecycle
 
 | Method            | Description                               |
 | ----------------- | ----------------------------------------- |
 | `dispose(): void` | Release DOM, worker, and parser resources |
+
+### PGS/DVB live push input
+
+Omit `subUrl` and `subContent` when constructing `PgsRenderer` or `DvbRenderer` to create an empty live session. Push operations are serialized and may be called immediately after construction.
+
+| Method                                                     | Description                                                         |
+| ---------------------------------------------------------- | ------------------------------------------------------------------- |
+| `append(data: Uint8Array \| ArrayBuffer): Promise<number>` | Push bytes; resolves with newly indexed cues                        |
+| `flush(): Promise<number>`                                 | Drop incomplete trailing input; resolves with total indexed cues    |
+| `reset(): Promise<void>`                                   | Clear parser, index, frame cache, and displayed cue; remains usable |
+
+`flush()` does not close the renderer; additional chunks can be appended. `reset()` preserves canvas/worker setup and display configuration. VobSub does not implement this surface.
 
 ### Layout
 

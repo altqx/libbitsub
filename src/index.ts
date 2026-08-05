@@ -49,6 +49,7 @@ export {
   type AssetFetchStrategy,
   type AutoSubtitleSource,
   type AutoVideoSubtitleOptions,
+  type LiveSubtitleRenderer,
   type OpenedSubtitles,
   type RangeProbeResult,
   type RuntimeCapabilities,
@@ -78,6 +79,7 @@ export {
   type SubtitleRendererBackend,
   type SubtitleRendererEvent,
   type SubtitleRendererStatsSnapshot,
+  type SubtitleStreamChunk,
   type SubtitleSynchronizationMode
 } from './wrapper'
 

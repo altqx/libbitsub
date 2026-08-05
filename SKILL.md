@@ -159,6 +159,19 @@ DVB file dumps use libbitsub framing: `"DV" | pts_90k_be_u32 | payload_len_be_u3
 
 The DVB decoder renders bitmap object coding method 0. Character-string and reserved object coding methods are ignored.
 
+### Live PGS / DVB push input
+
+Omit `subUrl` and `subContent` to create an empty live renderer, then push demuxed chunks in order:
+
+```ts
+const renderer = new DvbRenderer({ video: videoElement })
+await renderer.append(dvbPesChunk) // returns newly indexed cue count
+await renderer.flush() // returns total cue count; later append() calls remain valid
+await renderer.reset() // clears the stream and displayed cue, but keeps the renderer alive
+```
+
+`append()` accepts `Uint8Array | ArrayBuffer`. The same API is available on `PgsRenderer`; it is not available on `VobSubRenderer`.
+
 ### Auto-detect format
 
 ```ts

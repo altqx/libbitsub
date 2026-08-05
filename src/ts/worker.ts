@@ -314,6 +314,21 @@ self.onmessage = async function(event) {
                 );
                 break;
             }
+            case 'resetPgs': {
+                let parser = pgsParsers.get(request.sessionId);
+                if (!parser) {
+                    parser = new wasmModule.PgsParser();
+                    pgsParsers.set(request.sessionId, parser);
+                }
+                parser.reset();
+                const timestamps = parser.getTimestamps();
+                postResponse(
+                    { type: 'pgsProgress', count: 0, added: 0, partial: true, metadata: buildPgsMetadata(parser), timestamps },
+                    [timestamps.buffer],
+                    _id
+                );
+                break;
+            }
             case 'loadDvb': {
                 disposeSession(request.sessionId);
                 const parser = new wasmModule.DvbParser();
@@ -373,6 +388,22 @@ self.onmessage = async function(event) {
                 const endTimestamps = parser.getEndTimestamps();
                 postResponse(
                     { type: 'dvbProgress', count, added, partial: false, metadata: buildDvbMetadata(parser), timestamps, endTimestamps },
+                    [timestamps.buffer, endTimestamps.buffer],
+                    _id
+                );
+                break;
+            }
+            case 'resetDvb': {
+                let parser = dvbParsers.get(request.sessionId);
+                if (!parser) {
+                    parser = new wasmModule.DvbParser();
+                    dvbParsers.set(request.sessionId, parser);
+                }
+                parser.reset();
+                const timestamps = parser.getTimestamps();
+                const endTimestamps = parser.getEndTimestamps();
+                postResponse(
+                    { type: 'dvbProgress', count: 0, added: 0, partial: true, metadata: buildDvbMetadata(parser), timestamps, endTimestamps },
                     [timestamps.buffer, endTimestamps.buffer],
                     _id
                 );

@@ -72,6 +72,19 @@ export interface SubtitleDiagnosticsOptions {
   onWarning?: (warning: SubtitleDiagnosticWarning) => void
 }
 
+/** Binary chunk accepted by the live PGS/DVB renderer push API. */
+export type SubtitleStreamChunk = ArrayBuffer | Uint8Array
+
+/** Incremental input surface implemented by the live PGS and DVB video renderers. */
+export interface LiveSubtitleRenderer {
+  /** Append bytes and resolve with the number of newly indexed cues. */
+  append(data: SubtitleStreamChunk): Promise<number>
+  /** Discard any incomplete trailing input and resolve with the total cue count. */
+  flush(): Promise<number>
+  /** Clear all stream/parser state while keeping the renderer ready for new input. */
+  reset(): Promise<void>
+}
+
 // =============================================================================
 // Subtitle Data Types
 // =============================================================================
@@ -205,9 +218,9 @@ export interface OpenedSubtitles {
 export interface VideoSubtitleOptions {
   /** The video element to sync with */
   video: HTMLVideoElement
-  /** URL to the subtitle file */
+  /** URL to the subtitle file. Omit both sources to create a live PGS/DVB push renderer. */
   subUrl?: string
-  /** Direct subtitle content (ArrayBuffer) */
+  /** Direct subtitle content (ArrayBuffer). Omit both sources to create a live PGS/DVB push renderer. */
   subContent?: ArrayBuffer
   /** Worker URL (kept for API compatibility, not used in WASM version) */
   workerUrl?: string
@@ -407,10 +420,12 @@ export type WorkerRequest =
   | { type: 'beginPgs'; sessionId: string }
   | { type: 'appendPgs'; sessionId: string; data: ArrayBuffer }
   | { type: 'finishPgs'; sessionId: string }
+  | { type: 'resetPgs'; sessionId: string }
   | { type: 'loadDvb'; sessionId: string; data: ArrayBuffer }
   | { type: 'beginDvb'; sessionId: string }
   | { type: 'appendDvb'; sessionId: string; data: ArrayBuffer }
   | { type: 'finishDvb'; sessionId: string }
+  | { type: 'resetDvb'; sessionId: string }
   | { type: 'loadVobSub'; sessionId: string; idxContent: string; subData: ArrayBuffer }
   | { type: 'loadVobSubIdx'; sessionId: string; idxContent: string }
   | { type: 'attachVobSubData'; sessionId: string; subData: ArrayBuffer }

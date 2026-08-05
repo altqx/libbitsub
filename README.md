@@ -320,6 +320,24 @@ DVB dumps use libbitsub framing:
 
 The DVB decoder renders bitmap object coding method 0. Character-string and reserved object coding methods are ignored.
 
+### Live / push streams
+
+PGS and DVB renderers can start without a URL or in-memory subtitle file. Push transport or demuxer chunks as they arrive; calls are processed in order even when they are made before renderer initialization completes.
+
+```ts
+import { DvbRenderer } from 'libbitsub'
+
+const renderer = new DvbRenderer({ video: videoElement })
+
+const added = await renderer.append(dvbPesChunk) // newly indexed cues
+const total = await renderer.flush() // finalize trailing input; total indexed cues
+
+await renderer.reset() // clear cues/caches/display, then reuse the same renderer
+await renderer.append(nextChannelChunk)
+```
+
+`append()` accepts `Uint8Array` or `ArrayBuffer` without detaching the caller's buffer. `flush()` discards incomplete trailing bytes; later appends are still accepted. `reset()` keeps the canvas, worker session, render loop, and configuration alive while clearing the stream state. VobSub does not expose the push API because it depends on its `.idx`/container index.
+
 ### Automatic format detection
 
 ```ts
@@ -807,11 +825,14 @@ Browser/device support matrix (including webOS TV): [docs/COMPATIBILITY.md](./do
 - `clearFrameCache(): void` clears the renderer-side and parser-side frame cache.
 - `prefetchRange(startIndex: number, endIndex: number): Promise<void>` prefetches decoded frames for a cue range.
 - `prefetchAroundTime(time: number, before?: number, after?: number): Promise<void>` prefetches around a playback time in seconds.
+- `append(data: Uint8Array | ArrayBuffer): Promise<number>` pushes live bytes and returns newly indexed cues.
+- `flush(): Promise<number>` finalizes trailing input and returns the total cue count.
+- `reset(): Promise<void>` clears live parser, cue, cache, and presentation state for reuse.
 - `dispose(): void` releases DOM, parser, and worker resources.
 
 #### `VobSubRenderer`
 
-- Supports all `PgsRenderer` methods above.
+- Supports the common `PgsRenderer` methods above, except `append()`, `flush()`, and `reset()`.
 - `setDebandEnabled(enabled: boolean): void` enables or disables debanding.
 - `setDebandThreshold(threshold: number): void` updates the deband threshold.
 - `setDebandRange(range: number): void` updates the deband sample range.
@@ -819,7 +840,7 @@ Browser/device support matrix (including webOS TV): [docs/COMPATIBILITY.md](./do
 
 #### `DvbRenderer`
 
-- Supports all `PgsRenderer` methods above (streaming/`feed` path, no debanding).
+- Supports all `PgsRenderer` methods above, including the live push API (no debanding).
 
 ### Low-level parsers
 
