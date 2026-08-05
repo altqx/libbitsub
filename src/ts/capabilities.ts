@@ -32,7 +32,7 @@ export function isOffscreenCanvas2DSupported(): boolean {
   return false
 }
 
-export function isCanvas2DSupported(offscreenCanvas2d = isOffscreenCanvas2DSupported()): boolean {
+export function isCanvas2DSupported(offscreenCanvas2d: boolean = isOffscreenCanvas2DSupported()): boolean {
   if (offscreenCanvas2d) return true
 
   if (typeof document === 'undefined') return false
