@@ -4,6 +4,8 @@ use super::context::{DisplayCue, DvbComposition, DvbContext, DvbFrame};
 use super::pes::{TimedPayload, parse_timed_stream};
 use crate::utils::binary_search_timestamp;
 
+const MAX_PENDING_BYTES: usize = 32 * 1024 * 1024;
+
 /// DVB subtitle parser and renderer.
 pub struct DvbParser {
     cues: Vec<DisplayCue>,
@@ -51,6 +53,11 @@ impl DvbParser {
             return 0;
         }
 
+        if chunk.len() > MAX_PENDING_BYTES.saturating_sub(self.pending.len()) {
+            self.pending.clear();
+            self.last_render_issue = Some("PENDING_LIMIT_EXCEEDED".to_string());
+            return 0;
+        }
         self.pending.extend_from_slice(chunk);
         let before = self.cues.len();
         let (units, consumed) = parse_timed_stream(&self.pending);

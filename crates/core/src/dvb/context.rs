@@ -305,8 +305,14 @@ impl DvbContext {
             };
         }
 
+        const MAX_FRAME_PIXELS: usize = 16_777_216;
+        const MAX_FRAME_COMPOSITIONS: usize = 256;
         let mut compositions = Vec::new();
+        let mut total_pixels = 0usize;
         for region_ref in &page.regions {
+            if compositions.len() >= MAX_FRAME_COMPOSITIONS {
+                break;
+            }
             let Some(region) = self.regions.get(&region_ref.region_id) else {
                 continue;
             };
@@ -318,12 +324,22 @@ impl DvbContext {
                 .unwrap_or_else(|| Clut::default_clut(region.clut_id));
             let palette = clut.entries_for_depth(region.depth);
 
-            let pixel_count = region.width as usize * region.height as usize;
+            let Some(pixel_count) = (region.width as usize).checked_mul(region.height as usize)
+            else {
+                continue;
+            };
             if pixel_count == 0 || region.pixels.len() < pixel_count {
                 continue;
             }
+            total_pixels = match total_pixels.checked_add(pixel_count) {
+                Some(total) if total <= MAX_FRAME_PIXELS => total,
+                _ => break,
+            };
 
-            let mut rgba = vec![0u8; pixel_count * 4];
+            let Some(rgba_len) = pixel_count.checked_mul(4) else {
+                continue;
+            };
+            let mut rgba = vec![0u8; rgba_len];
             for (index, &code) in region.pixels[..pixel_count].iter().enumerate() {
                 let color = palette.get(code as usize).copied().unwrap_or(0);
                 let bytes = color.to_le_bytes();

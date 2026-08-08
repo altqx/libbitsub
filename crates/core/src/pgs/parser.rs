@@ -10,6 +10,9 @@ use super::{
 };
 use crate::utils::binary_search_timestamp;
 
+const MAX_PENDING_BYTES: usize = 32 * 1024 * 1024;
+const MAX_FRAME_COMPOSITIONS: usize = 256;
+
 /// PGS subtitle parser and renderer.
 pub struct PgsParser {
     /// All parsed display sets
@@ -109,6 +112,11 @@ impl PgsParser {
             return 0;
         }
 
+        if chunk.len() > MAX_PENDING_BYTES.saturating_sub(self.pending.len()) {
+            self.pending.clear();
+            self.last_render_issue = Some("PENDING_LIMIT_EXCEEDED".to_string());
+            return 0;
+        }
         self.pending.extend_from_slice(chunk);
 
         let before = self.display_sets.len();
@@ -297,8 +305,13 @@ impl PgsParser {
 
         // Render all composition objects
         let mut compositions = Vec::new();
+        let mut total_pixels = 0usize;
 
         for comp_obj in &composition.composition_objects {
+            if compositions.len() >= MAX_FRAME_COMPOSITIONS {
+                self.last_render_issue = Some("FRAME_COMPOSITION_LIMIT_EXCEEDED".to_string());
+                break;
+            }
             // Get assembled object
             let obj = match context.objects.get(&comp_obj.object_id) {
                 Some(obj) => obj,
@@ -335,6 +348,13 @@ impl PgsParser {
             let pixel_count = match Self::bitmap_pixel_count(decoded.width, decoded.height) {
                 Some(pixel_count) => pixel_count,
                 None => continue,
+            };
+            total_pixels = match total_pixels.checked_add(pixel_count) {
+                Some(total) if total <= MAX_PGS_BITMAP_PIXELS => total,
+                _ => {
+                    self.last_render_issue = Some("FRAME_PIXEL_LIMIT_EXCEEDED".to_string());
+                    break;
+                }
             };
 
             let rgba_len = match pixel_count.checked_mul(4) {
