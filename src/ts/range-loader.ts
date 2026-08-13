@@ -2,6 +2,7 @@ import type { AssetFetchStrategy } from './types'
 
 export type { AssetFetchStrategy }
 
+/** Progress event emitted while fetching an asset. */
 export interface AssetFetchProgress {
   loaded: number
   total: number | null
@@ -10,6 +11,7 @@ export interface AssetFetchProgress {
   strategy: AssetFetchStrategy
 }
 
+/** Options for fetchSubtitleAsset(). */
 export interface AssetFetchOptions {
   signal?: AbortSignal
   onProgress?: (progress: AssetFetchProgress) => void
@@ -19,6 +21,7 @@ export interface AssetFetchOptions {
   headers?: HeadersInit
 }
 
+/** Result of probing HTTP range support. */
 export interface RangeProbeResult {
   supportsRange: boolean
   size: number | null
@@ -68,6 +71,7 @@ function mergeHeaders(base?: HeadersInit, extra?: HeadersInit): Headers {
   return headers
 }
 
+/** Probe whether a URL accepts HTTP range requests. */
 export async function probeRangeSupport(url: string, options: AssetFetchOptions = {}): Promise<RangeProbeResult> {
   const headers = mergeHeaders(options.headers, { Range: 'bytes=0-0' })
 
@@ -241,6 +245,7 @@ async function fetchByRangeChunks(
   return assembled
 }
 
+/** Fetch a subtitle asset with optional range/stream strategies. */
 export async function fetchSubtitleAsset(
   url: string,
   options: AssetFetchOptions = {},
@@ -279,6 +284,7 @@ export async function fetchSubtitleAsset(
   return { data, strategy, rangeSupported, total: total ?? data.byteLength }
 }
 
+/** Fetch a subtitle asset and decode it as text. */
 export async function fetchSubtitleText(url: string, options: AssetFetchOptions = {}): Promise<string> {
   const { data } = await fetchSubtitleAsset(url, {
     ...options,

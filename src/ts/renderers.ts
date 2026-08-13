@@ -2733,6 +2733,7 @@ export class VobSubRenderer extends BaseVideoSubtitleRenderer {
   }
 }
 
+/** High-level DVB overlay renderer bound to a video element. */
 export class DvbRenderer extends BaseVideoSubtitleRenderer implements LiveSubtitleRenderer {
   private dvbParser: DvbParser | null = null
   private endTimestamps: Float64Array = new Float64Array(0)

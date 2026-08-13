@@ -3,10 +3,12 @@ import { isWebGPUSupported } from './webgpu-renderer'
 import { isWebGL2Supported } from './webgl2-renderer'
 import type { RuntimeCapabilities, SubtitlePresentPath } from './types'
 
+/** Whether OffscreenCanvas exists. */
 export function isOffscreenCanvasSupported(): boolean {
   return typeof OffscreenCanvas !== 'undefined'
 }
 
+/** Whether HTMLCanvasElement.transferControlToOffscreen exists. */
 export function isTransferControlToOffscreenSupported(): boolean {
   return (
     typeof HTMLCanvasElement !== 'undefined' &&
@@ -19,6 +21,7 @@ export function isTransferControlToOffscreenSupported(): boolean {
   )
 }
 
+/** Whether OffscreenCanvas supports a 2D context. */
 export function isOffscreenCanvas2DSupported(): boolean {
   if (typeof OffscreenCanvas !== 'undefined') {
     try {
@@ -32,6 +35,7 @@ export function isOffscreenCanvas2DSupported(): boolean {
   return false
 }
 
+/** Whether a Canvas2D context can be created. */
 export function isCanvas2DSupported(offscreenCanvas2d: boolean = isOffscreenCanvas2DSupported()): boolean {
   if (offscreenCanvas2d) return true
 
@@ -43,6 +47,7 @@ export function isCanvas2DSupported(offscreenCanvas2d: boolean = isOffscreenCanv
   }
 }
 
+/** Whether OffscreenCanvas can be transferred to a worker. */
 export function canUseWorkerOffscreenRender(): boolean {
   return (
     isWorkerAvailable() &&
@@ -105,6 +110,7 @@ function resolvePreferredPresentPath(capabilities: Omit<RuntimeCapabilities, 'pr
   return { preferredPresentPath: 'main-thread', reasons }
 }
 
+/** Probe browser backends available to libbitsub. */
 export function getRuntimeCapabilities(): RuntimeCapabilities {
   const worker = isWorkerAvailable()
   const offscreenCanvas = isOffscreenCanvasSupported()

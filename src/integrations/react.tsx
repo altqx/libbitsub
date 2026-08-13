@@ -1,7 +1,9 @@
 /**
  * Optional React bindings for libbitsub bitmap subtitles.
  *
- * Peer dependency: react >= 18
+ * Peer dependency: react >= 18.
+ *
+ * @module
  *
  * @example
  * ```tsx
@@ -26,13 +28,16 @@ import { useEffect, useRef, useState, type CSSProperties, type ReactElement, typ
 import { attachBitSub, type AttachBitSubOptions, type BitSubController, type BitSubSourceOptions } from './shared'
 import type { SubtitleDisplaySettings, SubtitleDiagnosticWarning, SubtitleRendererEvent } from '../wrapper'
 
+/** Subtitle source fields accepted by the React bindings. */
 export type BitSubReactSource = BitSubSourceOptions
 
+/** Options for useBitSub(). */
 export interface UseBitSubOptions extends BitSubReactSource {
   /** When false, do not load even if source fields are set. Default true. */
   enabled?: boolean
 }
 
+/** Return value of useBitSub(). */
 export interface UseBitSubResult {
   controller: BitSubController | null
   error: Error | null
@@ -152,6 +157,7 @@ export function useBitSub(
   return { controller, error }
 }
 
+/** Props for BitSubOverlay. */
 export interface BitSubOverlayProps extends UseBitSubOptions {
   videoRef: RefObject<HTMLVideoElement | null>
   /** Optional class name applied to a zero-size host span for debugging. */
@@ -171,6 +177,9 @@ export function BitSubOverlay(props: BitSubOverlayProps): ReactElement | null {
   return <span className={className} style={{ display: 'none', ...style }} aria-hidden='true' />
 }
 
+/** Shared attach options and controller types. */
 export type { AttachBitSubOptions, BitSubController, BitSubSourceOptions, BitSubRenderer } from './shared'
+/** Attach or construct a libbitsub controller. */
 export { attachBitSub, createBitSubRenderer } from './shared'
+/** Runtime overlay display settings. */
 export type { SubtitleDisplaySettings }

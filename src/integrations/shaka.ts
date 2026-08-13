@@ -4,6 +4,8 @@
  * Bitmap PGS/VobSub tracks are not native Shaka text tracks — this helper
  * overlays libbitsub on the player media element.
  *
+ * @module
+ *
  * @example
  * ```ts
  * import shaka from 'shaka-player'
@@ -26,8 +28,10 @@ export interface ShakaPlayerLike {
   removeEventListener?(type: string, listener: (...args: unknown[]) => void): void
 }
 
+/** Options for attachBitSubToShaka(). */
 export type BitSubShakaOptions = AttachBitSubOptions
 
+/** Handle returned by attachBitSubToShaka(). */
 export interface BitSubShakaHandle extends BitSubController {
   /** Underlying Shaka player reference. */
   readonly player: ShakaPlayerLike
@@ -88,5 +92,7 @@ export function attachBitSubToShaka(player: ShakaPlayerLike, options: BitSubShak
   }
 }
 
+/** Shared attach options and controller types. */
 export type { AttachBitSubOptions, BitSubController, BitSubSourceOptions, BitSubRenderer } from './shared'
+/** Attach or construct a libbitsub controller. */
 export { attachBitSub, createBitSubRenderer } from './shared'

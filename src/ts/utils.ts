@@ -333,6 +333,7 @@ function looksLikeVobSubBinary(binary: Uint8Array): boolean {
   return false
 }
 
+/** is Mks Source. */
 export function isMksSource(source: Pick<AutoSubtitleSource, 'data' | 'subData' | 'fileName' | 'subUrl'>): boolean {
   const fileHint = [source.fileName, source.subUrl].find(Boolean)?.toLowerCase()
   if (fileHint?.endsWith('.mks')) return true
@@ -380,6 +381,7 @@ export function convertFrameData(frame: FrameData): SubtitleData {
   return { width: frame.width, height: frame.height, compositionData }
 }
 
+/** trim Transparent Image Data. */
 export function trimTransparentImageData(
   pixels: Uint8Array | Uint8ClampedArray,
   width: number,

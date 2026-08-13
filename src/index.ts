@@ -1,7 +1,10 @@
 /**
- * libbitsub - High-performance WASM renderer for graphical subtitles
+ * High-performance WASM renderer for graphical subtitles (PGS, VobSub, and DVB).
  *
- * @packageDocumentation
+ * High-level video overlay renderers, low-level parsers, capability probes,
+ * and frame-export helpers.
+ *
+ * @module
  */
 
 // High-level video-integrated renderers (compatible with old libpgs-js API)

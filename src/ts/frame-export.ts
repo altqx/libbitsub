@@ -155,6 +155,7 @@ function normalizeRenderedFrame(
   return renderFrameData(frame, options)
 }
 
+/** Compose a subtitle frame into RGBA pixels. */
 export function renderFrameData(
   frame: SubtitleData,
   options: SubtitleFrameRenderOptions = {}
@@ -212,6 +213,7 @@ export function renderFrameData(
   }
 }
 
+/** Draw rendered frame data onto a canvas. */
 export function toCanvas(
   frame: SubtitleData | SubtitleRenderedFrameData,
   target?: SubtitleFrameCanvasTarget,
@@ -259,6 +261,7 @@ export function toCanvas(
   return canvas
 }
 
+/** Create an ImageBitmap from rendered frame data. */
 export async function toImageBitmap(
   frame: SubtitleData | SubtitleRenderedFrameData,
   options: SubtitleFrameRenderOptions = {}
@@ -285,6 +288,7 @@ export async function toImageBitmap(
   throw new Error('ImageBitmap export requires createImageBitmap() or OffscreenCanvas.transferToImageBitmap().')
 }
 
+/** Encode rendered frame data as an image Blob. */
 export async function toBlob(
   frame: SubtitleData | SubtitleRenderedFrameData,
   type: string = 'image/png',

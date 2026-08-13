@@ -19,6 +19,7 @@ export type BitSubRenderer = PgsRenderer | VobSubRenderer | DvbRenderer
 /** Subtitle source + renderer options without a bound video element. */
 export type BitSubSourceOptions = Omit<AutoVideoSubtitleOptions, 'video'>
 
+/** Handle returned by player adapters. */
 export interface BitSubController {
   /** Active renderer, or null when no track is loaded. */
   readonly renderer: BitSubRenderer | null
@@ -40,6 +41,7 @@ export interface BitSubController {
   setVideo(video: HTMLVideoElement | null): void
 }
 
+/** Options for attachBitSub(). */
 export interface AttachBitSubOptions extends BitSubSourceOptions {
   /** When false, skip the initial load even if source fields are present. Default true. */
   autoLoad?: boolean

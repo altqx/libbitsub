@@ -13,6 +13,7 @@ interface SubtitleDiagnosticContext {
   fallbackCode?: SubtitleDiagnosticErrorCode
 }
 
+/** Typed diagnostic error for load and parse failures. */
 export class SubtitleDiagnosticError extends Error implements SubtitleDiagnosticErrorLike {
   readonly code: SubtitleDiagnosticErrorCode
   readonly format?: SubtitleFormatName
@@ -37,6 +38,7 @@ export class SubtitleDiagnosticError extends Error implements SubtitleDiagnostic
   }
 }
 
+/** Construct a SubtitleDiagnosticError. */
 export function createSubtitleDiagnosticError(
   code: SubtitleDiagnosticErrorCode,
   message: string,
@@ -49,6 +51,7 @@ export function createSubtitleDiagnosticError(
   return new SubtitleDiagnosticError(code, message, options)
 }
 
+/** Normalize unknown thrown values into SubtitleDiagnosticError. */
 export function normalizeSubtitleError(
   error: unknown,
   context: SubtitleDiagnosticContext = {}
@@ -67,6 +70,7 @@ export function normalizeSubtitleError(
   })
 }
 
+/** create Subtitle Warning. */
 export function createSubtitleWarning(
   code: SubtitleDiagnosticWarningCode,
   message: string,
@@ -85,6 +89,7 @@ export function createSubtitleWarning(
   }
 }
 
+/** warning From Render Issue. */
 export function warningFromRenderIssue(
   renderIssue: string | null | undefined,
   options: {
@@ -133,6 +138,7 @@ export function warningFromRenderIssue(
   }
 }
 
+/** format Subtitle Warning For Console. */
 export function formatSubtitleWarningForConsole(warning: SubtitleDiagnosticWarning): string {
   return `[libbitsub:${warning.code}] ${warning.message}`
 }

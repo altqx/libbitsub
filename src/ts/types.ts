@@ -23,14 +23,19 @@ export type {
   VobSubFrame
 }
 
+/** Detected graphical subtitle format. */
 export type SubtitleFormatName = 'pgs' | 'vobsub' | 'dvb'
 
+/** Horizontal alignment used when placing a subtitle overlay. */
 export type SubtitleHorizontalAlign = 'left' | 'center' | 'right'
 
+/** How bitmap subtitles are fit into the video overlay. */
 export type SubtitleAspectMode = 'stretch' | 'contain' | 'cover'
 
+/** Primitive value stored on a diagnostic error or warning. */
 export type SubtitleDiagnosticDetailValue = string | number | boolean | null | undefined
 
+/** Stable diagnostic error code. */
 export type SubtitleDiagnosticErrorCode =
   | 'UNSUPPORTED_FORMAT'
   | 'BAD_IDX'
@@ -42,6 +47,7 @@ export type SubtitleDiagnosticErrorCode =
   | 'WORKER_FALLBACK'
   | 'UNKNOWN'
 
+/** Stable diagnostic warning code. */
 export type SubtitleDiagnosticWarningCode =
   | 'BAD_IDX'
   | 'INVALID_FRAME_DATA'
@@ -50,8 +56,10 @@ export type SubtitleDiagnosticWarningCode =
   | 'RANGE_FALLBACK'
   | 'WORKER_FALLBACK'
 
+/** Strategy used to fetch a subtitle asset. */
 export type AssetFetchStrategy = 'memory' | 'stream' | 'range-chunks' | 'basic'
 
+/** Non-fatal diagnostic emitted while loading or rendering. */
 export interface SubtitleDiagnosticWarning {
   code: SubtitleDiagnosticWarningCode
   message: string
@@ -60,6 +68,7 @@ export interface SubtitleDiagnosticWarning {
   details?: Record<string, SubtitleDiagnosticDetailValue>
 }
 
+/** Error shape used by SubtitleDiagnosticError. */
 export interface SubtitleDiagnosticErrorLike extends Error {
   code: SubtitleDiagnosticErrorCode
   format?: SubtitleFormatName
@@ -67,6 +76,7 @@ export interface SubtitleDiagnosticErrorLike extends Error {
   cause?: unknown
 }
 
+/** Options for forwarding diagnostic warnings. */
 export interface SubtitleDiagnosticsOptions {
   debug?: boolean
   onWarning?: (warning: SubtitleDiagnosticWarning) => void
@@ -99,13 +109,16 @@ export interface SubtitleData {
   compositionData: SubtitleCompositionData[]
 }
 
+/** Whether exported frames keep the full screen or crop to ink. */
 export type SubtitleFrameCropMode = 'bounds' | 'screen'
 
+/** Options for flattening a subtitle frame to RGBA. */
 export interface SubtitleFrameRenderOptions {
   /** Compose only the visible cue bounds or the full subtitle presentation area. */
   crop?: SubtitleFrameCropMode
 }
 
+/** Flattened RGBA subtitle frame plus placement metadata. */
 export interface SubtitleRenderedFrameData {
   /** Flattened RGBA pixels for the composed subtitle frame export. */
   imageData: ImageData
@@ -125,12 +138,14 @@ export interface SubtitleRenderedFrameData {
   compositionCount: number
 }
 
+/** Canvas target accepted by toCanvas(). */
 export type SubtitleFrameCanvasTarget =
   | HTMLCanvasElement
   | OffscreenCanvas
   | CanvasRenderingContext2D
   | OffscreenCanvasRenderingContext2D
 
+/** Options for drawing a rendered frame onto a canvas. */
 export interface SubtitleFrameCanvasOptions extends SubtitleFrameRenderOptions {
   /** Resize the target canvas to the rendered frame size before drawing. */
   resizeCanvas?: boolean
@@ -148,6 +163,7 @@ export interface SubtitleCompositionData {
   y: number
 }
 
+/** Axis-aligned bounds of a subtitle cue. */
 export interface SubtitleCueBounds {
   x: number
   y: number
@@ -155,6 +171,7 @@ export interface SubtitleCueBounds {
   height: number
 }
 
+/** Indexed cue timing and placement metadata. */
 export interface SubtitleCueMetadata {
   index: number
   format: SubtitleFormatName
@@ -172,6 +189,7 @@ export interface SubtitleCueMetadata {
   filePosition?: number
 }
 
+/** Parser-level track metadata. */
 export interface SubtitleParserMetadata {
   format: SubtitleFormatName
   cueCount: number
@@ -182,6 +200,7 @@ export interface SubtitleParserMetadata {
   hasIdxMetadata?: boolean
 }
 
+/** In-memory subtitle document returned by openSubtitles(). */
 export interface OpenedSubtitles {
   /** Detected subtitle format after the source has been opened. */
   readonly format: SubtitleFormatName
@@ -297,12 +316,16 @@ export interface SubtitleDisplaySettings {
   opacity: number
 }
 
+/** Presentation backend selected by a high-level renderer. */
 export type SubtitleRendererBackend = 'webgpu' | 'webgl2' | 'worker-offscreen' | 'canvas2d'
 
+/** Whether cue times follow RVFC or requestAnimationFrame. */
 export type SubtitleSynchronizationMode = 'video-frame' | 'animation-frame'
 
+/** Concrete present path used for the last frame. */
 export type SubtitlePresentPath = 'main-webgpu' | 'main-webgl2' | 'worker-offscreen' | 'main-canvas2d' | 'main-thread'
 
+/** Probed browser capabilities for rendering backends. */
 export interface RuntimeCapabilities {
   worker: boolean
   offscreenCanvas: boolean
@@ -317,6 +340,7 @@ export interface RuntimeCapabilities {
   reasons: string[]
 }
 
+/** Observability event emitted by a high-level renderer. */
 export type SubtitleRendererEvent =
   | { type: 'loading'; format: SubtitleFormatName }
   | {
@@ -339,6 +363,7 @@ export type SubtitleRendererEvent =
   | { type: 'cue-change'; cue: SubtitleCueMetadata | null }
   | { type: 'stats'; stats: SubtitleRendererStatsSnapshot }
 
+/** Frame-cache occupancy counters. */
 export interface SubtitleCacheStats {
   cacheLimit: number
   cachedFrames: number
@@ -349,8 +374,10 @@ export interface SubtitleCacheStats {
   sessionId: string | null
 }
 
+/** Status of the last present attempt. */
 export type SubtitleRenderStatus = 'rendered' | 'cleared' | 'pending' | 'empty' | 'failed'
 
+/** Details about the last presented or skipped frame. */
 export interface SubtitleLastRenderInfo {
   time: number
   index: number
@@ -367,6 +394,7 @@ export interface SubtitleLastRenderInfo {
   capturedAt: number
 }
 
+/** Renderer stats snapshot including backend and sync mode. */
 export interface SubtitleRendererStatsSnapshot {
   framesRendered: number
   framesDropped: number
@@ -387,6 +415,7 @@ export interface SubtitleRendererStatsSnapshot {
 // Worker Types
 // =============================================================================
 
+/** Legacy alias for a composed image plane. */
 export interface CompositionData {
   rgba: Uint8Array
   x: number
@@ -395,12 +424,14 @@ export interface CompositionData {
   height: number
 }
 
+/** Legacy alias for a composed subtitle frame. */
 export interface FrameData {
   width: number
   height: number
   compositions: CompositionData[]
 }
 
+/** Metadata describing a worker OffscreenCanvas session. */
 export interface WorkerSessionMetadata {
   format: SubtitleFormatName
   cueCount: number
@@ -411,6 +442,7 @@ export interface WorkerSessionMetadata {
   hasIdxMetadata?: boolean
 }
 
+/** Display settings forwarded to the worker compositor. */
 export interface WorkerOffscreenDisplaySettings {
   scale: number
   aspectMode: SubtitleAspectMode
@@ -422,6 +454,7 @@ export interface WorkerOffscreenDisplaySettings {
   opacity: number
 }
 
+/** Request posted to the libbitsub worker. */
 export type WorkerRequest =
   | { type: 'init'; wasmUrl: string; glueUrl?: string }
   | { type: 'loadPgs'; sessionId: string; data: ArrayBuffer }
@@ -471,8 +504,10 @@ export type WorkerRequest =
       displaySettings: WorkerOffscreenDisplaySettings
     }
 
+/** Present status reported by the worker compositor. */
 export type WorkerOffscreenPresentStatus = 'rendered' | 'cleared' | 'empty' | 'failed'
 
+/** Response posted from the libbitsub worker. */
 export type WorkerResponse =
   | { type: 'initComplete'; success: boolean; error?: string }
   | { type: 'pgsLoaded'; count: number; byteLength: number; metadata: WorkerSessionMetadata; timestamps: Float64Array }
@@ -552,6 +587,7 @@ export interface WorkerRendererState {
   metadata: SubtitleParserMetadata | null
 }
 
+/** Source fields used by createAutoSubtitleRenderer(). */
 export interface AutoSubtitleSource {
   data?: ArrayBuffer | Uint8Array
   subData?: ArrayBuffer | Uint8Array
@@ -561,6 +597,7 @@ export interface AutoSubtitleSource {
   idxUrl?: string
 }
 
+/** Options for auto-detecting PGS/VobSub/DVB input. */
 export interface AutoVideoSubtitleOptions extends Omit<VideoVobSubOptions, 'subUrl' | 'idxUrl'> {
   subUrl?: string
   idxUrl?: string

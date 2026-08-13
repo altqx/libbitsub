@@ -1,6 +1,8 @@
 /**
  * Optional Video.js plugin for libbitsub bitmap subtitles.
  *
+ * @module
+ *
  * @example
  * ```ts
  * import videojs from 'video.js'
@@ -26,24 +28,29 @@ export interface VideoJsPlayerLike {
   trigger?(event: string, data?: unknown): void
 }
 
+/** Minimal Video.js plugin instance surface. */
 export interface VideoJsPluginBase {
   player: VideoJsPlayerLike
   options_: unknown
   dispose(): void
 }
 
+/** Minimal Video.js plugin constructor surface. */
 export interface VideoJsPluginConstructor {
   new (player: VideoJsPlayerLike, options?: unknown): VideoJsPluginBase
   prototype: VideoJsPluginBase
 }
 
+/** Minimal video.js factory used by the plugin. */
 export interface VideoJsLike {
   getPlugin(name: string): VideoJsPluginConstructor
   registerPlugin(name: string, plugin: unknown): void
 }
 
+/** Options for player.bitsub(). */
 export type BitSubVideoJsOptions = AttachBitSubOptions
 
+/** Video.js player.bitsub() API. */
 export interface BitSubVideoJsApi {
   /** Active controller, if any. */
   controller(): BitSubController | null
@@ -196,5 +203,7 @@ export type VideoJsBitSubPlayer = VideoJsPlayerLike & {
   bitsub(options?: BitSubVideoJsOptions): BitSubVideoJsApi
 }
 
+/** Shared attach options and controller types. */
 export type { AttachBitSubOptions, BitSubController, BitSubSourceOptions, BitSubRenderer } from './shared'
+/** Attach or construct a libbitsub controller. */
 export { attachBitSub, createBitSubRenderer } from './shared'

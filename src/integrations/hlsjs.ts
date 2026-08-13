@@ -4,6 +4,8 @@
  * hls.js handles HLS media and WebVTT/IMSC text tracks; use this helper for
  * external PGS/VobSub/MKS bitmap overlays on the same media element.
  *
+ * @module
+ *
  * @example
  * ```ts
  * import Hls from 'hls.js'
@@ -33,8 +35,10 @@ export interface HlsLike {
   }
 }
 
+/** Options for attachBitSubToHls(). */
 export type BitSubHlsOptions = AttachBitSubOptions
 
+/** Handle returned by attachBitSubToHls(). */
 export interface BitSubHlsHandle extends BitSubController {
   /** Underlying hls.js instance. */
   readonly hls: HlsLike
@@ -150,5 +154,7 @@ export function attachBitSubToHls(hls: HlsLike, options: BitSubHlsOptions = {}):
   }
 }
 
+/** Shared attach options and controller types. */
 export type { AttachBitSubOptions, BitSubController, BitSubSourceOptions, BitSubRenderer } from './shared'
+/** Attach or construct a libbitsub controller. */
 export { attachBitSub, createBitSubRenderer } from './shared'
