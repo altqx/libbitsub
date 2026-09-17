@@ -66,6 +66,11 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
 
+      - name: Install kache
+        run: |
+          curl -fsSL https://github.com/kunobi-ninja/kache/releases/download/v0.22.0/kache-x86_64-unknown-linux-musl.tar.gz \
+            | sudo tar -xz -C /usr/local/bin kache
+
       - name: Rust Cache
         uses: swatinem/rust-cache@v2
         with:
@@ -136,6 +141,11 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Install kache
+        run: |
+          curl -fsSL https://github.com/kunobi-ninja/kache/releases/download/v0.22.0/kache-x86_64-unknown-linux-musl.tar.gz \
+            | sudo tar -xz -C /usr/local/bin kache
 
       - name: Download build artifact
         uses: actions/download-artifact@v4
