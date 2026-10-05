@@ -547,7 +547,10 @@ self.onmessage = async function(event) {
             }
             case 'getVobSubTimestamps': {
                 const parser = vobSubParsers.get(request.sessionId);
-                postResponse({ type: 'vobSubTimestamps', timestamps: parser ? parser.getTimestamps() : new Float64Array(0) }, [], _id);
+                const timestamps = parser ? parser.getTimestamps() : new Float64Array(0);
+                const endTimestamps = new Float64Array(timestamps.length);
+                for (let i = 0; i < timestamps.length; i++) endTimestamps[i] = parser.getCueEndTime(i);
+                postResponse({ type: 'vobSubTimestamps', timestamps, endTimestamps }, [], _id);
                 break;
             }
             case 'clearPgsCache': {
