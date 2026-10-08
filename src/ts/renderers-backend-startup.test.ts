@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeAll, describe, expect, spyOn, test } from 'bun:test'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, spyOn, test } from 'bun:test'
 import { PgsRenderer } from './renderers'
 import { WebGPURenderer } from './webgpu-renderer'
 import { WebGL2Renderer } from './webgl2-renderer'
@@ -119,6 +119,11 @@ afterEach(() => {
   subtitleGate = null
 })
 const mocks: Array<{ mockRestore(): void }> = []
+beforeEach(() => {
+  // Earlier suites can cache an unavailable WebGL2 context. This fixture
+  // supplies GPU backends explicitly, independent of that browser probe.
+  mocks.push(spyOn(webgl2, 'isWebGL2Supported').mockReturnValue(true))
+})
 function mockRestore() {
   mocks.splice(0).forEach((m) => m.mockRestore())
 }
