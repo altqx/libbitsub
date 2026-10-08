@@ -293,9 +293,10 @@ selection does not transfer a caller-owned canvas to a worker; request
 
 Frame-aware synchronization is enabled by default. On browsers with
 `requestVideoFrameCallback()`, cue lookup uses the `mediaTime` of the frame sent
-to the compositor instead of polling `video.currentTime`. Older browsers fall
-back to `requestAnimationFrame()` automatically; set `frameAwareSync: false` to
-force that compatibility path. The active path is available as
+to the compositor instead of polling `video.currentTime`. The scheduler falls
+back to `requestAnimationFrame()` automatically when frame callbacks are unavailable
+or stop arriving during advancing playback; set `frameAwareSync: false` to force
+that compatibility path. The active path is available as
 `renderer.getSynchronizationMode()` and as `getStats().syncMode`.
 
 ### VobSub renderer
