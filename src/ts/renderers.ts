@@ -153,6 +153,8 @@ abstract class BaseVideoSubtitleRenderer {
   protected tempCanvas: HTMLCanvasElement | null = null
   protected tempCtx: CanvasRenderingContext2D | null = null
   protected lastRenderedData: SubtitleData | null = null
+  /** Clear the canvas instead of holding the previous cue while the next bitmap decodes. */
+  protected clearStaleWhilePending = false
   protected lastCueIndex: number | null = null
   protected currentCueMetadata: SubtitleCueMetadata | null = null
   protected parserMetadata: SubtitleParserMetadata | null = null
@@ -1023,6 +1025,14 @@ abstract class BaseVideoSubtitleRenderer {
     this.renderSynchronizedFrame({ mediaTime: this.video.currentTime, presentedFrames: null })
   }
 
+  /**
+   * Render the cue for a media time synchronously, whether or not the video is paused.
+   * Hosts call this from their own presented-frame callback so a cached cue paints on that frame.
+   */
+  renderAtMediaTime(mediaTime: number): void {
+    this.renderSynchronizedFrame({ mediaTime, presentedFrames: null })
+  }
+
   private renderSynchronizedFrame(tick: VideoFrameTick): void {
     if (this.disposed || !this.isLoaded) return
 
@@ -1107,7 +1117,7 @@ abstract class BaseVideoSubtitleRenderer {
         if (!this.isCurrentPresentation(token)) return
         if (this.findCurrentIndex(this.getCurrentSynchronizationTime()) !== index) return
         this.lastRenderedIndex = -1
-        this.renderPausedFrame()
+        this.renderAtMediaTime(this.getCurrentSynchronizationTime() - this.timeOffset)
       },
       () => {}
     )
@@ -1174,12 +1184,17 @@ abstract class BaseVideoSubtitleRenderer {
     // If data is undefined, it means async loading is in progress
     // Keep showing the last frame only while waiting for async data
     // Note: null means "loaded but empty" (clear screen), undefined means "still loading"
+    let stalePending = false
     if (data === undefined && this.lastRenderedData !== null && index >= 0) {
       // Check if this index has a pending render (truly async loading)
       // If not pending, it means the render returned no data immediately
       if (this.isPendingRender(index)) {
-        // Don't clear - keep showing the last frame while loading
-        return { status: 'pending', data: null, warning: null }
+        if (!this.clearStaleWhilePending) {
+          // Don't clear - keep showing the last frame while loading
+          return { status: 'pending', data: null, warning: null }
+        }
+        // The previous cue has ended: clear it below instead of holding it
+        stalePending = true
       }
     }
 
@@ -1197,6 +1212,10 @@ abstract class BaseVideoSubtitleRenderer {
 
     if (index < 0) {
       return { status: 'cleared', data: null, warning: null }
+    }
+
+    if (stalePending) {
+      return { status: 'pending', data: null, warning: null }
     }
 
     if (warning) {
@@ -2153,10 +2172,8 @@ export class VobSubRenderer extends BaseVideoSubtitleRenderer {
   private onLoaded?: () => void
   private onError?: (error: Error) => void
 
-  // Async index lookup state
-  private cachedIndex: number = -1
-  private cachedIndexTime: number = -1
-  private pendingIndexLookup: Promise<number> | null = null
+  // Cue end times (ms) for the main-thread index lookup in worker mode; starts live in state.timestamps
+  private cueEnds: Float64Array | null = null
 
   constructor(options: VideoVobSubOptions) {
     super(options, 'vobsub')
@@ -2168,6 +2185,7 @@ export class VobSubRenderer extends BaseVideoSubtitleRenderer {
     this.onLoading = options.onLoading
     this.onLoaded = options.onLoaded
     this.onError = options.onError
+    this.clearStaleWhilePending = true
     applyCacheLimit(this.state, this.cacheLimit)
     this.startInit()
   }
@@ -2286,6 +2304,7 @@ export class VobSubRenderer extends BaseVideoSubtitleRenderer {
           this.state.workerReady = true
           this.state.metadata = loadResponse.metadata
           this.state.timestamps = loadResponse.timestamps
+          await this.loadCueTable()
           this.isLoaded = true
           this.setParserMetadata(loadResponse.metadata)
           this.emitIndexed('vobsub', loadResponse.metadata, false)
@@ -2440,6 +2459,7 @@ export class VobSubRenderer extends BaseVideoSubtitleRenderer {
       if (attachResponse.type === 'vobSubProgress') {
         this.applyVobSubIndexState(attachResponse.metadata, attachResponse.timestamps, false, true, true)
         this.state.workerReady = true
+        await this.loadCueTable()
         this.isLoaded = true
         this.emitWorkerState(true, true, this.state.sessionId)
         return
@@ -2516,54 +2536,48 @@ export class VobSubRenderer extends BaseVideoSubtitleRenderer {
 
   protected findCurrentIndex(time: number): number {
     if (this.state.useWorker && this.state.workerReady) {
-      const timeMs = time * 1000
-
-      // Only use cache if time is very close (within 1 frame)
-      const timeDelta = timeMs - this.cachedIndexTime
-      const cacheValid = this.cachedIndexTime >= 0 && Math.abs(timeDelta) < 17
-
-      if (cacheValid) {
-        return this.cachedIndex
-      }
-
-      // Start async lookup if not already pending
-      if (!this.pendingIndexLookup) {
-        const presentationToken = this.getPresentationToken()
-        const lookup = sendToWorker({
-          type: 'findVobSubIndex',
-          sessionId: this.state.sessionId!,
-          timeMs
-        }).then((response) => {
-          if (!this.isCurrentPresentation(presentationToken)) return this.cachedIndex
-          if (response.type === 'vobSubIndex') {
-            const newIndex = response.index
-            const oldIndex = this.cachedIndex
-            this.cachedIndex = newIndex
-            this.cachedIndexTime = timeMs
-
-            // Force re-render if index changed (including to -1 for clear)
-            if (oldIndex !== newIndex) {
-              this.lastRenderedIndex = -2 // Use -2 to force update even when new index is -1
-            }
-          }
-          return this.cachedIndex
-        })
-        this.pendingIndexLookup = lookup
-        void lookup.then(
-          () => {
-            if (this.pendingIndexLookup !== lookup) return
-            this.pendingIndexLookup = null
-            this.renderPausedFrame()
-          },
-          () => {
-            if (this.pendingIndexLookup === lookup) this.pendingIndexLookup = null
-          }
-        )
-      }
-
-      return this.cachedIndex
+      return this.findIndexInCueTable(time)
     }
     return this.vobsubParser?.findIndexAtTimestamp(time) ?? -1
+  }
+
+  /** Synchronous lookup against the worker's cue table; mirrors the core parser's find_index_at_timestamp. */
+  private findIndexInCueTable(time: number): number {
+    const starts = this.state.timestamps
+    const ends = this.cueEnds
+    if (!ends || starts.length === 0) return -1
+
+    const timeMs = Math.max(0, Math.floor(time * 1000))
+    let low = 0
+    let high = starts.length
+    while (low < high) {
+      const mid = low + ((high - low) >> 1)
+      if (starts[mid] <= timeMs) low = mid + 1
+      else high = mid
+    }
+    const index = low > 0 ? low - 1 : 0
+    if (timeMs < starts[index] || timeMs >= ends[index]) return -1
+    return index
+  }
+
+  /** Fetch cue end times once, after the worker holds the SUB data. Falls back to next-start ends. */
+  private async loadCueTable(): Promise<void> {
+    const starts = this.state.timestamps
+    let ends: Float64Array | null = null
+    try {
+      const response = await sendToWorker({ type: 'getVobSubTimestamps', sessionId: this.state.sessionId! })
+      const received = (response as { endTimestamps?: Float64Array }).endTimestamps
+      if (received && received.length === starts.length) ends = received
+    } catch {
+      /* fall back below */
+    }
+    if (!ends) {
+      ends = new Float64Array(starts.length)
+      for (let i = 0; i < starts.length; i++) ends[i] = starts[i + 1] ?? starts[i] + 5000
+    }
+    this.cueEnds = ends
+    this.lastRenderedIndex = -1
+    this.renderPausedFrame()
   }
 
   protected renderAtIndex(index: number): SubtitleData | undefined {
@@ -2646,10 +2660,6 @@ export class VobSubRenderer extends BaseVideoSubtitleRenderer {
     this.state.frameCache.clear()
     this.state.renderIssues.clear()
     this.state.pendingRenders.clear()
-    // Clear cached index lookup on seek
-    this.cachedIndex = -1
-    this.cachedIndexTime = -1
-    this.pendingIndexLookup = null
     if (this.state.useWorker && this.state.workerReady) {
       sendToWorker({ type: 'clearVobSubCache', sessionId: this.state.sessionId! }).catch(() => {})
     }
@@ -2668,9 +2678,6 @@ export class VobSubRenderer extends BaseVideoSubtitleRenderer {
     this.state.renderIssues.clear()
     this.state.pendingRenders.clear()
     this.clearOffscreenFrameMetadata()
-    this.cachedIndex = -1
-    this.cachedIndexTime = -1
-    this.pendingIndexLookup = null
     this.lastRenderedIndex = -1
     if (this.state.useWorker && this.state.workerReady) {
       sendToWorker({ type: 'clearVobSubCache', sessionId: this.state.sessionId! }).catch(() => {})
