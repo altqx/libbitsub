@@ -466,10 +466,14 @@ abstract class BaseVideoSubtitleRenderer {
   /** Initialize the renderer. */
   protected async init(): Promise<void> {
     await initWasm()
+    if (this.disposed) return
     this.createCanvas()
     await new Promise((resolve) => setTimeout(resolve, 0))
+    if (this.disposed) return
     await this.loadSubtitles()
+    if (this.disposed) return
     await this.ensureWorkerOffscreenAttached()
+    if (this.disposed) return
     this.startRenderLoop()
   }
 
@@ -649,8 +653,6 @@ abstract class BaseVideoSubtitleRenderer {
 
       this.useWorkerOffscreen = true
       this.emitRendererBackend('worker-offscreen')
-      this.lastRenderedIndex = -1
-      this.lastRenderedTime = -1
 
       await sendToWorker({
         type: 'resizeOffscreenCanvas',
@@ -674,6 +676,7 @@ abstract class BaseVideoSubtitleRenderer {
         )
       )
     }
+    if (this.useWorkerOffscreen) this.reconcileBackendPresentation()
   }
 
   private recreateCanvasForMainThreadFallback(): void {
@@ -775,69 +778,108 @@ abstract class BaseVideoSubtitleRenderer {
 
   /** Initialize WebGPU renderer. */
   private async initWebGPU(allowBackendFallback = true): Promise<void> {
+    if (this.disposed) return
+    let renderer: WebGPURenderer | null = null
     try {
-      this.webgpuRenderer = new WebGPURenderer()
-      await this.webgpuRenderer.init()
+      renderer = new WebGPURenderer()
+      this.webgpuRenderer = renderer
+      await renderer.init()
 
-      if (!this.canvas) return
+      if (this.disposed || !this.canvas) {
+        renderer.destroy()
+        return
+      }
 
       const bounds = this.getVideoContentBounds()
       const pixelRatio = this.getDevicePixelRatio()
       const width = Math.max(1, bounds.width * pixelRatio)
       const height = Math.max(1, bounds.height * pixelRatio)
 
-      await this.webgpuRenderer.setCanvas(this.canvas, width, height)
-      this.useWebGPU = true
-      this.emitRendererBackend('webgpu')
+      await renderer.setCanvas(this.canvas, width, height)
+      if (this.disposed) {
+        renderer.destroy()
+        return
+      }
     } catch (error) {
-      this.webgpuRenderer?.destroy()
+      renderer?.destroy()
+      if (this.disposed) return
       this.webgpuRenderer = null
       this.useWebGPU = false
       this.onWebGPUFallback?.()
+      if (this.disposed) return
       if (allowBackendFallback && isWebGL2Supported()) {
         void this.initWebGL2()
       } else {
         this.preferWorkerOffscreenOrCanvas2D()
       }
+      return
     }
+    this.useWebGPU = true
+    this.emitRendererBackend('webgpu')
+    this.reconcileBackendPresentation()
   }
 
   /** Initialize WebGL2 renderer. */
   private async initWebGL2(allowBackendFallback = true): Promise<void> {
+    if (this.disposed) return
+    let renderer: WebGL2Renderer | null = null
     try {
-      this.webgl2Renderer = new WebGL2Renderer()
-      await this.webgl2Renderer.init()
+      renderer = new WebGL2Renderer()
+      this.webgl2Renderer = renderer
+      await renderer.init()
 
-      if (!this.canvas) return
+      if (this.disposed || !this.canvas) {
+        renderer.destroy()
+        return
+      }
 
       const bounds = this.getVideoContentBounds()
       const pixelRatio = this.getDevicePixelRatio()
       const width = Math.max(1, bounds.width * pixelRatio)
       const height = Math.max(1, bounds.height * pixelRatio)
 
-      await this.webgl2Renderer.setCanvas(this.canvas, width, height)
-      this.useWebGL2 = true
-      this.emitRendererBackend('webgl2')
+      await renderer.setCanvas(this.canvas, width, height)
+      if (this.disposed) {
+        renderer.destroy()
+        return
+      }
     } catch (error) {
-      this.webgl2Renderer?.destroy()
+      renderer?.destroy()
+      if (this.disposed) return
       this.webgl2Renderer = null
       this.useWebGL2 = false
       this.onWebGL2Fallback?.()
+      if (this.disposed) return
       if (allowBackendFallback) {
         this.preferWorkerOffscreenOrCanvas2D()
       } else {
         this.initCanvas2D()
       }
+      return
     }
+    this.useWebGL2 = true
+    this.emitRendererBackend('webgl2')
+    this.reconcileBackendPresentation()
   }
 
   /** Initialize Canvas2D renderer. */
   private initCanvas2D(): void {
-    if (!this.canvas) return
+    if (this.disposed || !this.canvas) return
     this.ctx = this.canvas.getContext('2d')
     this.useWebGPU = false
     this.useWebGL2 = false
     this.emitRendererBackend('canvas2d')
+    this.reconcileBackendPresentation()
+  }
+
+  /** A cue decoded before backend startup has not yet reached the canvas. */
+  private reconcileBackendPresentation(): void {
+    if (this.disposed) return
+    this.invalidatePresentation()
+    this.lastRenderedIndex = -2
+    this.lastRenderedTime = -1
+    // Loading creates the temporary drawing canvas before starting presentation.
+    if (this.frameScheduler) this.renderPausedFrame()
   }
 
   /** Called when video seeks. */
