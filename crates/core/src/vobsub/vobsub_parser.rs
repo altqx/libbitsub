@@ -3,11 +3,18 @@
 use memchr::memchr;
 use std::collections::HashMap;
 
+use super::sub_parser::scan_subtitle_packet;
 use super::{
-    DebandConfig, ExtractedVobSub, IdxParseResult, SubtitlePacket, VobSubPalette, VobSubTimestamp,
-    apply_deband, decode_vobsub_rle, extract_vobsub_from_mks, parse_idx, parse_subtitle_packet,
+    DebandConfig, ExtractedVobSub, IdxParseResult, SubtitlePacket, SubtitlePacketData,
+    VobSubPalette, VobSubTimestamp, apply_deband, decode_vobsub_rle, extract_vobsub_from_mks,
+    parse_idx, parse_subtitle_packet,
 };
 use crate::utils::binary_search_timestamp;
+
+/// Byte budget for parsed packets held in `packet_cache`.
+const MAX_PACKET_CACHE_BYTES: usize = 32 * 1024 * 1024;
+/// Debanding allocates a second full-size buffer; skip it above 1080p area.
+const MAX_DEBAND_PIXELS: usize = 1920 * 1080;
 
 /// VobSub subtitle parser and renderer.
 pub struct VobSubParser {
@@ -17,8 +24,10 @@ pub struct VobSubParser {
     sub_data: Option<Vec<u8>>,
     /// Timestamps in milliseconds for quick lookup
     timestamps_ms: Vec<u32>,
-    /// Cache for decoded subtitle packets
-    packet_cache: HashMap<usize, Option<SubtitlePacket>>,
+    /// Cache for decoded subtitle packets, keyed by SUB file position
+    packet_cache: HashMap<u64, Option<SubtitlePacket>>,
+    /// Approximate bytes held by `packet_cache`
+    packet_cache_bytes: usize,
     /// Debanding configuration
     deband_config: DebandConfig,
     /// Whether the parser was loaded from IDX metadata.
@@ -35,6 +44,7 @@ impl VobSubParser {
             sub_data: None,
             timestamps_ms: Vec::new(),
             packet_cache: HashMap::new(),
+            packet_cache_bytes: 0,
             deband_config: DebandConfig::default(),
             loaded_from_idx: false,
             last_render_issue: None,
@@ -57,7 +67,7 @@ impl VobSubParser {
     }
 
     pub fn attach_sub_data(&mut self, sub_data: Vec<u8>) {
-        self.packet_cache.clear();
+        self.clear_cache();
         self.last_render_issue = None;
         self.sub_data = Some(sub_data);
     }
@@ -113,14 +123,21 @@ impl VobSubParser {
                     && sub_data[candidate + 1] == 0x00
                     && sub_data[candidate + 2] == 0x01
                     && sub_data[candidate + 3] == 0xBA
-                    && let Some((packet, _)) = parse_subtitle_packet(&sub_data, candidate, &palette)
-                    && packet.width > 0
-                    && packet.height > 0
                 {
-                    timestamps.push(VobSubTimestamp {
-                        timestamp_ms: packet.timestamp_ms,
-                        file_position: candidate as u64,
-                    });
+                    let (packet, scan_end) = scan_subtitle_packet(&sub_data, candidate);
+                    if let Some(packet) = packet
+                        && packet.width > 0
+                        && packet.height > 0
+                    {
+                        timestamps.push(VobSubTimestamp {
+                            timestamp_ms: packet.timestamp_ms,
+                            file_position: candidate as u64,
+                        });
+                    }
+                    // Resume where the packet scan stopped rather than rescanning
+                    // the same bytes from every following pack header.
+                    offset = scan_end.max(candidate + 1);
+                    continue;
                 }
                 offset = candidate + 1;
             } else {
@@ -146,7 +163,7 @@ impl VobSubParser {
         self.idx_data = None;
         self.sub_data = None;
         self.timestamps_ms.clear();
-        self.packet_cache.clear();
+        self.clear_cache();
         self.deband_config = DebandConfig::default();
         self.loaded_from_idx = false;
         self.last_render_issue = None;
@@ -312,37 +329,37 @@ impl VobSubParser {
 
     fn ensure_packet_cached(&mut self, index: usize) -> Option<()> {
         let idx_data = self.idx_data.as_ref()?;
-        if index >= idx_data.timestamps.len() {
-            return None;
-        }
+        let file_position = idx_data.timestamps.get(index)?.file_position;
 
-        if self.packet_cache.contains_key(&index) {
+        if self.packet_cache.contains_key(&file_position) {
             return Some(());
         }
 
-        let Some(sub_data) = self.sub_data.as_ref() else {
-            return None;
-        };
+        let sub_data = self.sub_data.as_ref()?;
+        let packet = parse_subtitle_packet(sub_data, file_position as usize, &idx_data.palette)
+            .map(|(p, _)| p);
 
-        let packet = {
-            let idx_data = self.idx_data.as_ref()?;
-            let timestamp = idx_data.timestamps.get(index)?;
-
-            parse_subtitle_packet(
-                sub_data,
-                timestamp.file_position as usize,
-                &idx_data.palette,
-            )
-            .map(|(p, _)| p)
-        };
-
-        self.packet_cache.insert(index, packet);
+        let packet_bytes = size_of::<Option<SubtitlePacket>>()
+            + match &packet {
+                Some(SubtitlePacket {
+                    packet_data: SubtitlePacketData::Owned(data),
+                    ..
+                }) => data.len(),
+                _ => 0,
+            };
+        if self.packet_cache_bytes + packet_bytes > MAX_PACKET_CACHE_BYTES {
+            self.clear_cache();
+        }
+        self.packet_cache_bytes += packet_bytes;
+        self.packet_cache.insert(file_position, packet);
         Some(())
     }
 
     fn cached_packet(&self, index: usize) -> Option<&SubtitlePacket> {
+        let idx_data = self.idx_data.as_ref()?;
+        let file_position = idx_data.timestamps.get(index)?.file_position;
         self.packet_cache
-            .get(&index)
+            .get(&file_position)
             .and_then(|packet| packet.as_ref())
     }
 
@@ -387,7 +404,8 @@ impl VobSubParser {
         let mut rgba = decode_vobsub_rle(packet, sub_data, palette);
 
         // Apply debanding if enabled
-        if self.deband_config.enabled {
+        let pixel_count = packet.width as usize * packet.height as usize;
+        if self.deband_config.enabled && pixel_count <= MAX_DEBAND_PIXELS {
             rgba = apply_deband(
                 &rgba,
                 packet.width as usize,
@@ -410,6 +428,7 @@ impl VobSubParser {
     /// Clear the internal cache.
     pub fn clear_cache(&mut self) {
         self.packet_cache.clear();
+        self.packet_cache_bytes = 0;
     }
 
     /// Enable or disable debanding.
@@ -459,6 +478,72 @@ mod tests {
             DebandConfig::default().threshold
         );
         assert_eq!(parser.deband_config.range, DebandConfig::default().range);
+    }
+
+    #[test]
+    fn sub_only_indexing_matches_idx_for_fixture() {
+        let idx = parse_idx(include_str!("../testfiles/vobsub.idx"));
+        let mut parser = VobSubParser::new();
+        parser.load_from_sub_only(include_bytes!("../testfiles/vobsub.sub").to_vec());
+
+        let positions: Vec<f64> = (0..parser.count())
+            .map(|index| parser.get_cue_file_position(index))
+            .collect();
+        let expected: Vec<f64> = idx
+            .timestamps
+            .iter()
+            .map(|timestamp| timestamp.file_position as f64)
+            .collect();
+        assert_eq!(positions, expected);
+    }
+
+    #[test]
+    fn sub_only_indexing_scans_dense_pack_headers_once() {
+        // MPEG-2 pack headers with no subtitle stream. Rescanning a 256 KiB
+        // window from every header would take billions of steps.
+        let pack = [
+            0x00, 0x00, 0x01, 0xBA, 0x44, 0x00, 0x04, 0x00, 0x04, 0x01, 0x01, 0x89, 0xC3, 0xF8,
+        ];
+        let sub_data = pack.repeat((4 * 1024 * 1024) / pack.len());
+
+        let started = std::time::Instant::now();
+        let mut parser = VobSubParser::new();
+        parser.load_from_sub_only(sub_data);
+
+        assert_eq!(parser.count(), 0);
+        assert!(started.elapsed() < std::time::Duration::from_secs(5));
+    }
+
+    #[test]
+    fn repeated_idx_positions_share_one_cached_packet() {
+        let idx_text = include_str!("../testfiles/vobsub.idx");
+        let first = idx_text
+            .lines()
+            .find(|line| line.starts_with("timestamp:"))
+            .expect("fixture timestamp");
+        let filepos = first.split("filepos:").nth(1).expect("filepos").trim();
+        let mut idx = idx_text
+            .lines()
+            .filter(|line| !line.starts_with("timestamp:"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        for second in 0..1000 {
+            idx.push_str(&format!(
+                "\ntimestamp: 00:{:02}:{:02}:000, filepos: {filepos}",
+                second / 60,
+                second % 60
+            ));
+        }
+
+        let mut parser = VobSubParser::new();
+        parser.load_from_data(&idx, include_bytes!("../testfiles/vobsub.sub").to_vec());
+        assert_eq!(parser.count(), 1000);
+        for index in 0..parser.count() {
+            parser.get_cue_end_time(index);
+        }
+
+        assert_eq!(parser.packet_cache.len(), 1);
+        assert!(parser.render_at_index(999).is_some());
     }
 
     #[test]

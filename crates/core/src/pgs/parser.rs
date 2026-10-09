@@ -12,6 +12,10 @@ use crate::utils::binary_search_timestamp;
 
 const MAX_PENDING_BYTES: usize = 32 * 1024 * 1024;
 const MAX_FRAME_COMPOSITIONS: usize = 256;
+/// Byte budget for decoded indexed bitmaps retained across renders.
+const MAX_INDEXED_CACHE_BYTES: usize = 64 * 1024 * 1024;
+/// Maximum ODS fragments accepted for one object.
+const MAX_OBJECT_FRAGMENTS: usize = 4096;
 
 /// PGS subtitle parser and renderer.
 pub struct PgsParser {
@@ -21,6 +25,8 @@ pub struct PgsParser {
     timestamps_ms: Vec<u32>,
     /// Cache for decoded indexed pixels (before palette application)
     indexed_cache: HashMap<(u16, u8), DecodedBitmap>,
+    /// Total bytes held by `indexed_cache`
+    indexed_cache_bytes: usize,
     /// Last rendered boundary index (for cache invalidation)
     last_boundary_index: Option<usize>,
     /// Incrementally maintained rendering context for the active epoch.
@@ -46,6 +52,7 @@ impl PgsParser {
             display_sets: Vec::new(),
             timestamps_ms: Vec::new(),
             indexed_cache: HashMap::new(),
+            indexed_cache_bytes: 0,
             last_boundary_index: None,
             cached_context: None,
             cached_context_index: None,
@@ -57,7 +64,7 @@ impl PgsParser {
     pub fn reset(&mut self) {
         self.display_sets.clear();
         self.timestamps_ms.clear();
-        self.indexed_cache.clear();
+        self.clear_indexed_cache();
         self.last_boundary_index = None;
         self.cached_context = None;
         self.cached_context_index = None;
@@ -193,7 +200,17 @@ impl PgsParser {
 
     /// Get all timestamps in milliseconds.
     pub fn get_timestamps(&self) -> Vec<f64> {
-        self.timestamps_ms.iter().map(|&ts| ts as f64).collect()
+        self.get_timestamps_from(0)
+    }
+
+    /// Get timestamps in milliseconds starting at cue `start`.
+    pub fn get_timestamps_from(&self, start: usize) -> Vec<f64> {
+        self.timestamps_ms
+            .get(start..)
+            .unwrap_or_default()
+            .iter()
+            .map(|&ts| ts as f64)
+            .collect()
     }
 
     /// Find the display set index for a given timestamp in milliseconds.
@@ -321,31 +338,7 @@ impl PgsParser {
             // Window lookup is optional - don't fail if not found
             let _window = context.windows.get(&comp_obj.window_id);
 
-            // Decode or get cached indexed pixels
-            let cache_key = (obj.id, obj.version);
-            let decoded = if let Some(cached) = self.indexed_cache.get(&cache_key) {
-                cached
-            } else {
-                let pixel_count = match Self::bitmap_pixel_count(obj.width, obj.height) {
-                    Some(pixel_count) => pixel_count,
-                    None => continue,
-                };
-
-                let mut indexed = vec![0u8; pixel_count];
-                decode_rle_to_indexed(&obj.data, &mut indexed);
-
-                self.indexed_cache.insert(
-                    cache_key,
-                    DecodedBitmap {
-                        indexed,
-                        width: obj.width,
-                        height: obj.height,
-                    },
-                );
-                self.indexed_cache.get(&cache_key).unwrap()
-            };
-
-            let pixel_count = match Self::bitmap_pixel_count(decoded.width, decoded.height) {
+            let pixel_count = match Self::bitmap_pixel_count(obj.width, obj.height) {
                 Some(pixel_count) => pixel_count,
                 None => continue,
             };
@@ -356,6 +349,28 @@ impl PgsParser {
                     break;
                 }
             };
+
+            // Decode or get cached indexed pixels
+            let cache_key = (obj.id, obj.version);
+            if !self.indexed_cache.contains_key(&cache_key) {
+                let mut indexed = vec![0u8; pixel_count];
+                decode_rle_to_indexed(&obj.data, &mut indexed);
+
+                if self.indexed_cache_bytes + pixel_count > MAX_INDEXED_CACHE_BYTES {
+                    self.indexed_cache.clear();
+                    self.indexed_cache_bytes = 0;
+                }
+                self.indexed_cache_bytes += pixel_count;
+                self.indexed_cache.insert(
+                    cache_key,
+                    DecodedBitmap {
+                        indexed,
+                        width: obj.width,
+                        height: obj.height,
+                    },
+                );
+            }
+            let decoded = &self.indexed_cache[&cache_key];
 
             let rgba_len = match pixel_count.checked_mul(4) {
                 Some(rgba_len) => rgba_len,
@@ -392,11 +407,16 @@ impl PgsParser {
 
     /// Clear the internal cache.
     pub fn clear_cache(&mut self) {
-        self.indexed_cache.clear();
+        self.clear_indexed_cache();
         self.last_boundary_index = None;
         self.cached_context = None;
         self.cached_context_index = None;
         self.last_render_issue = None;
+    }
+
+    fn clear_indexed_cache(&mut self) {
+        self.indexed_cache.clear();
+        self.indexed_cache_bytes = 0;
     }
 
     fn ensure_context_for_index(&mut self, boundary_index: usize, target_index: usize) {
@@ -407,7 +427,7 @@ impl PgsParser {
                 .is_none_or(|cached_index| target_index < cached_index);
 
         if needs_rebuild {
-            self.indexed_cache.clear();
+            self.clear_indexed_cache();
             self.last_boundary_index = Some(boundary_index);
 
             let mut context = RenderContext::new();
@@ -483,7 +503,7 @@ impl Default for PgsParser {
 /// Rendering context built from display sets.
 struct RenderContext {
     /// Object parts by ID (before assembly)
-    object_parts: HashMap<u16, Vec<ObjectDefinitionSegment>>,
+    object_parts: HashMap<u16, PendingObject>,
     /// Assembled objects by ID
     objects: HashMap<u16, AssembledObject>,
     /// Palettes by ID
@@ -507,21 +527,32 @@ impl RenderContext {
 
         for obj in &ds.objects {
             if obj.is_first_in_sequence() {
-                self.object_parts.insert(obj.id, vec![obj.clone()]);
-                updated_object_ids.push(obj.id);
-            } else if let Some(parts) = self.object_parts.get_mut(&obj.id) {
-                parts.push(obj.clone());
-                if !updated_object_ids.contains(&obj.id) {
-                    updated_object_ids.push(obj.id);
+                self.object_parts.insert(obj.id, PendingObject::new(obj));
+            } else if let Some(pending) = self.object_parts.get_mut(&obj.id) {
+                if !pending.push(obj) {
+                    self.object_parts.remove(&obj.id);
                 }
+            } else {
+                continue;
+            }
+            if !updated_object_ids.contains(&obj.id) {
+                updated_object_ids.push(obj.id);
             }
         }
 
+        // Assemble only once the declared payload has fully arrived, so a long run
+        // of continuation fragments costs linear rather than quadratic work.
         for object_id in updated_object_ids {
-            if let Some(parts) = self.object_parts.get(&object_id) {
-                if let Some(assembled) = AssembledObject::from_segments(parts) {
+            let assembled = self
+                .object_parts
+                .get(&object_id)
+                .filter(|pending| pending.is_complete())
+                .and_then(|pending| AssembledObject::from_segments(&pending.parts));
+            match assembled {
+                Some(assembled) => {
                     self.objects.insert(object_id, assembled);
-                } else {
+                }
+                None => {
                     self.objects.remove(&object_id);
                 }
             }
@@ -536,6 +567,42 @@ impl RenderContext {
                 self.windows.insert(window.id, *window);
             }
         }
+    }
+}
+
+/// Object fragments received so far, with a running byte count.
+struct PendingObject {
+    parts: Vec<ObjectDefinitionSegment>,
+    received: usize,
+    payload_size: usize,
+}
+
+impl PendingObject {
+    fn new(first: &ObjectDefinitionSegment) -> Self {
+        Self {
+            parts: vec![first.clone()],
+            received: first.data.len(),
+            // data_length includes the 4 width/height bytes already parsed
+            payload_size: (first.data_length as usize).saturating_sub(4),
+        }
+    }
+
+    /// Append a continuation fragment. Returns false once the object can no
+    /// longer assemble (too many fragments or more data than declared).
+    fn push(&mut self, fragment: &ObjectDefinitionSegment) -> bool {
+        if self.parts.len() >= MAX_OBJECT_FRAGMENTS {
+            return false;
+        }
+        self.received = self.received.saturating_add(fragment.data.len());
+        if self.received > self.payload_size {
+            return false;
+        }
+        self.parts.push(fragment.clone());
+        true
+    }
+
+    fn is_complete(&self) -> bool {
+        self.received == self.payload_size
     }
 }
 
@@ -655,6 +722,7 @@ mod tests {
             }],
             timestamps_ms: vec![0],
             indexed_cache: HashMap::new(),
+            indexed_cache_bytes: 0,
             last_boundary_index: None,
             cached_context: None,
             cached_context_index: None,
@@ -665,6 +733,134 @@ mod tests {
         let frame = parser.render_at_index(0).expect("frame should exist");
 
         assert_eq!(frame.composition_count(), 0);
+    }
+
+    fn object_segment(
+        id: u16,
+        sequence_flag: u8,
+        data_length: u32,
+        data: Vec<u8>,
+    ) -> ObjectDefinitionSegment {
+        ObjectDefinitionSegment {
+            id,
+            version: 0,
+            sequence_flag,
+            data_length,
+            width: 4096,
+            height: 4096,
+            data,
+        }
+    }
+
+    fn display_set_showing(object_id: u16, objects: Vec<ObjectDefinitionSegment>) -> DisplaySet {
+        DisplaySet {
+            pts: 0,
+            dts: 0,
+            composition: Some(PresentationCompositionSegment {
+                width: 4096,
+                height: 4096,
+                frame_rate: 0,
+                composition_number: 0,
+                composition_state: 0,
+                palette_update_flag: 0,
+                palette_id: 0,
+                composition_objects: vec![CompositionObject {
+                    object_id,
+                    ..CompositionObject::default()
+                }],
+            }),
+            palettes: vec![PaletteDefinitionSegment::empty()],
+            objects,
+            windows: Vec::new(),
+        }
+    }
+
+    fn parser_with(display_sets: Vec<DisplaySet>) -> PgsParser {
+        let mut parser = PgsParser::new();
+        parser.timestamps_ms = vec![0; display_sets.len()];
+        parser.display_sets = display_sets;
+        parser
+    }
+
+    #[test]
+    fn object_assembles_only_after_declared_payload_arrives() {
+        let mut context = RenderContext::new();
+        let first = object_segment(1, 0x80, 4 + 3, vec![1]);
+        context.apply_display_set(&display_set_showing(1, vec![first]));
+        assert!(!context.objects.contains_key(&1));
+
+        // Empty continuations are tracked without reassembling.
+        let empty = object_segment(1, 0x00, 0, Vec::new());
+        context.apply_display_set(&display_set_showing(1, vec![empty.clone(), empty]));
+        assert!(!context.objects.contains_key(&1));
+        assert_eq!(context.object_parts[&1].received, 1);
+
+        let last = object_segment(1, 0x40, 0, vec![2, 3]);
+        context.apply_display_set(&display_set_showing(1, vec![last]));
+        assert_eq!(context.objects[&1].data, vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn object_fragments_are_capped() {
+        let mut context = RenderContext::new();
+        let first = object_segment(1, 0x80, 4 + 3, vec![1]);
+        let empty = object_segment(1, 0x00, 0, Vec::new());
+        let mut objects = vec![first];
+        objects.extend(std::iter::repeat_n(empty, MAX_OBJECT_FRAGMENTS));
+        context.apply_display_set(&display_set_showing(1, objects));
+
+        assert!(!context.object_parts.contains_key(&1));
+        assert!(!context.objects.contains_key(&1));
+    }
+
+    #[test]
+    fn object_with_excess_data_is_dropped() {
+        let mut context = RenderContext::new();
+        let first = object_segment(1, 0x80, 4 + 2, vec![1]);
+        let extra = object_segment(1, 0x40, 0, vec![2, 3]);
+        context.apply_display_set(&display_set_showing(1, vec![first, extra]));
+
+        assert!(!context.object_parts.contains_key(&1));
+        assert!(!context.objects.contains_key(&1));
+    }
+
+    #[test]
+    fn indexed_cache_stays_within_byte_budget() {
+        // Five 16 MiB objects in one epoch, rendered in order.
+        let display_sets = (1..=5u16)
+            .map(|id| display_set_showing(id, vec![object_segment(id, 0xC0, 4 + 1, vec![0])]))
+            .collect();
+        let mut parser = parser_with(display_sets);
+
+        for index in 0..5 {
+            let frame = parser.render_at_index(index).expect("frame");
+            assert_eq!(frame.composition_count(), 1);
+            assert!(parser.indexed_cache_bytes <= MAX_INDEXED_CACHE_BYTES);
+            let actual: usize = parser.indexed_cache.values().map(|b| b.indexed.len()).sum();
+            assert_eq!(actual, parser.indexed_cache_bytes);
+        }
+    }
+
+    #[test]
+    fn short_palette_segment_does_not_consume_following_segment() {
+        for palette_len in [0u16, 1] {
+            let mut bytes = Vec::new();
+            bytes.extend_from_slice(&0x5047u16.to_be_bytes());
+            bytes.extend_from_slice(&0u32.to_be_bytes());
+            bytes.extend_from_slice(&0u32.to_be_bytes());
+            bytes.push(0x14); // PDS
+            bytes.extend_from_slice(&palette_len.to_be_bytes());
+            bytes.extend(std::iter::repeat_n(0u8, palette_len as usize));
+            bytes.extend_from_slice(&0x5047u16.to_be_bytes());
+            bytes.extend_from_slice(&0u32.to_be_bytes());
+            bytes.extend_from_slice(&0u32.to_be_bytes());
+            bytes.push(0x80); // END
+            bytes.extend_from_slice(&0u16.to_be_bytes());
+
+            let (display_set, consumed) = DisplaySet::parse(&bytes, true).expect("display set");
+            assert!(display_set.palettes.is_empty());
+            assert_eq!(consumed, bytes.len());
+        }
     }
 
     fn build_end_only_display_set(pts: u32) -> Vec<u8> {

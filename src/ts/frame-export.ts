@@ -155,6 +155,9 @@ function normalizeRenderedFrame(
   return renderFrameData(frame, options)
 }
 
+/** Default output area limit, matching the per-frame limit of the parsers. */
+const DEFAULT_MAX_EXPORT_PIXELS = 16_777_216
+
 /** Compose a subtitle frame into RGBA pixels. */
 export function renderFrameData(
   frame: SubtitleData,
@@ -171,6 +174,16 @@ export function renderFrameData(
   const offsetY = crop === 'screen' ? 0 : (bounds?.y ?? 0)
   const targetWidth = Math.max(1, crop === 'screen' ? frame.width : (bounds?.width ?? 1))
   const targetHeight = Math.max(1, crop === 'screen' ? frame.height : (bounds?.height ?? 1))
+  // Sparse or far-apart compositions can describe a huge rectangle from few
+  // source pixels, so check the output size before allocating it.
+  const maxPixels = options.maxPixels ?? DEFAULT_MAX_EXPORT_PIXELS
+  if (
+    !Number.isSafeInteger(targetWidth) ||
+    !Number.isSafeInteger(targetHeight) ||
+    targetWidth * targetHeight > maxPixels
+  ) {
+    throw new RangeError(`Subtitle frame export of ${targetWidth}x${targetHeight} exceeds the ${maxPixels} pixel limit`)
+  }
   const output = new Uint8ClampedArray(targetWidth * targetHeight * 4)
 
   for (const composition of frame.compositionData) {

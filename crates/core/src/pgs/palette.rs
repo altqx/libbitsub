@@ -21,7 +21,7 @@ impl PaletteDefinitionSegment {
         let version = reader.read_u8()?;
 
         // Each palette entry is 5 bytes: ID, Y, Cr, Cb, A
-        let entry_count = (length - 2) / 5;
+        let entry_count = length.checked_sub(2)? / 5;
 
         // Pre-allocate with default transparent (256 possible entries)
         let mut rgba = vec![0u32; 256];

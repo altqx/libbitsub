@@ -9,7 +9,9 @@ mod rle;
 mod sub_parser;
 mod vobsub_parser;
 
-pub(crate) const MAX_VOBSUB_IMAGE_PIXELS: usize = 16_777_216;
+/// Largest accepted cue area (3840x2160). The 12-bit SPU coordinates allow
+/// 4096x4096, which no real subtitle needs.
+pub(crate) const MAX_VOBSUB_IMAGE_PIXELS: usize = 3840 * 2160;
 
 pub use deband::*;
 

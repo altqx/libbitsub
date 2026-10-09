@@ -76,12 +76,42 @@ impl TrackPayload {
             TrackPayload::Owned(payload) => payload,
         }
     }
+
+    fn len(&self) -> usize {
+        match self {
+            TrackPayload::BorrowedRange(range) => range.len(),
+            TrackPayload::Owned(payload) => payload.len(),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
 struct TrackFrame {
     timestamp_ms: u32,
     payload: TrackPayload,
+}
+
+/// Frames collected for the selected track, with their total payload size.
+#[derive(Debug, Default)]
+struct TrackFrames {
+    frames: Vec<TrackFrame>,
+    payload_bytes: usize,
+}
+
+impl TrackFrames {
+    fn push(&mut self, frame: TrackFrame) -> Result<(), String> {
+        if self.frames.len() >= MAX_TRACK_FRAMES {
+            return Err("Matroska subtitle track exceeds supported frame count".to_string());
+        }
+        // Every payload is copied into the extracted SUB, so the total payload
+        // size can be checked against the output cap before frames pile up.
+        self.payload_bytes = self.payload_bytes.saturating_add(frame.payload.len());
+        if self.payload_bytes > MAX_EXTRACTED_SUB_SIZE {
+            return Err("Extracted VobSub output exceeds supported size limit".to_string());
+        }
+        self.frames.push(frame);
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -109,7 +139,7 @@ pub fn extract_vobsub_from_mks(data: &[u8]) -> Result<ExtractedVobSub, String> {
         return Err("Selected S_VOBSUB track is missing CodecPrivate metadata".to_string());
     }
 
-    let mut frames = parse_segment_clusters(data, &segment, &selected_track, timescale_ns)?;
+    let mut frames = parse_segment_clusters(data, &segment, &selected_track, timescale_ns)?.frames;
     if frames.is_empty() {
         return Err("Selected S_VOBSUB track contained no subtitle blocks".to_string());
     }
@@ -297,8 +327,8 @@ fn parse_segment_clusters(
     segment: &SegmentBounds,
     selected_track: &ParsedTrack,
     timescale_ns: u64,
-) -> Result<Vec<TrackFrame>, String> {
-    let mut frames = Vec::new();
+) -> Result<TrackFrames, String> {
+    let mut frames = TrackFrames::default();
     let mut pos = segment.data_start;
 
     while pos < segment.data_end {
@@ -325,7 +355,7 @@ fn parse_cluster(
     end: usize,
     selected_track: &ParsedTrack,
     timescale_ns: u64,
-    frames: &mut Vec<TrackFrame>,
+    frames: &mut TrackFrames,
 ) -> Result<(), String> {
     let mut cluster_timestamp = 0i64;
     let mut pos = start;
@@ -346,7 +376,7 @@ fn parse_cluster(
                     cluster_timestamp,
                     timescale_ns,
                 )? {
-                    push_frame(frames, frame)?;
+                    frames.push(frame)?;
                 }
             }
             EBML_ID_BLOCK_GROUP => {
@@ -358,7 +388,7 @@ fn parse_cluster(
                     cluster_timestamp,
                     timescale_ns,
                 )? {
-                    push_frame(frames, frame)?;
+                    frames.push(frame)?;
                 }
             }
             _ => {}
@@ -571,14 +601,6 @@ fn decode_track_payload(
 
     validate_vobsub_payload(decoded.as_slice(source_data))?;
     Ok(decoded)
-}
-
-fn push_frame(frames: &mut Vec<TrackFrame>, frame: TrackFrame) -> Result<(), String> {
-    if frames.len() >= MAX_TRACK_FRAMES {
-        return Err("Matroska subtitle track exceeds supported frame count".to_string());
-    }
-    frames.push(frame);
-    Ok(())
 }
 
 fn normalize_idx_header(codec_private: &[u8]) -> String {
@@ -803,6 +825,22 @@ mod tests {
     use crate::vobsub::{VobSubParser, parse_idx, parse_subtitle_packet};
     use memchr::memchr;
     use miniz_oxide::deflate::compress_to_vec_zlib;
+
+    #[test]
+    fn track_frames_reject_payloads_beyond_output_cap() {
+        let mut frames = TrackFrames::default();
+        let frame = TrackFrame {
+            timestamp_ms: 0,
+            payload: TrackPayload::BorrowedRange(0..65_000),
+        };
+        let fits = MAX_EXTRACTED_SUB_SIZE / 65_000;
+        for _ in 0..fits {
+            frames.push(frame.clone()).expect("within budget");
+        }
+
+        assert!(frames.push(frame).is_err());
+        assert_eq!(frames.frames.len(), fits);
+    }
 
     #[test]
     fn extracts_embedded_vobsub_track_from_mks() {

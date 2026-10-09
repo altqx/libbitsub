@@ -116,6 +116,8 @@ export type SubtitleFrameCropMode = 'bounds' | 'screen'
 export interface SubtitleFrameRenderOptions {
   /** Compose only the visible cue bounds or the full subtitle presentation area. */
   crop?: SubtitleFrameCropMode
+  /** Maximum output area in pixels (default 16,777,216). Larger frames are rejected. */
+  maxPixels?: number
 }
 
 /** Flattened RGBA subtitle frame plus placement metadata. */
@@ -276,6 +278,8 @@ export interface VideoSubtitleOptions {
   }
   streamingLoad?: boolean
   rangeRequests?: boolean
+  /** Maximum subtitle download size in bytes (default 256 MiB). */
+  maxSubtitleBytes?: number
   /** Generic observability hook for renderer lifecycle, cache, worker and cue changes */
   onEvent?: (event: SubtitleRendererEvent) => void
   /** Enable richer diagnostics capture for render attempts and warnings */
@@ -518,6 +522,8 @@ export type WorkerResponse =
       partial: boolean
       metadata: WorkerSessionMetadata
       timestamps: Float64Array
+      /** When set, `timestamps` holds only entries from this index onward. */
+      timestampBase?: number
     }
   | {
       type: 'dvbLoaded'
@@ -535,6 +541,8 @@ export type WorkerResponse =
       metadata: WorkerSessionMetadata
       timestamps: Float64Array
       endTimestamps: Float64Array
+      /** When set, `timestamps` and `endTimestamps` hold only entries from this index onward. */
+      timestampBase?: number
     }
   | { type: 'vobSubLoaded'; count: number; metadata: WorkerSessionMetadata; timestamps: Float64Array }
   | {

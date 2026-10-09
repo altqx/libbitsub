@@ -65,6 +65,18 @@ pub fn parse_subtitle_packet(
     start_offset: usize,
     _palette: &VobSubPalette,
 ) -> Option<(SubtitlePacket, usize)> {
+    match scan_subtitle_packet(data, start_offset) {
+        (Some(packet), end) => Some((packet, end)),
+        (None, _) => None,
+    }
+}
+
+/// Parse a subtitle packet at `start_offset`. Also returns the offset the
+/// scan stopped at, so callers indexing a whole file can resume from there.
+pub(crate) fn scan_subtitle_packet(
+    data: &[u8],
+    start_offset: usize,
+) -> (Option<SubtitlePacket>, usize) {
     let mut offset = start_offset;
     let data_len = data.len();
 
@@ -206,7 +218,7 @@ pub fn parse_subtitle_packet(
 
     // Reassemble collected data
     if data_chunks.is_empty() {
-        return None;
+        return (None, offset);
     }
 
     if data_chunks.len() == 1 {
@@ -222,10 +234,10 @@ pub fn parse_subtitle_packet(
         };
         let subtitle_data = &data[start..trimmed_end];
         if subtitle_data.len() < 4 {
-            return None;
+            return (None, offset);
         }
 
-        parse_subtitle_data(packet_source, data, pts).map(|packet| (packet, offset))
+        (parse_subtitle_data(packet_source, data, pts), offset)
     } else {
         let final_size = if expected_size > 0 {
             expected_size.min(collected_size)
@@ -245,11 +257,13 @@ pub fn parse_subtitle_packet(
         }
 
         if merged.len() < 4 {
-            return None;
+            return (None, offset);
         }
 
-        parse_subtitle_data(SubtitlePacketData::Owned(merged), data, pts)
-            .map(|packet| (packet, offset))
+        (
+            parse_subtitle_data(SubtitlePacketData::Owned(merged), data, pts),
+            offset,
+        )
     }
 }
 

@@ -128,3 +128,97 @@ test('fetchSubtitleAsset uses range-chunks for large range-capable assets', asyn
     globalThis.fetch = originalFetch
   }
 })
+
+test('fetchSubtitleAsset rejects an advertised range size above maxBytes before downloading it', async () => {
+  const originalFetch = globalThis.fetch
+  const ranges: string[] = []
+  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    const range = new Headers(init?.headers).get('Range') ?? ''
+    ranges.push(range)
+    return new Response(new Uint8Array([0]), {
+      status: 206,
+      headers: { 'Content-Range': 'bytes 0-0/9007199254740991', 'Accept-Ranges': 'bytes', 'Content-Length': '1' }
+    })
+  }) as typeof fetch
+
+  try {
+    await expect(fetchSubtitleAsset('https://example.test/huge.sup', { maxBytes: 1024 })).rejects.toThrow(
+      /1024 byte limit/
+    )
+    expect(ranges).toEqual(['bytes=0-0'])
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('fetchSubtitleAsset keeps only the requested bytes of an oversized range response', async () => {
+  const originalFetch = globalThis.fetch
+  const total = 8
+  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    const range = new Headers(init?.headers).get('Range')
+    if (range === 'bytes=0-0') {
+      return new Response(new Uint8Array([0]), {
+        status: 206,
+        headers: { 'Content-Range': `bytes 0-0/${total}`, 'Accept-Ranges': 'bytes', 'Content-Length': '1' }
+      })
+    }
+    const start = Number(/bytes=(\d+)-/.exec(range ?? '')![1])
+    // Ignore the requested end and return a much larger body.
+    return new Response(new Uint8Array(1024 * 1024).fill(start + 1), { status: 206 })
+  }) as typeof fetch
+
+  try {
+    const result = await fetchSubtitleAsset('https://example.test/track.sup', {
+      rangeChunkThreshold: 4,
+      rangeChunkSize: 4
+    })
+    expect(Array.from(result.data)).toEqual([1, 1, 1, 1, 5, 5, 5, 5])
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('fetchSubtitleAsset cancels a streamed body once it exceeds maxBytes', async () => {
+  const originalFetch = globalThis.fetch
+  let pulls = 0
+  let cancelled = false
+  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    if (new Headers(init?.headers).has('Range')) {
+      return new Response(null, { status: 200, headers: { 'Accept-Ranges': 'none' } })
+    }
+    const endless = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulls += 1
+        controller.enqueue(new Uint8Array(256))
+      },
+      cancel() {
+        cancelled = true
+      }
+    })
+    return new Response(endless, { status: 200 })
+  }) as typeof fetch
+
+  try {
+    await expect(fetchSubtitleAsset('https://example.test/endless.sup', { maxBytes: 1000 })).rejects.toThrow(
+      /1000 byte limit/
+    )
+    expect(cancelled).toBe(true)
+    expect(pulls).toBeLessThan(10)
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('fetchSubtitleAsset rejects a declared Content-Length above maxBytes', async () => {
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = (async () =>
+    new Response(new Uint8Array(16), { status: 200, headers: { 'Content-Length': '2000' } })) as typeof fetch
+
+  try {
+    await expect(
+      fetchSubtitleAsset('https://example.test/track.sup', { preferRange: false, maxBytes: 1000 })
+    ).rejects.toThrow(/1000 byte limit/)
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})

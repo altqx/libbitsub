@@ -107,25 +107,30 @@ impl DisplaySet {
                 return DisplaySetParseAttempt::Incomplete;
             }
 
+            // Each segment parser gets a reader bounded to its declared size so a
+            // short or malformed segment cannot read into the following segment.
             let start_pos = reader.position();
+            let mut segment_reader =
+                BigEndianReader::new(&data[start_pos..start_pos + segment_size]);
 
             match SegmentType::try_from(segment_type) {
                 Ok(SegmentType::PaletteDefinition) => {
                     if let Some(palette) =
-                        PaletteDefinitionSegment::parse(&mut reader, segment_size)
+                        PaletteDefinitionSegment::parse(&mut segment_reader, segment_size)
                     {
                         display_set.palettes.push(palette);
                     }
                 }
                 Ok(SegmentType::ObjectDefinition) => {
-                    if let Some(object) = ObjectDefinitionSegment::parse(&mut reader, segment_size)
+                    if let Some(object) =
+                        ObjectDefinitionSegment::parse(&mut segment_reader, segment_size)
                     {
                         display_set.objects.push(object);
                     }
                 }
                 Ok(SegmentType::PresentationComposition) => {
                     if let Some(composition) =
-                        PresentationCompositionSegment::parse(&mut reader, segment_size)
+                        PresentationCompositionSegment::parse(&mut segment_reader, segment_size)
                     {
                         display_set.pts = pts;
                         display_set.dts = dts;
@@ -133,7 +138,8 @@ impl DisplaySet {
                     }
                 }
                 Ok(SegmentType::WindowDefinition) => {
-                    if let Some(window) = WindowDefinitionSegment::parse(&mut reader, segment_size)
+                    if let Some(window) =
+                        WindowDefinitionSegment::parse(&mut segment_reader, segment_size)
                     {
                         display_set.windows.push(window);
                     }
@@ -144,15 +150,10 @@ impl DisplaySet {
                 }
                 Err(_) => {
                     // Unknown segment type - skip
-                    reader.skip(segment_size);
                 }
             }
 
-            // Ensure we consumed the expected amount
-            let consumed = reader.position() - start_pos;
-            if consumed < segment_size {
-                reader.skip(segment_size - consumed);
-            }
+            reader.skip(segment_size);
         }
 
         DisplaySetParseAttempt::Complete(display_set, reader.position())

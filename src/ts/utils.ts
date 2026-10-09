@@ -470,6 +470,75 @@ export function getSubtitleBounds(data: SubtitleData): SubtitleCueBounds | null 
   }
 }
 
+/** Byte budget for decoded frames held by a renderer's frame cache. */
+export const FRAME_CACHE_BYTE_LIMIT = 128 * 1024 * 1024
+
+function frameByteLength(frame: SubtitleData | null | undefined): number {
+  if (!frame) return 0
+  let bytes = 0
+  for (const composition of frame.compositionData) bytes += composition.pixelData.data.byteLength
+  return bytes
+}
+
+/** Frame cache that keeps a running total of decoded pixel bytes. */
+export class FrameCache extends Map<number, SubtitleData | null> {
+  bytes = 0
+
+  override set(key: number, value: SubtitleData | null): this {
+    if (super.has(key)) this.bytes -= frameByteLength(super.get(key))
+    super.set(key, value)
+    this.bytes += frameByteLength(value)
+    return this
+  }
+
+  override delete(key: number): boolean {
+    if (super.has(key)) this.bytes -= frameByteLength(super.get(key))
+    return super.delete(key)
+  }
+
+  override clear(): void {
+    this.bytes = 0
+    super.clear()
+  }
+}
+
+function cachedFrameBytes(cache: Map<number, SubtitleData | null>): number {
+  if (cache instanceof FrameCache) return cache.bytes
+  let bytes = 0
+  for (const frame of cache.values()) bytes += frameByteLength(frame)
+  return bytes
+}
+
+function evictCachedFrames(state: WorkerRendererState): void {
+  // Evict by count, and by bytes while more than the newest frame remains.
+  while (
+    state.frameCache.size > state.cacheLimit ||
+    (state.frameCache.size > 1 && cachedFrameBytes(state.frameCache) > FRAME_CACHE_BYTE_LIMIT)
+  ) {
+    const oldestKey = state.frameCache.keys().next().value
+    if (oldestKey === undefined) break
+    state.frameCache.delete(oldestKey)
+    state.renderIssues.delete(oldestKey)
+  }
+}
+
+/**
+ * Replace timestamps from `base` onward with `delta`. The backing buffer grows
+ * geometrically, so applying N incremental updates costs O(N) overall.
+ */
+export function spliceTimestamps(current: Float64Array, base: number, delta: Float64Array): Float64Array {
+  const start = Math.min(base, current.length)
+  const length = start + delta.length
+  let target = current
+  if (current.byteOffset !== 0 || current.buffer.byteLength < length * Float64Array.BYTES_PER_ELEMENT) {
+    target = new Float64Array(Math.max(length, current.length * 2, 16))
+    target.set(current.subarray(0, start))
+  }
+  const view = new Float64Array(target.buffer, 0, length)
+  view.set(delta, start)
+  return view
+}
+
 /** Store a frame in the cache and evict older entries when the limit is exceeded. */
 export function setCachedFrame(
   state: WorkerRendererState,
@@ -488,25 +557,13 @@ export function setCachedFrame(
   state.frameCache.set(index, frame)
   state.renderIssues.set(index, renderIssue)
 
-  while (state.frameCache.size > state.cacheLimit) {
-    const oldestKey = state.frameCache.keys().next().value
-    if (oldestKey === undefined) break
-    state.frameCache.delete(oldestKey)
-    state.renderIssues.delete(oldestKey)
-  }
+  evictCachedFrames(state)
 }
 
 /** Update the frame cache size limit and immediately trim the cache. */
 export function setCacheLimit(state: WorkerRendererState, cacheLimit: number): number {
   state.cacheLimit = Math.max(0, Math.floor(cacheLimit))
-
-  while (state.frameCache.size > state.cacheLimit) {
-    const oldestKey = state.frameCache.keys().next().value
-    if (oldestKey === undefined) break
-    state.frameCache.delete(oldestKey)
-    state.renderIssues.delete(oldestKey)
-  }
-
+  evictCachedFrames(state)
   return state.cacheLimit
 }
 
@@ -553,7 +610,7 @@ export function createWorkerState(): WorkerRendererState {
     workerReady: false,
     sessionId: null,
     timestamps: new Float64Array(0),
-    frameCache: new Map(),
+    frameCache: new FrameCache(),
     renderIssues: new Map(),
     pendingRenders: new Map(),
     cacheLimit: 24,

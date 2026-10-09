@@ -19,6 +19,8 @@ export interface AssetFetchOptions {
   rangeChunkSize?: number
   preferRange?: boolean
   headers?: HeadersInit
+  /** Maximum asset size in bytes (default 256 MiB). Larger responses are rejected. */
+  maxBytes?: number
 }
 
 /** Result of probing HTTP range support. */
@@ -30,6 +32,46 @@ export interface RangeProbeResult {
 
 const DEFAULT_RANGE_CHUNK_THRESHOLD = 2 * 1024 * 1024
 const DEFAULT_RANGE_CHUNK_SIZE = 512 * 1024
+const DEFAULT_MAX_BYTES = 256 * 1024 * 1024
+
+function resolveMaxBytes(options: AssetFetchOptions): number {
+  const value = options.maxBytes
+  return value !== undefined && value >= 0 ? Math.floor(value) : DEFAULT_MAX_BYTES
+}
+
+function assetTooLarge(size: number, maxBytes: number): Error {
+  return new Error(`Subtitle asset exceeds the ${maxBytes} byte limit (${size} bytes)`)
+}
+
+/** Growable byte buffer that refuses to exceed a fixed limit. */
+class BoundedBuffer {
+  private buffer: Uint8Array
+  length = 0
+
+  constructor(
+    private readonly maxBytes: number,
+    sizeHint: number | null
+  ) {
+    const initial = sizeHint != null && sizeHint <= maxBytes ? sizeHint : Math.min(maxBytes, 64 * 1024)
+    this.buffer = new Uint8Array(initial)
+  }
+
+  append(chunk: Uint8Array): void {
+    const needed = this.length + chunk.byteLength
+    if (needed > this.maxBytes) throw assetTooLarge(needed, this.maxBytes)
+    if (needed > this.buffer.byteLength) {
+      const grown = new Uint8Array(Math.min(this.maxBytes, Math.max(needed, this.buffer.byteLength * 2)))
+      grown.set(this.buffer.subarray(0, this.length))
+      this.buffer = grown
+    }
+    this.buffer.set(chunk, this.length)
+    this.length = needed
+  }
+
+  toUint8Array(): Uint8Array {
+    return this.length === this.buffer.byteLength ? this.buffer : this.buffer.slice(0, this.length)
+  }
+}
 
 function emitProgress(
   onProgress: AssetFetchOptions['onProgress'],
@@ -136,18 +178,56 @@ export async function probeRangeSupport(url: string, options: AssetFetchOptions 
   }
 }
 
+/** Read a range response body, keeping at most `limit` bytes. */
+async function readRangeBody(response: Response, limit: number): Promise<Uint8Array> {
+  if (!response.body || typeof response.body.getReader !== 'function') {
+    const buffer = new Uint8Array(await response.arrayBuffer())
+    return buffer.byteLength > limit ? buffer.subarray(0, limit) : buffer
+  }
+
+  const reader = response.body.getReader()
+  const output = new Uint8Array(limit)
+  let loaded = 0
+  while (loaded < limit) {
+    const { done, value } = await reader.read()
+    if (done) break
+    if (!value) continue
+    const take = Math.min(value.byteLength, limit - loaded)
+    output.set(value.subarray(0, take), loaded)
+    loaded += take
+  }
+  if (loaded >= limit) {
+    try {
+      await reader.cancel()
+    } catch {
+      /* ignore */
+    }
+  }
+  return loaded === limit ? output : output.subarray(0, loaded)
+}
+
 async function readResponseStream(
   response: Response,
   totalHint: number | null,
   rangeSupported: boolean,
   strategy: AssetFetchStrategy,
+  maxBytes: number,
   onProgress?: AssetFetchOptions['onProgress'],
   onChunk?: (chunk: Uint8Array, progress: AssetFetchProgress) => void | Promise<void>
 ): Promise<Uint8Array> {
   const total = totalHint ?? parseContentLength(response.headers.get('content-length'))
+  if (total != null && total > maxBytes) {
+    try {
+      await response.body?.cancel()
+    } catch {
+      /* ignore */
+    }
+    throw assetTooLarge(total, maxBytes)
+  }
 
   if (!response.body || typeof response.body.getReader !== 'function') {
     const buffer = new Uint8Array(await response.arrayBuffer())
+    if (buffer.byteLength > maxBytes) throw assetTooLarge(buffer.byteLength, maxBytes)
     const progress: AssetFetchProgress = {
       loaded: buffer.byteLength,
       total: total ?? buffer.byteLength,
@@ -161,7 +241,7 @@ async function readResponseStream(
   }
 
   const reader = response.body.getReader()
-  const chunks: Uint8Array[] = []
+  const assembled = new BoundedBuffer(maxBytes, total)
   let loaded = 0
 
   while (true) {
@@ -170,7 +250,16 @@ async function readResponseStream(
     if (!value || value.byteLength === 0) continue
 
     const chunk = value instanceof Uint8Array ? value : new Uint8Array(value)
-    chunks.push(chunk)
+    try {
+      assembled.append(chunk)
+    } catch (error) {
+      try {
+        await reader.cancel()
+      } catch {
+        /* ignore */
+      }
+      throw error
+    }
     loaded += chunk.byteLength
 
     const progress: AssetFetchProgress = {
@@ -184,15 +273,9 @@ async function readResponseStream(
     onProgress?.(progress)
   }
 
-  const assembled = new Uint8Array(loaded)
-  let offset = 0
-  for (const chunk of chunks) {
-    assembled.set(chunk, offset)
-    offset += chunk.byteLength
-  }
-
-  emitProgress(onProgress, assembled.byteLength, total ?? assembled.byteLength, rangeSupported, strategy)
-  return assembled
+  const data = assembled.toUint8Array()
+  emitProgress(onProgress, data.byteLength, total ?? data.byteLength, rangeSupported, strategy)
+  return data
 }
 
 async function fetchByRangeChunks(
@@ -202,6 +285,8 @@ async function fetchByRangeChunks(
   onChunk?: (chunk: Uint8Array, progress: AssetFetchProgress) => void | Promise<void>
 ): Promise<Uint8Array> {
   const chunkSize = Math.max(1, Math.floor(options.rangeChunkSize ?? DEFAULT_RANGE_CHUNK_SIZE))
+  const maxBytes = resolveMaxBytes(options)
+  if (size > maxBytes) throw assetTooLarge(size, maxBytes)
   const assembled = new Uint8Array(size)
   let loaded = 0
 
@@ -217,18 +302,14 @@ async function fetchByRangeChunks(
       throw new Error(`Failed to fetch subtitle range ${start}-${end}: ${response.status}`)
     }
 
-    const buffer = new Uint8Array(await response.arrayBuffer())
+    // Never buffer more than the requested range, whatever the server sends.
+    const buffer = await readRangeBody(response, end - start + 1)
     if (buffer.byteLength === 0) {
       throw new Error(`Empty subtitle range response for bytes=${start}-${end}`)
     }
 
-    if (start + buffer.byteLength > size) {
-      assembled.set(buffer.subarray(0, size - start), start)
-      loaded = size
-    } else {
-      assembled.set(buffer, start)
-      loaded = start + buffer.byteLength
-    }
+    assembled.set(buffer, start)
+    loaded = start + buffer.byteLength
 
     const slice = assembled.subarray(start, loaded)
     const progress: AssetFetchProgress = {
@@ -280,7 +361,15 @@ export async function fetchSubtitleAsset(
 
   const total = knownSize ?? parseContentLength(response.headers.get('content-length'))
   const strategy: AssetFetchStrategy = response.body ? 'stream' : 'basic'
-  const data = await readResponseStream(response, total, rangeSupported, strategy, options.onProgress, onChunk)
+  const data = await readResponseStream(
+    response,
+    total,
+    rangeSupported,
+    strategy,
+    resolveMaxBytes(options),
+    options.onProgress,
+    onChunk
+  )
   return { data, strategy, rangeSupported, total: total ?? data.byteLength }
 }
 

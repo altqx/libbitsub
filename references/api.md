@@ -132,6 +132,7 @@ interface VideoSubtitleOptions {
   prefetchWindow?: { before?: number; after?: number }
   streamingLoad?: boolean // default true — progressive URL loads
   rangeRequests?: boolean // default true — HTTP Range when supported
+  maxSubtitleBytes?: number // default 256 MiB — larger downloads are rejected
   onEvent?: (event: SubtitleRendererEvent) => void
   debug?: boolean
   onWarning?: (warning: SubtitleDiagnosticWarning) => void
@@ -216,6 +217,7 @@ type SubtitleFrameCropMode = 'bounds' | 'screen'
 
 interface SubtitleFrameRenderOptions {
   crop?: SubtitleFrameCropMode
+  maxPixels?: number // default 16,777,216 — larger outputs throw a RangeError
 }
 
 interface SubtitleRenderedFrameData {

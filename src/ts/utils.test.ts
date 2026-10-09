@@ -2,7 +2,16 @@ import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
-import { detectSubtitleFormat } from './utils'
+import { renderFrameData } from './frame-export'
+import type { SubtitleData } from './types'
+import {
+  createWorkerState,
+  detectSubtitleFormat,
+  FRAME_CACHE_BYTE_LIMIT,
+  FrameCache,
+  setCachedFrame,
+  spliceTimestamps
+} from './utils'
 
 function encodeVint(value: number): Uint8Array {
   for (let length = 1; length <= 4; length += 1) {
@@ -147,5 +156,105 @@ describe('detectSubtitleFormat DVB probing', () => {
 
   test('bare .sub without bytes still defaults to VobSub', () => {
     expect(detectSubtitleFormat({ fileName: 'track.sub' })).toBe('vobsub')
+  })
+})
+
+describe('frame cache byte budget', () => {
+  function frame(bytes: number): SubtitleData {
+    const pixelData = { data: new Uint8ClampedArray(bytes), width: bytes / 4, height: 1 } as ImageData
+    return { width: 1920, height: 1080, compositionData: [{ pixelData, x: 0, y: 0 }] }
+  }
+
+  test('evicts by total decoded bytes as well as entry count', () => {
+    const state = createWorkerState()
+    const quarter = FRAME_CACHE_BYTE_LIMIT / 4
+
+    for (let index = 0; index < 6; index += 1) setCachedFrame(state, index, frame(quarter))
+
+    expect([...state.frameCache.keys()]).toEqual([2, 3, 4, 5])
+    expect((state.frameCache as FrameCache).bytes).toBe(FRAME_CACHE_BYTE_LIMIT)
+  })
+
+  test('keeps the newest frame even when it alone exceeds the budget', () => {
+    const state = createWorkerState()
+    setCachedFrame(state, 0, frame(1024))
+    setCachedFrame(state, 1, frame(FRAME_CACHE_BYTE_LIMIT + 4))
+
+    expect([...state.frameCache.keys()]).toEqual([1])
+  })
+
+  test('tracks bytes through replace, delete and clear', () => {
+    const cache = new FrameCache()
+    cache.set(1, frame(400))
+    cache.set(1, frame(800))
+    cache.set(2, null)
+    expect(cache.bytes).toBe(800)
+    cache.delete(1)
+    expect(cache.bytes).toBe(0)
+    cache.set(3, frame(40))
+    cache.clear()
+    expect(cache.bytes).toBe(0)
+  })
+})
+
+describe('spliceTimestamps', () => {
+  test('appends deltas and rewrites entries from the base index', () => {
+    let timestamps = new Float64Array(0)
+    timestamps = spliceTimestamps(timestamps, 0, new Float64Array([1, 2]))
+    timestamps = spliceTimestamps(timestamps, 2, new Float64Array([3]))
+    timestamps = spliceTimestamps(timestamps, 2, new Float64Array([30, 4]))
+    expect(Array.from(timestamps)).toEqual([1, 2, 30, 4])
+  })
+
+  test('reuses spare capacity instead of copying the history on each append', () => {
+    let timestamps = new Float64Array(0)
+    let reallocations = 0
+    for (let index = 0; index < 10_000; index += 1) {
+      const previous = timestamps.buffer
+      timestamps = spliceTimestamps(timestamps, index, new Float64Array([index]))
+      if (timestamps.buffer !== previous) reallocations += 1
+    }
+    expect(timestamps.length).toBe(10_000)
+    expect(timestamps[9_999]).toBe(9_999)
+    expect(reallocations).toBeLessThan(20)
+  })
+})
+
+describe('renderFrameData limits', () => {
+  const originalImageData = globalThis.ImageData
+
+  test('rejects sparse compositions whose bounding box exceeds maxPixels', () => {
+    const pixel = { data: new Uint8ClampedArray(4), width: 1, height: 1 } as ImageData
+    const sparse: SubtitleData = {
+      width: 65535,
+      height: 65535,
+      compositionData: [
+        { pixelData: pixel, x: 0, y: 0 },
+        { pixelData: pixel, x: 65534, y: 65534 }
+      ]
+    }
+
+    expect(() => renderFrameData(sparse)).toThrow(RangeError)
+    expect(() => renderFrameData(sparse, { crop: 'screen' })).toThrow(RangeError)
+  })
+
+  test('renders frames within the limit', () => {
+    globalThis.ImageData = class {
+      constructor(
+        public data: Uint8ClampedArray,
+        public width: number,
+        public height: number
+      ) {}
+    } as unknown as typeof ImageData
+    try {
+      const pixel = { data: new Uint8ClampedArray([255, 0, 0, 255]), width: 1, height: 1 } as ImageData
+      const rendered = renderFrameData(
+        { width: 4, height: 4, compositionData: [{ pixelData: pixel, x: 1, y: 1 }] },
+        { crop: 'screen', maxPixels: 16 }
+      )
+      expect(rendered?.imageData.width).toBe(4)
+    } finally {
+      globalThis.ImageData = originalImageData
+    }
   })
 })

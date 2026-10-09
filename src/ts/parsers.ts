@@ -33,9 +33,16 @@ import {
 import { renderFrameData } from './frame-export'
 import { initWasm } from './wasm'
 import { getWasm } from './wasm'
-import { detectSubtitleFormat, getSubtitleBounds, isMksSource, trimTransparentImageData } from './utils'
+import {
+  detectSubtitleFormat,
+  getSubtitleBounds,
+  isMksSource,
+  spliceTimestamps,
+  trimTransparentImageData
+} from './utils'
 
 interface WasmPgsParserWithFeed extends WasmPgsParser {
+  getTimestampsFrom(start: number): Float64Array
   reset(): void
   feed(data: Uint8Array): number
   finishFeed(): number
@@ -48,6 +55,8 @@ interface WasmDvbParserWithFeed extends WasmDvbParser {
   finishFeed(): number
   readonly pendingLen: number
   getEndTimestamps(): Float64Array
+  getTimestampsFrom(start: number): Float64Array
+  getEndTimestampsFrom(start: number): Float64Array
   getCueCompositionCount(index: number): number
   getCuePageState(index: number): number
 }
@@ -105,7 +114,9 @@ export class PgsParser {
       if (!this.parser) throw new Error('Parser not initialized')
       const added = this.parser.feed(data)
       if (added > 0 || this.timestamps.length !== this.parser.count) {
-        this.timestamps = this.parser.getTimestamps()
+        // Fetch only the new entries; refetching the full history per chunk is quadratic.
+        const base = Math.min(this.timestamps.length, this.parser.count)
+        this.timestamps = spliceTimestamps(this.timestamps, base, this.parser.getTimestampsFrom(base))
         this.cueMetadataCache.clear()
       }
       return added
@@ -364,8 +375,10 @@ export class DvbParser {
       if (!this.parser) throw new Error('Parser not initialized')
       const added = this.parser.feed(data)
       if (added > 0 || this.timestamps.length !== this.parser.count) {
-        this.timestamps = this.parser.getTimestamps()
-        this.endTimestamps = this.parser.getEndTimestamps()
+        // A new cue can shorten the previous cue's end time, so refresh from there.
+        const base = Math.max(0, Math.min(this.timestamps.length, this.parser.count) - 1)
+        this.timestamps = spliceTimestamps(this.timestamps, base, this.parser.getTimestampsFrom(base))
+        this.endTimestamps = spliceTimestamps(this.endTimestamps, base, this.parser.getEndTimestampsFrom(base))
         this.cueMetadataCache.clear()
       }
       return added

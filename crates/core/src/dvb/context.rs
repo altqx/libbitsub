@@ -1,6 +1,7 @@
 //! Stateful DVB composition buffer (regions, CLUTs, objects, page).
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use super::clut::Clut;
 use super::pes::iter_segments;
@@ -12,6 +13,11 @@ use super::segment::{
 };
 use super::{DEFAULT_SCREEN_HEIGHT, DEFAULT_SCREEN_WIDTH, MAX_DVB_BITMAP_PIXELS};
 
+/// Object references kept per region (duplicates are coalesced).
+const MAX_REGION_OBJECTS: usize = 256;
+/// Placements decoded per object across all regions.
+const MAX_OBJECT_PLACEMENTS: usize = 256;
+
 #[derive(Debug, Clone)]
 struct Region {
     version: i8,
@@ -20,7 +26,8 @@ struct Region {
     depth: u8,
     clut_id: u8,
     bgcolor: u8,
-    pixels: Vec<u8>,
+    /// Shared with cue snapshots; copied on write.
+    pixels: Arc<Vec<u8>>,
     objects: Vec<(u16, u16, u16)>, // object_id, x, y
 }
 
@@ -48,6 +55,58 @@ pub struct DvbFrame {
 }
 
 #[derive(Debug, Clone)]
+struct RegionSnapshot {
+    x: u16,
+    y: u16,
+    width: u16,
+    height: u16,
+    pixels: Arc<Vec<u8>>,
+    palette: Vec<u32>,
+}
+
+/// Indexed snapshot of the page at a cue. Region planes are shared with the
+/// context and other cues until modified; RGBA is produced on demand.
+#[derive(Debug, Clone)]
+pub struct CueSnapshot {
+    width: u16,
+    height: u16,
+    regions: Vec<RegionSnapshot>,
+}
+
+impl CueSnapshot {
+    pub fn composition_count(&self) -> usize {
+        self.regions.len()
+    }
+
+    pub fn compose(&self) -> DvbFrame {
+        let compositions = self
+            .regions
+            .iter()
+            .map(|region| {
+                let mut rgba = vec![0u8; region.pixels.len() * 4];
+                for (dest, &code) in rgba.chunks_exact_mut(4).zip(region.pixels.iter()) {
+                    let color = region.palette.get(code as usize).copied().unwrap_or(0);
+                    dest.copy_from_slice(&color.to_le_bytes());
+                }
+                DvbComposition {
+                    x: region.x,
+                    y: region.y,
+                    width: region.width,
+                    height: region.height,
+                    rgba,
+                }
+            })
+            .collect();
+
+        DvbFrame {
+            width: self.width,
+            height: self.height,
+            compositions,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct DisplayCue {
     pub pts_ms: u32,
     pub timeout_ms: u32,
@@ -55,8 +114,11 @@ pub struct DisplayCue {
     pub region_count: u32,
     pub screen_width: u16,
     pub screen_height: u16,
-    /// Snapshot of composed frame at this cue (None = clear screen).
-    pub frame: Option<DvbFrame>,
+    /// Snapshot of the page at this cue (None = clear screen).
+    pub frame: Option<CueSnapshot>,
+    /// Bytes this cue newly retains (overhead plus region planes not already
+    /// held by an earlier cue).
+    pub retained_bytes: usize,
 }
 
 pub struct DvbContext {
@@ -150,6 +212,17 @@ impl DvbContext {
             return;
         }
 
+        // The pixel budget applies to all regions together, not each one.
+        let other_pixels: usize = self
+            .regions
+            .iter()
+            .filter(|(id, _)| **id != rcs.region_id)
+            .map(|(_, region)| region.pixels.len())
+            .sum();
+        if other_pixels + pixels_needed > MAX_DVB_BITMAP_PIXELS {
+            return;
+        }
+
         let depth = match rcs.depth {
             1 => 2,
             2 => 4,
@@ -165,7 +238,7 @@ impl DvbContext {
             depth,
             clut_id: rcs.clut_id,
             bgcolor: rcs.bgcolor(),
-            pixels: vec![rcs.bgcolor(); pixels_needed],
+            pixels: Arc::new(vec![rcs.bgcolor(); pixels_needed]),
             objects: Vec::new(),
         });
 
@@ -181,9 +254,9 @@ impl DvbContext {
         if size_changed || region.pixels.len() != pixels_needed {
             region.width = rcs.width;
             region.height = rcs.height;
-            region.pixels = vec![rcs.bgcolor(); pixels_needed];
+            region.pixels = Arc::new(vec![rcs.bgcolor(); pixels_needed]);
         } else if rcs.fill_flag {
-            region.pixels.fill(rcs.bgcolor());
+            Arc::make_mut(&mut region.pixels).fill(rcs.bgcolor());
         }
 
         region.version = version;
@@ -193,15 +266,22 @@ impl DvbContext {
         region.objects.clear();
 
         for object in rcs.objects {
-            region.objects.push((object.object_id, object.x, object.y));
-            self.object_placements
-                .entry(object.object_id)
-                .or_default()
-                .push(ObjectPlacement {
+            if region.objects.len() >= MAX_REGION_OBJECTS {
+                break;
+            }
+            let placement = (object.object_id, object.x, object.y);
+            if region.objects.contains(&placement) {
+                continue;
+            }
+            region.objects.push(placement);
+            let placements = self.object_placements.entry(object.object_id).or_default();
+            if placements.len() < MAX_OBJECT_PLACEMENTS {
+                placements.push(ObjectPlacement {
                     region_id: rcs.region_id,
                     x: object.x,
                     y: object.y,
                 });
+            }
         }
     }
 
@@ -231,19 +311,18 @@ impl DvbContext {
             top_field
         };
 
-        let placements = self
-            .object_placements
-            .get(&object_id)
-            .cloned()
-            .unwrap_or_default();
+        let Some(placements) = self.object_placements.get(&object_id) else {
+            return;
+        };
 
         for placement in placements {
             let Some(region) = self.regions.get_mut(&placement.region_id) else {
                 continue;
             };
+            let pixels = Arc::make_mut(&mut region.pixels);
 
             decode_object_field(
-                &mut region.pixels,
+                pixels,
                 region.width as usize,
                 region.height as usize,
                 ObjectField {
@@ -262,7 +341,7 @@ impl DvbContext {
                 top_field
             };
             decode_object_field(
-                &mut region.pixels,
+                pixels,
                 region.width as usize,
                 region.height as usize,
                 ObjectField {
@@ -288,6 +367,7 @@ impl DvbContext {
                 screen_width,
                 screen_height,
                 frame: None,
+                retained_bytes: size_of::<DisplayCue>(),
             };
         };
 
@@ -302,27 +382,29 @@ impl DvbContext {
                 screen_width,
                 screen_height,
                 frame: None,
+                retained_bytes: size_of::<DisplayCue>(),
             };
         }
 
         const MAX_FRAME_PIXELS: usize = 16_777_216;
         const MAX_FRAME_COMPOSITIONS: usize = 256;
-        let mut compositions = Vec::new();
+        let mut regions = Vec::new();
         let mut total_pixels = 0usize;
+        let mut retained_bytes = size_of::<DisplayCue>();
         for region_ref in &page.regions {
-            if compositions.len() >= MAX_FRAME_COMPOSITIONS {
+            if regions.len() >= MAX_FRAME_COMPOSITIONS {
                 break;
             }
             let Some(region) = self.regions.get(&region_ref.region_id) else {
                 continue;
             };
 
-            let clut = self
-                .cluts
-                .get(&region.clut_id)
-                .cloned()
-                .unwrap_or_else(|| Clut::default_clut(region.clut_id));
-            let palette = clut.entries_for_depth(region.depth);
+            let palette = match self.cluts.get(&region.clut_id) {
+                Some(clut) => clut.entries_for_depth(region.depth).to_vec(),
+                None => Clut::default_clut(region.clut_id)
+                    .entries_for_depth(region.depth)
+                    .to_vec(),
+            };
 
             let Some(pixel_count) = (region.width as usize).checked_mul(region.height as usize)
             else {
@@ -336,19 +418,11 @@ impl DvbContext {
                 _ => break,
             };
 
-            let Some(rgba_len) = pixel_count.checked_mul(4) else {
-                continue;
-            };
-            let mut rgba = vec![0u8; rgba_len];
-            for (index, &code) in region.pixels[..pixel_count].iter().enumerate() {
-                let color = palette.get(code as usize).copied().unwrap_or(0);
-                let bytes = color.to_le_bytes();
-                let dest = index * 4;
-                rgba[dest] = bytes[0];
-                rgba[dest + 1] = bytes[1];
-                rgba[dest + 2] = bytes[2];
-                rgba[dest + 3] = bytes[3];
+            // A plane only the context holds is newly retained by this cue.
+            if Arc::strong_count(&region.pixels) == 1 {
+                retained_bytes += region.pixels.len();
             }
+            retained_bytes += size_of::<RegionSnapshot>() + palette.len() * size_of::<u32>();
 
             let x = region_ref.x.saturating_add(
                 self.display_definition
@@ -363,22 +437,23 @@ impl DvbContext {
                     .unwrap_or(0),
             );
 
-            compositions.push(DvbComposition {
+            regions.push(RegionSnapshot {
                 x,
                 y,
                 width: region.width,
                 height: region.height,
-                rgba,
+                pixels: Arc::clone(&region.pixels),
+                palette,
             });
         }
 
-        let frame = if compositions.is_empty() {
+        let frame = if regions.is_empty() {
             None
         } else {
-            Some(DvbFrame {
+            Some(CueSnapshot {
                 width: screen_width,
                 height: screen_height,
-                compositions,
+                regions,
             })
         };
 
@@ -390,6 +465,7 @@ impl DvbContext {
             screen_width,
             screen_height,
             frame,
+            retained_bytes,
         }
     }
 }
@@ -397,5 +473,112 @@ impl DvbContext {
 impl Default for DvbContext {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::dvb::segment::{PageRegionRef, RegionObjectRef};
+
+    fn region(
+        region_id: u8,
+        width: u16,
+        height: u16,
+        objects: Vec<RegionObjectRef>,
+    ) -> RegionComposition {
+        RegionComposition {
+            region_id,
+            version: 0,
+            fill_flag: false,
+            width,
+            height,
+            depth: 3,
+            clut_id: 0,
+            region_level_8: 0,
+            region_level_4: 0,
+            region_level_2: 0,
+            objects,
+        }
+    }
+
+    fn object_ref(object_id: u16, x: u16, y: u16) -> RegionObjectRef {
+        RegionObjectRef {
+            object_id,
+            object_type: 0,
+            provider_flag: 0,
+            x,
+            y,
+            foreground: 0,
+            background: 0,
+        }
+    }
+
+    fn show_region(context: &mut DvbContext, region_id: u8) {
+        context.page = Some(PageComposition {
+            timeout_seconds: 5,
+            version: 0,
+            state: 0,
+            regions: vec![PageRegionRef {
+                region_id,
+                x: 0,
+                y: 0,
+            }],
+        });
+    }
+
+    #[test]
+    fn region_pixels_share_one_budget() {
+        let mut context = DvbContext::new();
+        context.apply_region(region(1, 4096, 4096, Vec::new()));
+        context.apply_region(region(2, 1, 1, Vec::new()));
+
+        assert!(context.regions.contains_key(&1));
+        assert!(!context.regions.contains_key(&2));
+
+        // Resizing the existing region does not count its old size twice.
+        context.apply_region(region(1, 4096, 4095, Vec::new()));
+        assert_eq!(context.regions[&1].pixels.len(), 4096 * 4095);
+    }
+
+    #[test]
+    fn duplicate_object_references_are_coalesced_and_capped() {
+        let mut context = DvbContext::new();
+        let duplicates = vec![object_ref(7, 0, 0); 10_000];
+        context.apply_region(region(1, 16, 16, duplicates));
+        assert_eq!(context.regions[&1].objects.len(), 1);
+        assert_eq!(context.object_placements[&7].len(), 1);
+
+        let distinct = (0..1000).map(|x| object_ref(8, x, 0)).collect();
+        context.apply_region(region(2, 16, 16, distinct));
+        assert_eq!(context.regions[&2].objects.len(), MAX_REGION_OBJECTS);
+        assert_eq!(context.object_placements[&8].len(), MAX_OBJECT_PLACEMENTS);
+    }
+
+    #[test]
+    fn unchanged_regions_are_shared_between_cues() {
+        let mut context = DvbContext::new();
+        context.apply_region(region(1, 1024, 1024, Vec::new()));
+        show_region(&mut context, 1);
+
+        let first = context.compose_cue(0);
+        assert!(first.retained_bytes > 1024 * 1024);
+
+        // An end-of-display-set with no changes does not copy the region.
+        let repeat = context.compose_cue(1000);
+        assert!(repeat.retained_bytes < 4096);
+        assert_eq!(Arc::strong_count(&context.regions[&1].pixels), 3);
+
+        // Modifying the region copies it once and charges the new plane.
+        let mut fill = region(1, 1024, 1024, Vec::new());
+        fill.fill_flag = true;
+        fill.region_level_8 = 5;
+        context.apply_region(fill);
+        let changed = context.compose_cue(2000);
+        assert!(changed.retained_bytes > 1024 * 1024);
+
+        let old = first.frame.expect("first frame").compose();
+        let new = changed.frame.expect("changed frame").compose();
+        assert_ne!(old.compositions[0].rgba, new.compositions[0].rgba);
     }
 }

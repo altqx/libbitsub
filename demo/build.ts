@@ -24,6 +24,14 @@ for (const file of ['index.html', 'styles.css', 'app.js', 'fixtures.js']) {
 
 await cp(wasmPackage, join(outputRoot, 'pkg'), { recursive: true })
 
+// Serve dash.js from the pinned devDependency instead of a mutable CDN alias.
+const vendorRoot = join(outputRoot, 'vendor')
+await mkdir(vendorRoot, { recursive: true })
+const dashjsBuild = join(repoRoot, 'node_modules', 'dashjs', 'dist', 'modern', 'umd')
+for (const file of ['dash.all.min.js', 'dash.all.min.js.LICENSE.txt']) {
+  await cp(join(dashjsBuild, file), join(vendorRoot, file))
+}
+
 const libraryOutput = join(outputRoot, 'libbitsub')
 await mkdir(libraryOutput, { recursive: true })
 const libraryBuild = await Bun.build({

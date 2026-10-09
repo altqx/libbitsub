@@ -1,14 +1,17 @@
 //! High-level DVB subtitle parser API (PGS-like surface).
 
-use super::context::{DisplayCue, DvbComposition, DvbContext, DvbFrame};
+use super::context::{CueSnapshot, DisplayCue, DvbComposition, DvbContext, DvbFrame};
 use super::pes::{TimedPayload, parse_timed_stream};
 use crate::utils::binary_search_timestamp;
 
 const MAX_PENDING_BYTES: usize = 32 * 1024 * 1024;
+/// Budget for memory retained by stored cues and their snapshots.
+const MAX_RETAINED_CUE_BYTES: usize = 512 * 1024 * 1024;
 
 /// DVB subtitle parser and renderer.
 pub struct DvbParser {
     cues: Vec<DisplayCue>,
+    retained_bytes: usize,
     timestamps_ms: Vec<u32>,
     pending: Vec<u8>,
     context: DvbContext,
@@ -21,6 +24,7 @@ impl DvbParser {
     pub fn new() -> Self {
         Self {
             cues: Vec::new(),
+            retained_bytes: 0,
             timestamps_ms: Vec::new(),
             pending: Vec::new(),
             context: DvbContext::new(),
@@ -32,6 +36,7 @@ impl DvbParser {
 
     pub fn reset(&mut self) {
         self.cues.clear();
+        self.retained_bytes = 0;
         self.timestamps_ms.clear();
         self.pending.clear();
         self.context.reset();
@@ -90,6 +95,11 @@ impl DvbParser {
             let Some(cue) = self.context.apply_payload(unit.pts_ms, &unit.payload) else {
                 continue;
             };
+            if cue.retained_bytes > MAX_RETAINED_CUE_BYTES - self.retained_bytes {
+                self.last_render_issue = Some("CUE_MEMORY_LIMIT_EXCEEDED".to_string());
+                continue;
+            }
+            self.retained_bytes += cue.retained_bytes;
             self.screen_width = cue.screen_width;
             self.screen_height = cue.screen_height;
             self.timestamps_ms.push(cue.pts_ms);
@@ -110,11 +120,26 @@ impl DvbParser {
     }
 
     pub fn get_timestamps(&self) -> Vec<f64> {
-        self.timestamps_ms.iter().map(|&ts| ts as f64).collect()
+        self.get_timestamps_from(0)
+    }
+
+    /// Get cue start times in milliseconds starting at cue `start`.
+    pub fn get_timestamps_from(&self, start: usize) -> Vec<f64> {
+        self.timestamps_ms
+            .get(start..)
+            .unwrap_or_default()
+            .iter()
+            .map(|&ts| ts as f64)
+            .collect()
     }
 
     pub fn get_end_timestamps(&self) -> Vec<f64> {
-        (0..self.cues.len())
+        self.get_end_timestamps_from(0)
+    }
+
+    /// Get cue end times in milliseconds starting at cue `start`.
+    pub fn get_end_timestamps_from(&self, start: usize) -> Vec<f64> {
+        (start.min(self.cues.len())..self.cues.len())
             .map(|index| self.get_cue_end_time_ms(index) as f64)
             .collect()
     }
@@ -170,7 +195,7 @@ impl DvbParser {
         self.cues
             .get(index)
             .and_then(|cue| cue.frame.as_ref())
-            .map_or(0, |frame| frame.compositions.len() as u32)
+            .map_or(0, |frame| frame.composition_count() as u32)
     }
 
     pub fn get_cue_page_state(&self, index: usize) -> i32 {
@@ -194,7 +219,7 @@ impl DvbParser {
             return None;
         };
 
-        cue.frame.clone()
+        cue.frame.as_ref().map(CueSnapshot::compose)
     }
 
     pub fn render_at_timestamp(&mut self, time_seconds: f64) -> Option<DvbFrame> {

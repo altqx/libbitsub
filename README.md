@@ -935,6 +935,7 @@ interface VideoSubtitleOptions {
   }
   streamingLoad?: boolean // default true — progressive URL loads
   rangeRequests?: boolean // default true — use HTTP Range when supported
+  maxSubtitleBytes?: number // default 256 MiB — larger downloads are rejected
   onEvent?: (event: SubtitleRendererEvent) => void
 }
 ```

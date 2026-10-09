@@ -68,9 +68,18 @@ jobs:
           targets: wasm32-unknown-unknown
 
       - name: Install kache
+        env:
+          KACHE_VERSION: v0.22.0
+          # SHA-256 of kache-x86_64-unknown-linux-musl.tar.gz for KACHE_VERSION.
+          KACHE_SHA256: 5e3066c7e2f2792cf4a365d2b3ae9f5077a8cd20d21639b942289b226e64928a
         run: |
-          curl -fsSL https://github.com/kunobi-ninja/kache/releases/download/v0.22.0/kache-x86_64-unknown-linux-musl.tar.gz \
-            | sudo tar -xz -C /usr/local/bin kache
+          archive="$RUNNER_TEMP/kache.tar.gz"
+          curl -fsSL -o "$archive" \
+            "https://github.com/kunobi-ninja/kache/releases/download/${KACHE_VERSION}/kache-x86_64-unknown-linux-musl.tar.gz"
+          echo "${KACHE_SHA256}  ${archive}" | sha256sum --check --strict
+          mkdir -p "$RUNNER_TEMP/kache-bin"
+          tar -xzf "$archive" -C "$RUNNER_TEMP/kache-bin" kache
+          echo "$RUNNER_TEMP/kache-bin" >> "$GITHUB_PATH"
 
       - name: Rust Cache
         uses: swatinem/rust-cache@v2
@@ -144,9 +153,18 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Install kache
+        env:
+          KACHE_VERSION: v0.22.0
+          # SHA-256 of kache-x86_64-unknown-linux-musl.tar.gz for KACHE_VERSION.
+          KACHE_SHA256: 5e3066c7e2f2792cf4a365d2b3ae9f5077a8cd20d21639b942289b226e64928a
         run: |
-          curl -fsSL https://github.com/kunobi-ninja/kache/releases/download/v0.22.0/kache-x86_64-unknown-linux-musl.tar.gz \
-            | sudo tar -xz -C /usr/local/bin kache
+          archive="$RUNNER_TEMP/kache.tar.gz"
+          curl -fsSL -o "$archive" \
+            "https://github.com/kunobi-ninja/kache/releases/download/${KACHE_VERSION}/kache-x86_64-unknown-linux-musl.tar.gz"
+          echo "${KACHE_SHA256}  ${archive}" | sha256sum --check --strict
+          mkdir -p "$RUNNER_TEMP/kache-bin"
+          tar -xzf "$archive" -C "$RUNNER_TEMP/kache-bin" kache
+          echo "$RUNNER_TEMP/kache-bin" >> "$GITHUB_PATH"
 
       - name: Download build artifact
         uses: actions/download-artifact@v4

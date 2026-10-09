@@ -80,6 +80,12 @@ impl PgsParser {
         timestamps_to_array(self.inner.get_timestamps())
     }
 
+    /// Get timestamps starting at cue `start`, for incremental updates.
+    #[wasm_bindgen(js_name = getTimestampsFrom)]
+    pub fn get_timestamps_from(&self, start: usize) -> Float64Array {
+        timestamps_to_array(self.inner.get_timestamps_from(start))
+    }
+
     #[wasm_bindgen(js_name = findIndexAtTimestamp)]
     pub fn find_index_at_timestamp(&self, time_ms: f64) -> i32 {
         self.inner.find_index_at_timestamp(time_ms)
@@ -415,6 +421,18 @@ impl DvbParser {
     #[wasm_bindgen(js_name = getEndTimestamps)]
     pub fn get_end_timestamps(&self) -> Float64Array {
         timestamps_to_array(self.inner.get_end_timestamps())
+    }
+
+    /// Get cue start times starting at cue `start`, for incremental updates.
+    #[wasm_bindgen(js_name = getTimestampsFrom)]
+    pub fn get_timestamps_from(&self, start: usize) -> Float64Array {
+        timestamps_to_array(self.inner.get_timestamps_from(start))
+    }
+
+    /// Get cue end times starting at cue `start`, for incremental updates.
+    #[wasm_bindgen(js_name = getEndTimestampsFrom)]
+    pub fn get_end_timestamps_from(&self, start: usize) -> Float64Array {
+        timestamps_to_array(self.inner.get_end_timestamps_from(start))
     }
 
     #[wasm_bindgen(js_name = findIndexAtTimestamp)]

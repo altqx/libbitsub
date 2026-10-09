@@ -31,7 +31,7 @@ import {
   normalizeSubtitleError,
   warningFromRenderIssue
 } from './diagnostics'
-import { fetchSubtitleAsset, fetchSubtitleText, type AssetFetchProgress } from './range-loader'
+import { fetchSubtitleAsset, fetchSubtitleText, type AssetFetchOptions, type AssetFetchProgress } from './range-loader'
 import { initWasm } from './wasm'
 import { getOrCreateWorker, sendToWorker } from './worker'
 import { canUseWorkerOffscreenRender } from './capabilities'
@@ -44,7 +44,8 @@ import {
   getSubtitleBounds,
   isMksSource,
   setCacheLimit as applyCacheLimit,
-  setCachedFrame
+  setCachedFrame,
+  spliceTimestamps
 } from './utils'
 import { PgsParser, DvbParser, VobSubParserLowLevel } from './parsers'
 import { WebGPURenderer, isWebGPUSupported } from './webgpu-renderer'
@@ -167,6 +168,9 @@ abstract class BaseVideoSubtitleRenderer {
   protected prefetchAfter: number = 0
   protected streamingLoad: boolean = true
   protected rangeRequests: boolean = true
+  protected maxSubtitleBytes?: number
+  /** Aborted on dispose to cancel in-flight subtitle downloads. */
+  private readonly lifecycle = new AbortController()
   protected onEvent?: (event: SubtitleRendererEvent) => void
   protected onWarning?: (warning: SubtitleDiagnosticWarning) => void
   protected currentRendererBackend: SubtitleRendererBackend | null = null
@@ -238,6 +242,21 @@ abstract class BaseVideoSubtitleRenderer {
     this.prefetchAfter = Math.max(0, Math.floor(options.prefetchWindow?.after ?? 0))
     this.streamingLoad = options.streamingLoad !== false
     this.rangeRequests = options.rangeRequests !== false
+    this.maxSubtitleBytes = options.maxSubtitleBytes
+  }
+
+  /** Fetch options bound to this renderer's lifetime and download budget. */
+  protected fetchOptions(preferRange: boolean, onProgress?: (progress: AssetFetchProgress) => void): AssetFetchOptions {
+    return { preferRange, onProgress, signal: this.lifecycle.signal, maxBytes: this.maxSubtitleBytes }
+  }
+
+  /** Dispose this renderer's parser in the shared worker, if a session was started. */
+  protected releaseWorkerSession(state: WorkerRendererState): void {
+    state.workerReady = false
+    const sessionId = state.sessionId
+    if (!sessionId) return
+    const type = this.format === 'pgs' ? 'disposePgs' : this.format === 'dvb' ? 'disposeDvb' : 'disposeVobSub'
+    sendToWorker({ type, sessionId }).catch(() => {})
   }
 
   protected emitLoadProgress(
@@ -415,6 +434,7 @@ abstract class BaseVideoSubtitleRenderer {
   protected startInit(): void {
     this.initPromise = this.init()
     this.initPromise.catch((error) => {
+      if (this.disposed) return
       this.emitEvent({
         type: 'error',
         format: this.format,
@@ -473,9 +493,11 @@ abstract class BaseVideoSubtitleRenderer {
     await new Promise((resolve) => setTimeout(resolve, 0))
     if (this.disposed) return
     await this.loadSubtitles()
-    if (this.disposed) return
+    // Loading may have created parsers or worker sessions after dispose() ran;
+    // dispose again to release them.
+    if (this.disposed) return this.dispose()
     await this.ensureWorkerOffscreenAttached()
-    if (this.disposed) return
+    if (this.disposed) return this.dispose()
     this.startRenderLoop()
   }
 
@@ -1505,6 +1527,7 @@ abstract class BaseVideoSubtitleRenderer {
   /** Dispose of all resources. */
   dispose(): void {
     this.disposed = true
+    this.lifecycle.abort()
     this.invalidatePresentation()
 
     this.frameScheduler?.stop()
@@ -1597,10 +1620,12 @@ export class PgsRenderer extends BaseVideoSubtitleRenderer implements LiveSubtit
       }
 
       if (!this.streamingLoad) {
-        const { data, strategy, rangeSupported, total } = await fetchSubtitleAsset(this.subUrl, {
-          preferRange: this.rangeRequests,
-          onProgress: (progress) => this.emitLoadProgress('pgs', progress, this.state.timestamps.length)
-        })
+        const { data, strategy, rangeSupported, total } = await fetchSubtitleAsset(
+          this.subUrl,
+          this.fetchOptions(this.rangeRequests, (progress) =>
+            this.emitLoadProgress('pgs', progress, this.state.timestamps.length)
+          )
+        )
         this.emitLoadProgress(
           'pgs',
           { loaded: data.byteLength, total: total ?? data.byteLength, ratio: 1, rangeSupported, strategy },
@@ -1614,10 +1639,17 @@ export class PgsRenderer extends BaseVideoSubtitleRenderer implements LiveSubtit
       await this.loadPgsStreaming(this.subUrl)
       this.onLoaded?.()
     } catch (error) {
+      if (this.disposed) return
       const resolvedError = normalizeSubtitleError(error, { format: 'pgs' })
       this.emitEvent({ type: 'error', format: 'pgs', error: resolvedError })
       this.onError?.(resolvedError)
     }
+  }
+
+  /** Resolve an append response, which may carry only new timestamps, to the full list. */
+  private mergePgsTimestamps(response: { timestamps: Float64Array; timestampBase?: number }): Float64Array {
+    if (response.timestampBase === undefined) return response.timestamps
+    return spliceTimestamps(this.state.timestamps, response.timestampBase, response.timestamps)
   }
 
   private applyPgsIndexState(
@@ -1656,7 +1688,7 @@ export class PgsRenderer extends BaseVideoSubtitleRenderer implements LiveSubtit
         return
       } catch (workerError) {
         this.state.useWorker = false
-        this.state.workerReady = false
+        this.releaseWorkerSession(this.state)
         this.state.sessionId = null
         this.emitWorkerState(false, false, null, true)
         this.emitWarning(
@@ -1716,11 +1748,12 @@ export class PgsRenderer extends BaseVideoSubtitleRenderer implements LiveSubtit
         if (response.type === 'error') throw new Error(response.message)
         if (response.type !== 'pgsProgress') throw new Error('Unexpected PGS worker response')
         added = response.added
+        const timestamps = this.mergePgsTimestamps(response)
         if (added > 0) {
-          this.applyPgsIndexState(response.metadata, response.timestamps, true, true)
+          this.applyPgsIndexState(response.metadata, timestamps, true, true)
         } else {
           this.state.metadata = response.metadata
-          this.state.timestamps = response.timestamps
+          this.state.timestamps = timestamps
         }
       } else {
         if (!this.pgsParser) throw new Error('PGS parser is not initialized')
@@ -1811,6 +1844,7 @@ export class PgsRenderer extends BaseVideoSubtitleRenderer implements LiveSubtit
       } catch (workerError) {
         this.state.useWorker = false
         this.emitWorkerState(false, false, this.state.sessionId, true)
+        this.releaseWorkerSession(this.state)
         this.emitWarning(
           createSubtitleWarning(
             'WORKER_FALLBACK',
@@ -1843,6 +1877,7 @@ export class PgsRenderer extends BaseVideoSubtitleRenderer implements LiveSubtit
         this.state.useWorker = false
         usedWorker = false
         this.emitWorkerState(false, false, this.state.sessionId, true)
+        this.releaseWorkerSession(this.state)
         this.emitWarning(
           createSubtitleWarning(
             'WORKER_FALLBACK',
@@ -1865,10 +1900,9 @@ export class PgsRenderer extends BaseVideoSubtitleRenderer implements LiveSubtit
     try {
       const { data, strategy, rangeSupported, total } = await fetchSubtitleAsset(
         url,
-        {
-          preferRange: this.rangeRequests,
-          onProgress: (progress) => this.emitLoadProgress('pgs', progress, this.state.timestamps.length)
-        },
+        this.fetchOptions(this.rangeRequests, (progress) =>
+          this.emitLoadProgress('pgs', progress, this.state.timestamps.length)
+        ),
         async (chunk, progress) => {
           if (chunk.byteLength === 0) return
 
@@ -1880,11 +1914,12 @@ export class PgsRenderer extends BaseVideoSubtitleRenderer implements LiveSubtit
               data: transferable
             })
             if (response.type === 'pgsProgress') {
+              const timestamps = this.mergePgsTimestamps(response)
               if (response.added > 0 || !indexedOnce) {
-                this.applyPgsIndexState(response.metadata, response.timestamps, true, true)
+                this.applyPgsIndexState(response.metadata, timestamps, true, true)
                 indexedOnce = true
               } else {
-                this.state.timestamps = response.timestamps
+                this.state.timestamps = timestamps
                 this.state.metadata = response.metadata
               }
             } else if (response.type === 'error') {
@@ -1941,14 +1976,16 @@ export class PgsRenderer extends BaseVideoSubtitleRenderer implements LiveSubtit
       if (usedWorker) {
         this.state.useWorker = false
         this.emitWorkerState(false, false, this.state.sessionId, true)
+        this.releaseWorkerSession(this.state)
       }
+      if (this.disposed) throw error
       this.emitWarning(
         createSubtitleWarning('RANGE_FALLBACK', 'Progressive PGS load failed; retrying with a full buffer fetch.', {
           format: 'pgs',
           details: { reason: error instanceof Error ? error.message : String(error) }
         })
       )
-      const { data } = await fetchSubtitleAsset(url, { preferRange: this.rangeRequests })
+      const { data } = await fetchSubtitleAsset(url, this.fetchOptions(this.rangeRequests))
       await this.loadPgsBuffer(data, false)
     }
   }
@@ -2149,12 +2186,9 @@ export class PgsRenderer extends BaseVideoSubtitleRenderer implements LiveSubtit
     this.state.frameCache.clear()
     this.state.renderIssues.clear()
     this.state.pendingRenders.clear()
-    if (this.state.useWorker && this.state.workerReady) {
-      sendToWorker({ type: 'disposePgs', sessionId: this.state.sessionId! }).catch(() => {})
-    }
+    this.releaseWorkerSession(this.state)
     this.pgsParser?.dispose()
     this.pgsParser = null
-    this.state.sessionId = null
   }
 }
 
@@ -2221,6 +2255,7 @@ export class VobSubRenderer extends BaseVideoSubtitleRenderer {
       await this.loadVobSubIdxSubStreaming()
       this.onLoaded?.()
     } catch (error) {
+      if (this.disposed) return
       const resolvedError = normalizeSubtitleError(error, { format: 'vobsub' })
       this.emitEvent({ type: 'error', format: 'vobsub', error: resolvedError })
       this.onError?.(resolvedError)
@@ -2257,6 +2292,7 @@ export class VobSubRenderer extends BaseVideoSubtitleRenderer {
     } catch (workerError) {
       this.state.useWorker = false
       this.emitWorkerState(false, false, this.state.sessionId, true)
+      this.releaseWorkerSession(this.state)
       this.emitWarning(
         createSubtitleWarning(
           'WORKER_FALLBACK',
@@ -2319,6 +2355,7 @@ export class VobSubRenderer extends BaseVideoSubtitleRenderer {
         }
         this.state.useWorker = false
         this.emitWorkerState(false, false, this.state.sessionId, true)
+        this.releaseWorkerSession(this.state)
         this.emitWarning(
           createSubtitleWarning(
             'WORKER_FALLBACK',
@@ -2344,10 +2381,12 @@ export class VobSubRenderer extends BaseVideoSubtitleRenderer {
       throw createSubtitleDiagnosticError('MISSING_INPUT', 'No SUB content or URL provided.', { format: 'vobsub' })
     }
 
-    const { data, strategy, rangeSupported, total } = await fetchSubtitleAsset(this.subUrl, {
-      preferRange: this.rangeRequests && this.streamingLoad,
-      onProgress: (progress) => this.emitLoadProgress('vobsub', progress, this.state.timestamps.length)
-    })
+    const { data, strategy, rangeSupported, total } = await fetchSubtitleAsset(
+      this.subUrl,
+      this.fetchOptions(this.rangeRequests && this.streamingLoad, (progress) =>
+        this.emitLoadProgress('vobsub', progress, this.state.timestamps.length)
+      )
+    )
     this.emitLoadProgress(
       'vobsub',
       {
@@ -2368,9 +2407,10 @@ export class VobSubRenderer extends BaseVideoSubtitleRenderer {
       if (!this.idxUrl) {
         throw createSubtitleDiagnosticError('MISSING_INPUT', 'No IDX content or URL provided.', { format: 'vobsub' })
       }
-      idxData = await fetchSubtitleText(this.idxUrl, {
-        onProgress: (progress) => this.emitLoadProgress('vobsub', progress, 0)
-      })
+      idxData = await fetchSubtitleText(
+        this.idxUrl,
+        this.fetchOptions(false, (progress) => this.emitLoadProgress('vobsub', progress, 0))
+      )
     }
 
     let usedWorker = await this.ensureVobSubWorkerSession()
@@ -2400,6 +2440,7 @@ export class VobSubRenderer extends BaseVideoSubtitleRenderer {
         usedWorker = false
         this.state.useWorker = false
         this.emitWorkerState(false, false, this.state.sessionId, true)
+        this.releaseWorkerSession(this.state)
         this.emitWarning(
           createSubtitleWarning(
             'WORKER_FALLBACK',
@@ -2431,10 +2472,12 @@ export class VobSubRenderer extends BaseVideoSubtitleRenderer {
       if (!this.subUrl) {
         throw createSubtitleDiagnosticError('MISSING_INPUT', 'No SUB content or URL provided.', { format: 'vobsub' })
       }
-      const fetched = await fetchSubtitleAsset(this.subUrl, {
-        preferRange: this.rangeRequests && this.streamingLoad,
-        onProgress: (progress) => this.emitLoadProgress('vobsub', progress, this.state.timestamps.length)
-      })
+      const fetched = await fetchSubtitleAsset(
+        this.subUrl,
+        this.fetchOptions(this.rangeRequests && this.streamingLoad, (progress) =>
+          this.emitLoadProgress('vobsub', progress, this.state.timestamps.length)
+        )
+      )
       subData = fetched.data
       this.emitLoadProgress(
         'vobsub',
@@ -2773,12 +2816,9 @@ export class VobSubRenderer extends BaseVideoSubtitleRenderer {
     this.state.frameCache.clear()
     this.state.renderIssues.clear()
     this.state.pendingRenders.clear()
-    if (this.state.useWorker && this.state.workerReady) {
-      sendToWorker({ type: 'disposeVobSub', sessionId: this.state.sessionId! }).catch(() => {})
-    }
+    this.releaseWorkerSession(this.state)
     this.vobsubParser?.dispose()
     this.vobsubParser = null
-    this.state.sessionId = null
   }
 }
 
@@ -2822,10 +2862,12 @@ export class DvbRenderer extends BaseVideoSubtitleRenderer implements LiveSubtit
       }
 
       if (!this.streamingLoad) {
-        const { data, strategy, rangeSupported, total } = await fetchSubtitleAsset(this.subUrl, {
-          preferRange: this.rangeRequests,
-          onProgress: (progress) => this.emitLoadProgress('dvb', progress, this.state.timestamps.length)
-        })
+        const { data, strategy, rangeSupported, total } = await fetchSubtitleAsset(
+          this.subUrl,
+          this.fetchOptions(this.rangeRequests, (progress) =>
+            this.emitLoadProgress('dvb', progress, this.state.timestamps.length)
+          )
+        )
         this.emitLoadProgress(
           'dvb',
           { loaded: data.byteLength, total: total ?? data.byteLength, ratio: 1, rangeSupported, strategy },
@@ -2839,9 +2881,24 @@ export class DvbRenderer extends BaseVideoSubtitleRenderer implements LiveSubtit
       await this.loadDvbStreaming(this.subUrl)
       this.onLoaded?.()
     } catch (error) {
+      if (this.disposed) return
       const resolvedError = normalizeSubtitleError(error, { format: 'dvb' })
       this.emitEvent({ type: 'error', format: 'dvb', error: resolvedError })
       this.onError?.(resolvedError)
+    }
+  }
+
+  /** Resolve an append response, which may carry only changed entries, to the full lists. */
+  private mergeDvbTimestamps(response: {
+    timestamps: Float64Array
+    endTimestamps: Float64Array
+    timestampBase?: number
+  }): { timestamps: Float64Array; endTimestamps: Float64Array } {
+    const base = response.timestampBase
+    if (base === undefined) return { timestamps: response.timestamps, endTimestamps: response.endTimestamps }
+    return {
+      timestamps: spliceTimestamps(this.state.timestamps, base, response.timestamps),
+      endTimestamps: spliceTimestamps(this.endTimestamps, base, response.endTimestamps)
     }
   }
 
@@ -2883,7 +2940,7 @@ export class DvbRenderer extends BaseVideoSubtitleRenderer implements LiveSubtit
         return
       } catch (workerError) {
         this.state.useWorker = false
-        this.state.workerReady = false
+        this.releaseWorkerSession(this.state)
         this.state.sessionId = null
         this.emitWorkerState(false, false, null, true)
         this.emitWarning(
@@ -2943,12 +3000,13 @@ export class DvbRenderer extends BaseVideoSubtitleRenderer implements LiveSubtit
         if (response.type === 'error') throw new Error(response.message)
         if (response.type !== 'dvbProgress') throw new Error('Unexpected DVB worker response')
         added = response.added
+        const { timestamps, endTimestamps } = this.mergeDvbTimestamps(response)
         if (added > 0) {
-          this.applyDvbIndexState(response.metadata, response.timestamps, response.endTimestamps, true, true)
+          this.applyDvbIndexState(response.metadata, timestamps, endTimestamps, true, true)
         } else {
           this.state.metadata = response.metadata
-          this.state.timestamps = response.timestamps
-          this.endTimestamps = response.endTimestamps
+          this.state.timestamps = timestamps
+          this.endTimestamps = endTimestamps
         }
       } else {
         if (!this.dvbParser) throw new Error('DVB parser is not initialized')
@@ -3058,6 +3116,7 @@ export class DvbRenderer extends BaseVideoSubtitleRenderer implements LiveSubtit
       } catch (workerError) {
         this.state.useWorker = false
         this.emitWorkerState(false, false, this.state.sessionId, true)
+        this.releaseWorkerSession(this.state)
         this.emitWarning(
           createSubtitleWarning(
             'WORKER_FALLBACK',
@@ -3090,6 +3149,7 @@ export class DvbRenderer extends BaseVideoSubtitleRenderer implements LiveSubtit
         this.state.useWorker = false
         usedWorker = false
         this.emitWorkerState(false, false, this.state.sessionId, true)
+        this.releaseWorkerSession(this.state)
         this.emitWarning(
           createSubtitleWarning(
             'WORKER_FALLBACK',
@@ -3112,10 +3172,9 @@ export class DvbRenderer extends BaseVideoSubtitleRenderer implements LiveSubtit
     try {
       const { data, strategy, rangeSupported, total } = await fetchSubtitleAsset(
         url,
-        {
-          preferRange: this.rangeRequests,
-          onProgress: (progress) => this.emitLoadProgress('dvb', progress, this.state.timestamps.length)
-        },
+        this.fetchOptions(this.rangeRequests, (progress) =>
+          this.emitLoadProgress('dvb', progress, this.state.timestamps.length)
+        ),
         async (chunk, progress) => {
           if (chunk.byteLength === 0) return
 
@@ -3127,12 +3186,13 @@ export class DvbRenderer extends BaseVideoSubtitleRenderer implements LiveSubtit
               data: transferable
             })
             if (response.type === 'dvbProgress') {
+              const { timestamps, endTimestamps } = this.mergeDvbTimestamps(response)
               if (response.added > 0 || !indexedOnce) {
-                this.applyDvbIndexState(response.metadata, response.timestamps, response.endTimestamps, true, true)
+                this.applyDvbIndexState(response.metadata, timestamps, endTimestamps, true, true)
                 indexedOnce = true
               } else {
-                this.state.timestamps = response.timestamps
-                this.endTimestamps = response.endTimestamps
+                this.state.timestamps = timestamps
+                this.endTimestamps = endTimestamps
                 this.state.metadata = response.metadata
               }
             } else if (response.type === 'error') {
@@ -3196,14 +3256,16 @@ export class DvbRenderer extends BaseVideoSubtitleRenderer implements LiveSubtit
       if (usedWorker) {
         this.state.useWorker = false
         this.emitWorkerState(false, false, this.state.sessionId, true)
+        this.releaseWorkerSession(this.state)
       }
+      if (this.disposed) throw error
       this.emitWarning(
         createSubtitleWarning('RANGE_FALLBACK', 'Progressive DVB load failed; retrying with a full buffer fetch.', {
           format: 'dvb',
           details: { reason: error instanceof Error ? error.message : String(error) }
         })
       )
-      const { data } = await fetchSubtitleAsset(url, { preferRange: this.rangeRequests })
+      const { data } = await fetchSubtitleAsset(url, this.fetchOptions(this.rangeRequests))
       await this.loadDvbBuffer(data, false)
     }
   }
@@ -3407,13 +3469,10 @@ export class DvbRenderer extends BaseVideoSubtitleRenderer implements LiveSubtit
     this.state.frameCache.clear()
     this.state.renderIssues.clear()
     this.state.pendingRenders.clear()
-    if (this.state.useWorker && this.state.workerReady) {
-      sendToWorker({ type: 'disposeDvb', sessionId: this.state.sessionId! }).catch(() => {})
-    }
+    this.releaseWorkerSession(this.state)
     this.dvbParser?.dispose()
     this.dvbParser = null
     this.endTimestamps = new Float64Array(0)
-    this.state.sessionId = null
   }
 }
 

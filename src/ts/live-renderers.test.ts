@@ -1,4 +1,6 @@
-import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
+import { afterAll, beforeAll, describe, expect, spyOn, test } from 'bun:test'
+import * as worker from './worker'
+import type { WorkerRequest, WorkerResponse } from './types'
 
 type RendererModule = typeof import('./renderers')
 
@@ -224,6 +226,112 @@ describe('live PGS/DVB renderers', () => {
     expect(await renderer.append(cue.buffer)).toBe(1)
 
     renderer.dispose()
+  })
+
+  test('indexes many single-cue chunks incrementally on the main thread', async () => {
+    const pgs = new renderers.PgsRenderer({ video: createVideo(), offscreenRender: false })
+    const dvb = new renderers.DvbRenderer({ video: createVideo(), offscreenRender: false })
+    for (let index = 0; index < 50; index += 1) {
+      expect(await pgs.append(pgsEndDisplaySet((index + 1) * 90_000))).toBe(1)
+      expect(await dvb.append(dvbClearCue((index + 1) * 90_000))).toBe(1)
+    }
+
+    expect(pgs.getMetadata()?.cueCount).toBe(50)
+    expect(pgs.getCueMetadata(49)?.startTime).toBe(50_000)
+    expect(dvb.getCueMetadata(0)?.endTime).toBe(2000)
+    expect(dvb.getCueMetadata(49)?.startTime).toBe(50_000)
+    expect(dvb.getCueMetadata(49)?.endTime).toBe(55_000)
+
+    pgs.dispose()
+    dvb.dispose()
+  })
+
+  test('merges incremental worker timestamp updates', async () => {
+    const renderer = new renderers.PgsRenderer({ video: createVideo(), offscreenRender: false })
+    await renderer.flush()
+    const state = (renderer as any).getWorkerRendererState()
+    Object.assign(state, { useWorker: true, workerReady: true, sessionId: 'delta' })
+
+    let count = 0
+    const spy = spyOn(worker, 'sendToWorker').mockImplementation(async (request: WorkerRequest) => {
+      if (request.type !== 'appendPgs') return { type: 'error', message: 'unexpected' } as WorkerResponse
+      const timestampBase = count
+      count += 1
+      return {
+        type: 'pgsProgress',
+        count,
+        added: 1,
+        partial: true,
+        metadata: { format: 'pgs', cueCount: count, screenWidth: 0, screenHeight: 0 },
+        timestamps: new Float64Array([count * 1000]),
+        timestampBase
+      } as WorkerResponse
+    })
+
+    try {
+      for (let index = 0; index < 3; index += 1) await renderer.append(new Uint8Array([1]))
+      expect(Array.from(state.timestamps)).toEqual([1000, 2000, 3000])
+    } finally {
+      spy.mockRestore()
+      state.workerReady = false
+      state.sessionId = null
+      renderer.dispose()
+    }
+  })
+
+  test('dispose aborts a pending subtitle download without reporting an error', async () => {
+    const originalFetch = globalThis.fetch
+    let signal: AbortSignal | undefined
+    let fetchStarted!: () => void
+    const started = new Promise<void>((resolve) => (fetchStarted = resolve))
+    globalThis.fetch = ((_input: RequestInfo | URL, init?: RequestInit) => {
+      signal = init?.signal ?? undefined
+      fetchStarted()
+      return new Promise<Response>((_resolve, reject) => {
+        signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')))
+      })
+    }) as typeof fetch
+
+    const errors: unknown[] = []
+    try {
+      const renderer = new renderers.PgsRenderer({
+        video: createVideo(),
+        subUrl: 'https://example.test/track.sup',
+        offscreenRender: false,
+        onError: (error) => errors.push(error),
+        onEvent: (event) => {
+          if (event.type === 'error') errors.push(event.error)
+        }
+      })
+      await started
+      renderer.dispose()
+      await new Promise((resolve) => setTimeout(resolve, 10))
+
+      expect(signal?.aborted).toBe(true)
+      expect(errors).toEqual([])
+      expect((renderer as any).pgsParser).toBeNull()
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  test('dispose releases a worker session that never became ready', async () => {
+    const renderer = new renderers.DvbRenderer({ video: createVideo(), offscreenRender: false })
+    await renderer.flush()
+    const state = (renderer as any).getWorkerRendererState()
+    Object.assign(state, { useWorker: false, workerReady: false, sessionId: 'abandoned' })
+
+    const requests: WorkerRequest[] = []
+    const spy = spyOn(worker, 'sendToWorker').mockImplementation(async (request: WorkerRequest) => {
+      requests.push(request)
+      return { type: 'disposed' } as unknown as WorkerResponse
+    })
+    try {
+      renderer.dispose()
+      expect(requests).toContainEqual({ type: 'disposeDvb', sessionId: 'abandoned' })
+    } finally {
+      spy.mockRestore()
+    }
   })
 
   test('pushes DVB frames and clears all cue timing on reset', async () => {

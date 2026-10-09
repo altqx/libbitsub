@@ -290,10 +290,12 @@ self.onmessage = async function(event) {
                     parser.reset();
                     pgsParsers.set(request.sessionId, parser);
                 }
+                // Send only timestamps added by this chunk (from timestampBase).
+                const timestampBase = parser.count;
                 const added = parser.feed(new Uint8Array(request.data));
-                const timestamps = parser.getTimestamps();
+                const timestamps = parser.getTimestampsFrom(timestampBase);
                 postResponse(
-                    { type: 'pgsProgress', count: parser.count, added, partial: true, metadata: buildPgsMetadata(parser), timestamps },
+                    { type: 'pgsProgress', count: parser.count, added, partial: true, metadata: buildPgsMetadata(parser), timestamps, timestampBase },
                     [timestamps.buffer],
                     _id
                 );
@@ -364,11 +366,15 @@ self.onmessage = async function(event) {
                     parser.reset();
                     dvbParsers.set(request.sessionId, parser);
                 }
+                // Send only changed entries: new cues plus the previous last cue,
+                // whose end time a new cue can shorten.
+                const previousCount = parser.count;
                 const added = parser.feed(new Uint8Array(request.data));
-                const timestamps = parser.getTimestamps();
-                const endTimestamps = parser.getEndTimestamps();
+                const timestampBase = added > 0 ? Math.max(0, previousCount - 1) : parser.count;
+                const timestamps = parser.getTimestampsFrom(timestampBase);
+                const endTimestamps = parser.getEndTimestampsFrom(timestampBase);
                 postResponse(
-                    { type: 'dvbProgress', count: parser.count, added, partial: true, metadata: buildDvbMetadata(parser), timestamps, endTimestamps },
+                    { type: 'dvbProgress', count: parser.count, added, partial: true, metadata: buildDvbMetadata(parser), timestamps, endTimestamps, timestampBase },
                     [timestamps.buffer, endTimestamps.buffer],
                     _id
                 );
