@@ -605,11 +605,13 @@ abstract class BaseVideoSubtitleRenderer {
       this.lastRenderedIndex = -1
       this.lastRenderedTime = -1
       this.lastSynchronizedTime = null
+      this.lastRenderedData = null
       this.offscreenFrameMetadata.clear()
       this.onSeek()
       this.renderPausedFrame()
     }
     this.video.addEventListener('loadedmetadata', this.loadedMetadataHandler)
+    this.video.addEventListener('resize', this.loadedMetadataHandler)
     this.video.addEventListener('seeked', this.seekedHandler)
   }
 
@@ -1537,6 +1539,7 @@ abstract class BaseVideoSubtitleRenderer {
     this.resizeObserver = null
     if (this.loadedMetadataHandler) {
       this.video.removeEventListener('loadedmetadata', this.loadedMetadataHandler)
+      this.video.removeEventListener('resize', this.loadedMetadataHandler)
       this.loadedMetadataHandler = null
     }
     if (this.seekedHandler) {
