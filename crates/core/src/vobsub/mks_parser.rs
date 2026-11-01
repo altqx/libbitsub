@@ -368,28 +368,26 @@ fn parse_cluster(
                 cluster_timestamp = read_uint(data, data_start, data_end)? as i64;
             }
             EBML_ID_SIMPLE_BLOCK => {
-                if let Some(frame) = parse_block(
+                parse_block(
                     data,
                     data_start,
                     data_end,
                     selected_track,
                     cluster_timestamp,
                     timescale_ns,
-                )? {
-                    frames.push(frame)?;
-                }
+                    frames,
+                )?;
             }
             EBML_ID_BLOCK_GROUP => {
-                if let Some(frame) = parse_block_group(
+                parse_block_group(
                     data,
                     data_start,
                     data_end,
                     selected_track,
                     cluster_timestamp,
                     timescale_ns,
-                )? {
-                    frames.push(frame)?;
-                }
+                    frames,
+                )?;
             }
             _ => {}
         }
@@ -407,7 +405,8 @@ fn parse_block_group(
     selected_track: &ParsedTrack,
     cluster_timestamp: i64,
     timescale_ns: u64,
-) -> Result<Option<TrackFrame>, String> {
+    frames: &mut TrackFrames,
+) -> Result<(), String> {
     let mut pos = start;
 
     while pos < end {
@@ -420,12 +419,13 @@ fn parse_block_group(
                 selected_track,
                 cluster_timestamp,
                 timescale_ns,
+                frames,
             );
         }
         pos = data_end;
     }
 
-    Ok(None)
+    Ok(())
 }
 
 fn parse_block(
@@ -435,13 +435,14 @@ fn parse_block(
     selected_track: &ParsedTrack,
     cluster_timestamp: i64,
     timescale_ns: u64,
-) -> Result<Option<TrackFrame>, String> {
+    frames: &mut TrackFrames,
+) -> Result<(), String> {
     let data = &source_data[start..end];
     let (track_num, track_num_len) =
         read_vint(data, 0).ok_or_else(|| "Invalid Matroska block track number".to_string())?;
 
     if track_num != selected_track.track_num {
-        return Ok(None);
+        return Ok(());
     }
 
     if data.len() < track_num_len + 3 {
@@ -459,7 +460,7 @@ fn parse_block(
     let payload_end = end;
     let payload = &data[track_num_len + 3..];
     if payload.is_empty() {
-        return Ok(None);
+        return Ok(());
     }
     if payload.len() > MAX_BLOCK_PAYLOAD_SIZE {
         return Err("Matroska subtitle block exceeds supported size limit".to_string());
@@ -472,15 +473,25 @@ fn parse_block(
 
     let timestamp_ms = timestamp_to_ms(absolute_ticks as u64, timescale_ns)?;
 
-    Ok(Some(TrackFrame {
-        timestamp_ms,
-        payload: decode_track_payload(
+    let decoded = decode_track_payload(
+        payload,
+        payload_start..payload_end,
+        source_data,
+        &selected_track.compression,
+    )?;
+    for range in split_vobsub_packets(decoded.as_slice(source_data))? {
+        let payload = match &decoded {
+            TrackPayload::BorrowedRange(base) => {
+                TrackPayload::BorrowedRange(base.start + range.start..base.start + range.end)
+            }
+            TrackPayload::Owned(bytes) => TrackPayload::Owned(bytes[range].to_vec()),
+        };
+        frames.push(TrackFrame {
+            timestamp_ms,
             payload,
-            payload_start..payload_end,
-            source_data,
-            &selected_track.compression,
-        )?,
-    }))
+        })?;
+    }
+    Ok(())
 }
 
 fn parse_content_encodings(
@@ -599,7 +610,6 @@ fn decode_track_payload(
         }
     };
 
-    validate_vobsub_payload(decoded.as_slice(source_data))?;
     Ok(decoded)
 }
 
@@ -685,29 +695,42 @@ fn format_timestamp(timestamp_ms: u32) -> String {
     format!("{hours:02}:{minutes:02}:{seconds:02}:{millis:03}")
 }
 
-fn validate_vobsub_payload(payload: &[u8]) -> Result<(), String> {
+fn split_vobsub_packets(payload: &[u8]) -> Result<Vec<Range<usize>>, String> {
     if payload.len() < 4 {
         return Err("Matroska subtitle block is too short to contain a VobSub packet".to_string());
     }
-
-    let packet_size = u16::from_be_bytes([payload[0], payload[1]]) as usize;
-    let dcsq_offset = u16::from_be_bytes([payload[2], payload[3]]) as usize;
-
-    if !(4..=MAX_BLOCK_PAYLOAD_SIZE).contains(&packet_size) {
-        return Err("Matroska subtitle block declares an invalid VobSub packet size".to_string());
+    let mut packets = Vec::new();
+    let mut offset = 0usize;
+    while offset < payload.len() {
+        let rest = &payload[offset..];
+        if rest.len() < 4 {
+            return Err(
+                "Matroska subtitle block size does not match declared VobSub packet length"
+                    .to_string(),
+            );
+        }
+        let packet_size = u16::from_be_bytes([rest[0], rest[1]]) as usize;
+        let dcsq_offset = u16::from_be_bytes([rest[2], rest[3]]) as usize;
+        if !(4..=MAX_BLOCK_PAYLOAD_SIZE).contains(&packet_size) {
+            return Err(
+                "Matroska subtitle block declares an invalid VobSub packet size".to_string(),
+            );
+        }
+        if packet_size > rest.len() {
+            return Err(
+                "Matroska subtitle block size does not match declared VobSub packet length"
+                    .to_string(),
+            );
+        }
+        if dcsq_offset < 4 || dcsq_offset > packet_size {
+            return Err(
+                "Matroska subtitle block declares an invalid VobSub control offset".to_string(),
+            );
+        }
+        packets.push(offset..offset + packet_size);
+        offset += packet_size;
     }
-    if payload.len() != packet_size {
-        return Err(
-            "Matroska subtitle block size does not match declared VobSub packet length".to_string(),
-        );
-    }
-    if dcsq_offset < 4 || dcsq_offset > packet_size {
-        return Err(
-            "Matroska subtitle block declares an invalid VobSub control offset".to_string(),
-        );
-    }
-
-    Ok(())
+    Ok(packets)
 }
 
 fn next_element(data: &[u8], pos: usize, limit: usize) -> Result<(u32, usize, usize), String> {
@@ -843,6 +866,32 @@ mod tests {
     }
 
     #[test]
+    fn splits_concatenated_spu_packets_in_one_block() {
+        let idx_content = include_str!("../testfiles/vobsub.idx");
+        let sub_data = include_bytes!("../testfiles/vobsub.sub");
+        let idx_header = extract_idx_header(idx_content);
+        // A display-stop SPU followed by a visible SPU, as FFmpeg muxes some DVD tracks.
+        let mut payload = vec![0x00, 0x0A, 0x00, 0x04, 0x00, 0x00, 0x00, 0x04, 0x02, 0xFF];
+        payload.extend_from_slice(&extract_first_spu_payload(sub_data));
+        let mks = build_test_mks(&idx_header, &payload, 1_000, "eng", 1);
+
+        let mut parser = VobSubParser::new();
+        parser
+            .load_from_mks(&mks)
+            .expect("expected concatenated SPU block to load");
+
+        assert_eq!(parser.count(), 2);
+        assert_eq!(parser.get_cue_start_time(1), 1000.0);
+        assert_eq!(parser.find_index_at_timestamp(1_500.0), 1);
+
+        let frame = parser
+            .render_at_index(1)
+            .expect("expected visible SPU to decode");
+        assert!(frame.width() > 0);
+        assert!(frame.height() > 0);
+    }
+
+    #[test]
     fn extracts_embedded_vobsub_track_from_mks() {
         let idx_content = include_str!("../testfiles/vobsub.idx");
         let sub_data = include_bytes!("../testfiles/vobsub.sub");
@@ -942,8 +991,8 @@ mod tests {
         let sub_data = include_bytes!("../testfiles/vobsub.sub");
         let idx_header = extract_idx_header(idx_content);
         let mut payload = extract_first_spu_payload(sub_data);
-        payload[0] = 0;
-        payload[1] = 4;
+        let overrun = (payload.len() + 1) as u16;
+        payload[..2].copy_from_slice(&overrun.to_be_bytes());
 
         let mks = build_test_mks(&idx_header, &payload, 1_000, "eng", 1);
         let error =
