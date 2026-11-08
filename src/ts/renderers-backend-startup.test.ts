@@ -437,3 +437,34 @@ describe('graphics backend startup', () => {
     })
   }
 })
+
+test('falls back to window resize events without ResizeObserver', async () => {
+  const listeners = new Map<string, () => void>()
+  const win = (globalThis as any).window
+  const savedResizeObserver = (globalThis as any).ResizeObserver
+  Object.assign(win, {
+    addEventListener: (type: string, listener: () => void) => listeners.set(type, listener),
+    removeEventListener: (type: string, listener: () => void) => {
+      if (listeners.get(type) === listener) listeners.delete(type)
+    }
+  })
+  delete (globalThis as any).ResizeObserver
+  try {
+    const { renderer } = create('canvas2d')
+    await settle()
+    expect((renderer as any).canvas).not.toBeNull()
+    expect(listeners.has('resize')).toBe(true)
+
+    const updateCanvasSize = spyOn(renderer as any, 'updateCanvasSize')
+    listeners.get('resize')!()
+    expect(updateCanvasSize).toHaveBeenCalledTimes(1)
+    updateCanvasSize.mockRestore()
+
+    renderer.dispose()
+    expect(listeners.has('resize')).toBe(false)
+  } finally {
+    ;(globalThis as any).ResizeObserver = savedResizeObserver
+    delete win.addEventListener
+    delete win.removeEventListener
+  }
+})

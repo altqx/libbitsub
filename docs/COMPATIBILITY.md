@@ -80,12 +80,45 @@ Support levels:
 | Chromium Embedded (Electron 28+)    | Blink                        | ✓                   | ✓                   | ✓                   | ✓           | ✓                    | ✓           | ✓\*         | Full          |
 | **webOS TV 6 / 22 / 23**            | Chromium 53→108 family (OEM) | ✓                   | ✓                   | ✓                   | ✓           | ✓                    | ✓           | —           | Core          |
 | **webOS TV 24+**                    | Newer Chromium WebApp        | ✓                   | ✓                   | ✓                   | ✓           | ✓                    | ✓           | Best-effort | Core / Full\* |
-| Tizen TV 6.5+                       | Chromium-based               | ✓                   | ✓                   | ✓                   | ✓           | ✓                    | ✓           | —           | Core          |
+| Tizen TV 5.0+                       | Chromium 63+ (compat WASM)   | ✓                   | ✓                   | ✓                   | ✓           | ✓                    | ✓           | —           | Core          |
 | vidda / Hisense / other TV WebViews | Varies                       | ✓                   | ✓                   | ✓                   | Best-effort | ✓                    | Best-effort | —           | Best-effort   |
 | Node / Bun (no DOM)                 | —                            | Parse via WASM only | Parse via WASM only | Parse via WASM only | Mockable    | Software golden only | —           | —           | Test-only     |
 
 \* WebGPU availability depends on OS/GPU flags and may fall back automatically
 to WebGL2, then Canvas2D.
+
+### WASM builds
+
+Decoding always needs WASM, so the backend ladder cannot help when the engine
+rejects the WASM binary. Two builds ship side by side:
+
+| Build         | Required WASM features                                   | Engines                             |
+| ------------- | -------------------------------------------------------- | ----------------------------------- |
+| `pkg/`        | Rust defaults, including reference types and multi-value | Chrome 96+, Firefox 79+, Safari 15+ |
+| `pkg-compat/` | WebAssembly MVP only                                     | Chromium 57+ (Tizen 5.0+, webOS 5+) |
+
+`getWasmVariant()` picks the build by validating two tiny probe modules (one
+multi-value, one reference types). The main thread and the worker always load
+the same build. Engines without WebAssembly (Chromium < 57, e.g. Tizen 4.0,
+webOS 4) are unsupported.
+
+`bun run build:wasm:compat` (`scripts/build-wasm-compat.ts`) builds
+`pkg-compat/`:
+
+1. Compiles with `target-cpu=mvp` and an empty linker `target_features`
+   section. The precompiled Rust standard library marks reference types and
+   multi-value as used, and wasm-bindgen picks its glue ABI from that section.
+2. Lowers the standard library's sign-ext, bulk-memory and non-trapping
+   float-to-int instructions to MVP with Binaryen (`binaryen` dev dependency).
+3. Validates the result as pure MVP, so a regression fails the build.
+
+On old engines the rest of the runtime degrades too:
+
+- Below Chromium 80 there are no module workers, so worker startup fails and
+  parsing falls back to the main thread (`WORKER_FALLBACK`).
+- Below Chromium 64 there is no `ResizeObserver`, so the overlay resizes on
+  window `resize` events instead.
+- Below Chromium 66 the host app must polyfill `AbortController`.
 
 ### webOS-specific notes
 

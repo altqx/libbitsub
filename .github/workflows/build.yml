@@ -132,6 +132,7 @@ jobs:
           path: |
             dist/
             pkg/
+            pkg-compat/
 
   publish:
     needs: [check-version, build]

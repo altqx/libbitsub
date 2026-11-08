@@ -73,9 +73,12 @@ In most bundler-based projects, no manual worker setup is required. `libbitsub` 
 If your app serves package files in a way that does not expose that emitted WASM asset to the browser, you can still provide the legacy public fallback by copying the WASM file and its JS glue to `/libbitsub/`:
 
 ```bash
-mkdir -p public/libbitsub
+mkdir -p public/libbitsub/compat
 cp node_modules/libbitsub/pkg/libbitsub_bg.wasm node_modules/libbitsub/pkg/libbitsub.js public/libbitsub/
+cp node_modules/libbitsub/pkg-compat/libbitsub_bg.wasm node_modules/libbitsub/pkg-compat/libbitsub.js public/libbitsub/compat/
 ```
+
+The package ships two WASM builds. `pkg/` needs WebAssembly reference types and multi-value (Chrome 96+, Firefox 79+, Safari 15+). `pkg-compat/` is a WebAssembly MVP build for older engines (Chromium 57+, which covers Tizen 5.0–7.0 and webOS 5–23). libbitsub picks one at runtime; `getWasmVariant()` returns `'modern'` or `'compat'`.
 
 The worker is still created inline. `workerUrl` remains in the option type only for compatibility and does not change runtime behavior.
 

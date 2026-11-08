@@ -13,6 +13,7 @@
   "publish": {
     "exclude": [
       "!./pkg",
+      "!./pkg-compat",
       "src/testfiles/",
       "src/**/*.rs",
       "target/",

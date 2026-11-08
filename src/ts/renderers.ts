@@ -179,6 +179,8 @@ abstract class BaseVideoSubtitleRenderer {
 
   private loadedMetadataHandler: (() => void) | null = null
   private seekedHandler: (() => void) | null = null
+  /** Window resize fallback for engines without ResizeObserver (Chromium < 64). */
+  private windowResizeHandler: (() => void) | null = null
   private initPromise: Promise<void> | null = null
 
   // WebGPU renderer (optional, falls back to WebGL2 then Canvas2D)
@@ -597,8 +599,13 @@ abstract class BaseVideoSubtitleRenderer {
 
     this.updateCanvasSize()
 
-    this.resizeObserver = new ResizeObserver(() => this.updateCanvasSize())
-    this.resizeObserver.observe(this.video)
+    if (typeof ResizeObserver === 'function') {
+      this.resizeObserver = new ResizeObserver(() => this.updateCanvasSize())
+      this.resizeObserver.observe(this.video)
+    } else {
+      this.windowResizeHandler = () => this.updateCanvasSize()
+      window.addEventListener('resize', this.windowResizeHandler)
+    }
     this.loadedMetadataHandler = () => this.updateCanvasSize()
     this.seekedHandler = () => {
       this.invalidatePresentation()
@@ -1537,6 +1544,10 @@ abstract class BaseVideoSubtitleRenderer {
 
     this.resizeObserver?.disconnect()
     this.resizeObserver = null
+    if (this.windowResizeHandler) {
+      window.removeEventListener('resize', this.windowResizeHandler)
+      this.windowResizeHandler = null
+    }
     if (this.loadedMetadataHandler) {
       this.video.removeEventListener('loadedmetadata', this.loadedMetadataHandler)
       this.video.removeEventListener('resize', this.loadedMetadataHandler)

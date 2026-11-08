@@ -49,7 +49,7 @@ export type {
 export { SubtitleDiagnosticError, createSubtitleDiagnosticError, normalizeSubtitleError } from './ts/diagnostics'
 
 // Re-export WASM management
-export { initWasm, isWasmInitialized } from './ts/wasm'
+export { initWasm, isWasmInitialized, getWasmVariant, type WasmVariant } from './ts/wasm'
 
 export { warmup, ready, isWorkerAvailable, isWorkerReady } from './ts/worker'
 

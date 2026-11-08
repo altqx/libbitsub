@@ -1,5 +1,6 @@
 /target
 /pkg
+/pkg-compat
 /pkg-bundler
 /dist
 /node_modules

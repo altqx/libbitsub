@@ -9,8 +9,9 @@
       },
       "devDependencies": {
         "@types/react": "^19.2.17",
+        "binaryen": "132.0.0",
         "dashjs": "5.2.1",
-        "libbitsub-registry": "npm:libbitsub@1.12.0",
+        "libbitsub-registry": "npm:libbitsub@1.13.2",
         "prettier": "^3.9.6",
         "react": "^19.2.8",
         "typescript": "^7.0.2",
@@ -96,6 +97,8 @@
 
     "bcp-47-match": ["bcp-47-match@2.0.3", "", {}, "sha512-JtTezzbAibu8G0R9op9zb3vcWZd9JF6M0xOYGPn0fNCd7wOpRB1mU2mH9T8gaBGbAAyIIVgB2G7xG0GP98zMAQ=="],
 
+    "binaryen": ["binaryen@132.0.0", "", { "bin": { "wasm-as": "bin/wasm-as", "wasm2js": "bin/wasm2js", "wasm-dis": "bin/wasm-dis", "wasm-opt": "bin/wasm-opt", "wasm-merge": "bin/wasm-merge", "wasm-shell": "bin/wasm-shell", "wasm-reduce": "bin/wasm-reduce", "wasm-metadce": "bin/wasm-metadce", "wasm-ctor-eval": "bin/wasm-ctor-eval" } }, "sha512-4Usg7yEvwO3FMso3Oov6qkOOHSod1IEv+boKkh77kTljM+eNBouqCTbqWswGzbG+vDNO/b/v2C4gfEh1WgB9Lg=="],
+
     "codem-isoboxer": ["codem-isoboxer@0.3.10", "", {}, "sha512-eNk3TRV+xQMJ1PEj0FQGY8KD4m0GPxT487XJ+Iftm7mVa9WpPFDMWqPt+46buiP5j5Wzqe5oMIhqBcAeKfygSA=="],
 
     "csstype": ["csstype@3.2.3", "", {}, "sha512-z1HGKcYy2xA8AGQfwrn0PAy+PB7X/GSj3UVJW9qKyn43xWa+gl5nXmU4qqLMRzWVLFC8KusUX8T/0kCiOYpAIQ=="],
@@ -110,7 +113,7 @@
 
     "imsc": ["imsc@1.1.5", "", { "dependencies": { "sax": "1.2.1" } }, "sha512-V8je+CGkcvGhgl2C1GlhqFFiUOIEdwXbXLiu1Fcubvvbo+g9inauqT3l0pNYXGoLPBj3jxtZz9t+wCopMkwadQ=="],
 
-    "libbitsub-registry": ["libbitsub@1.12.0", "", { "dependencies": { "@webgpu/types": "^0.1.71" }, "peerDependencies": { "hls.js": ">=1.0.0", "react": ">=18.0.0", "shaka-player": ">=4.0.0", "video.js": ">=7.0.0" }, "optionalPeers": ["hls.js", "react", "shaka-player", "video.js"] }, "sha512-WsulgzwbwEqcZaz+1flomrnEmpy5VtC3N6A+ZtGRUs2ntayAdegN5M64dgPyzYvw2BkT/ix0d3JGLtF1j3gTeQ=="],
+    "libbitsub-registry": ["libbitsub@1.13.2", "", { "dependencies": { "@webgpu/types": "^0.1.71" }, "peerDependencies": { "hls.js": ">=1.0.0", "react": ">=18.0.0", "shaka-player": ">=4.0.0", "video.js": ">=7.0.0" }, "optionalPeers": ["hls.js", "react", "shaka-player", "video.js"] }, "sha512-Wp1hgTt/ujU0AWuBYKMHPrej2y6DKRbtctGY9JnUr2ZxkTOebEi4bjCsOZWuyJC89pILS/Hk0fu30yuWcck7LA=="],
 
     "lie": ["lie@3.1.1", "", { "dependencies": { "immediate": "~3.0.5" } }, "sha512-RiNhHysUjhrDQntfYSfY4MU24coXXdEOgw9WGcKHNeEwffDYbF//u87M1EWaMGzuFoSbqW0C9C6lEEhDOAswfw=="],
 

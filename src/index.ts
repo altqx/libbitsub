@@ -25,6 +25,8 @@ export { PgsParser, DvbParser, VobSubParserLowLevel, UnifiedSubtitleParser, open
 export {
   initWasm,
   isWasmInitialized,
+  getWasmVariant,
+  type WasmVariant,
   isWebGPUSupported,
   isWorkerAvailable,
   isWorkerReady,
